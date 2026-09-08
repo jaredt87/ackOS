@@ -39,11 +39,13 @@ Providers implement the execution and observation boundaries. The kernel decides
 
 ## Evidence freshness
 
-Verification is gated on completion of the execution attempt. A verifier cannot advance the lifecycle while the provider execution is still running, and a failed execution moves the runtime directly to recovery.
+Verification is gated on completion of the execution attempt. A verifier cannot advance the lifecycle while the provider execution is still running, and a failed execution moves the runtime directly to recovery. Observations are also rejected while an execution is in flight so a new observation cannot discard an active execution boundary.
 
-Post-execution verification evidence must also be fresh relative to the execution attempt: its observation version must advance beyond the pre-execution observation or its observation timestamp must be later than the recorded execution completion time. This prevents cached or pre-execution observations from being accepted as proof of a postcondition.
+Post-execution verification evidence must be temporally captured after the recorded execution completion time. A higher provider version by itself is insufficient because that version could have been observed before the attempt. The observation timestamp is included in the evidence fingerprint, so callers cannot make an old observation appear fresh by mutating only its timestamp.
 
-Recovery applies the same freshness boundary. An observation used to recover from a failed or abandoned attempt must be newer by version or timestamp than the completed execution attempt. Recovery therefore cannot simply replay the observation that authorized the abandoned execution.
+Recovery applies the same temporal boundary. An observation used to recover from a failed or abandoned attempt must be captured after the completed execution attempt. Recovery therefore cannot simply replay or relabel an observation that predates the abandoned execution.
+
+Only one verification callback may be active for an execution attempt. This prevents competing verifiers from racing one another and moving a committed lifecycle backward into recovery.
 
 ## V0 guarantees and boundaries
 
