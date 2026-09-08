@@ -25,7 +25,7 @@ func (e *testExecutor) Execute(context.Context, kernel.Transition, kernel.Author
 type testVerifier struct {
 	calls       int
 	err         error
-	block       <-chan struct{}
+	block       chan struct{}
 	observeErr  error
 	observeDone chan struct{}
 }
