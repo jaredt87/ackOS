@@ -296,7 +296,7 @@ func (r *Runtime) Observe(o Observation) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.phase == PhaseStarted {
+	if r.phase == PhaseStarted || r.phase == PhaseRecovery {
 		return ErrInvalidLifecycle
 	}
 	r.observation = &o
@@ -345,6 +345,9 @@ func (r *Runtime) Govern() (GovernanceDecision, error) {
 		return GovernanceDecision{}, ErrInvalidLifecycle
 	}
 	d := r.policy.Govern(*r.transition)
+	if d.TransitionFingerprint != r.transition.Fingerprint || d.ObservationFingerprint != r.transition.ObservationFingerprint || d.ProposalFingerprint != r.transition.ProposalFingerprint {
+		return d, ErrGovernanceDenied
+	}
 	if !d.Allowed {
 		if r.transition.Decision == DecisionNoop {
 			return d, nil
@@ -425,7 +428,16 @@ func (r *Runtime) Verify(ctx context.Context, v Verifier) error {
 	r.verificationActive = true
 	r.mu.Unlock()
 
-	<-done
+	select {
+	case <-done:
+	case <-ctx.Done():
+		r.mu.Lock()
+		if r.executionDone == done && r.verificationActive {
+			r.verificationActive = false
+		}
+		r.mu.Unlock()
+		return ctx.Err()
+	}
 
 	r.mu.Lock()
 	if r.phase != PhaseStarted || r.authority == nil || r.transition == nil || r.observation == nil || r.executionDone != done {
@@ -498,6 +510,9 @@ func (r *Runtime) Recover(o Observation) error {
 	defer r.mu.Unlock()
 	if r.phase != PhaseRecovery || r.observation == nil || r.executionCompletedAt.IsZero() {
 		return ErrInvalidLifecycle
+	}
+	if o.Subject != r.observation.Subject {
+		return ErrInvalidObservation
 	}
 	if !o.ObservedAt.After(r.executionCompletedAt) {
 		return ErrStaleEvidence
