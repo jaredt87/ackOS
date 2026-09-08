@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	ToolControl       = "ackos_control"
-	maxAuthorityTTLMS = int64((1<<63 - 1) / int64(time.Millisecond))
+	ToolControl          = "ackos_control"
+	maxAuthorityTTLMS    = int64((1<<63 - 1) / int64(time.Millisecond))
 	defaultVerifyTimeout = 30 * time.Second
 )
 
