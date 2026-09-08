@@ -13,6 +13,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Validate Claude Code plugin
+        run: |
+          test -f .claude-plugin/plugin.json
+          test -f skills/control/SKILL.md
+          python -m json.tool .claude-plugin/plugin.json >/dev/null
+          grep -q '^description:' skills/control/SKILL.md
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
