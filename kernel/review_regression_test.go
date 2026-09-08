@@ -123,12 +123,10 @@ func TestStaleVerificationCannotClearLaterReservation(t *testing.T) {
 		verifyDone <- r.Verify(context.Background(), fakeVerifier{})
 	}()
 
-	// Wait until Verify has claimed the old lifecycle's reservation.
 	for !verificationActive(r) {
 		time.Sleep(time.Millisecond)
 	}
 
-	// Simulate recovery and a new execution lifecycle before the stale verifier wakes.
 	r.mu.Lock()
 	r.executionDone = newDone
 	r.verificationActive = true
@@ -244,14 +242,16 @@ func TestRecoverRejectsFutureDatedEvidence(t *testing.T) {
 
 func TestObserveRejectsDifferentSubjectAfterCommit(t *testing.T) {
 	now := time.Unix(100, 0)
+	clockNow := now
 	r := NewRuntime("A", nil)
-	r.clock = func() time.Time { return now }
+	r.clock = func() time.Time { return clockNow }
 	o := observation(t, "resource-a", "A", 1, now)
 	authorize(t, r, o, "B")
 	if _, err := r.Start(context.Background(), &fakeExecutor{result: ExecutionResult{Success: true}}); err != nil {
 		t.Fatal(err)
 	}
 	post := observation(t, "resource-a", "B", 2, now.Add(time.Second))
+	clockNow = now.Add(2 * time.Second)
 	if err := r.Verify(context.Background(), fakeVerifier{observation: post}); err != nil {
 		t.Fatal(err)
 	}
