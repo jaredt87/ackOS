@@ -32,14 +32,21 @@ type ControlResponse struct {
 	Root        string                    `json:"root"`
 }
 
-type Server struct {
-	runtime   *kernel.Runtime
-	executor  kernel.Executor
-	verifier  kernel.Verifier
-	controlMu sync.Mutex
+// RecoveryObserver obtains fresh provider evidence after a failed attempt.
+// Recovery must never manufacture a new observation from caller-supplied state.
+type RecoveryObserver interface {
+	Observe(context.Context, string) (kernel.Observation, error)
 }
 
-func NewServer(runtime *kernel.Runtime, executor kernel.Executor, verifier kernel.Verifier) (*Server, error) {
+type Server struct {
+	runtime          *kernel.Runtime
+	executor         kernel.Executor
+	verifier         kernel.Verifier
+	recoveryObserver RecoveryObserver
+	controlMu        sync.Mutex
+}
+
+func NewServer(runtime *kernel.Runtime, executor kernel.Executor, verifier kernel.Verifier, recoveryObserver RecoveryObserver) (*Server, error) {
 	if runtime == nil {
 		return nil, fmt.Errorf("runtime is required")
 	}
@@ -49,7 +56,10 @@ func NewServer(runtime *kernel.Runtime, executor kernel.Executor, verifier kerne
 	if verifier == nil {
 		return nil, fmt.Errorf("independent verifier is required")
 	}
-	return &Server{runtime: runtime, executor: executor, verifier: verifier}, nil
+	if recoveryObserver == nil {
+		return nil, fmt.Errorf("independent recovery observer is required")
+	}
+	return &Server{runtime: runtime, executor: executor, verifier: verifier, recoveryObserver: recoveryObserver}, nil
 }
 
 func (s *Server) MCPServer() *mcpsdk.Server {
@@ -69,18 +79,23 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 		return nil, ControlResponse{}, fmt.Errorf("authority_ttl_ms must not be negative")
 	}
 
-	now := time.Now().UTC()
-	observation, err := kernel.NewObservation(in.Subject, in.ObservedState, 0, now)
-	if err != nil {
-		return nil, ControlResponse{}, err
-	}
-
-	// A failed execution or verification leaves the runtime in RECOVERY. The
-	// next control call must supply fresh post-failure evidence to re-enter the
-	// normal lifecycle; recovery never reuses the prior transition authority.
+	var observation kernel.Observation
+	var err error
 	if s.runtime.Phase() == kernel.PhaseRecovery {
+		// Recovery evidence must come from the provider with its actual capture
+		// time. Caller-supplied observed_state is never promoted to fresh evidence.
+		observation, err = s.recoveryObserver.Observe(ctx, in.Subject)
+		if err != nil {
+			return nil, ControlResponse{Phase: s.runtime.Phase(), Root: s.runtime.Root()}, err
+		}
 		if err := s.runtime.Recover(observation); err != nil {
 			return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Root: s.runtime.Root()}, err
+		}
+	} else {
+		now := time.Now().UTC()
+		observation, err = kernel.NewObservation(in.Subject, in.ObservedState, 0, now)
+		if err != nil {
+			return nil, ControlResponse{}, err
 		}
 	}
 
@@ -112,7 +127,11 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority, Execution: execution}, fmt.Errorf("execution failed: %s", execution.Message)
 	}
 
-	if err := s.runtime.Verify(ctx, s.verifier); err != nil {
+	// The executor has already completed before Verify is entered. A transport
+	// disconnect must not cancel verification and strand the shared V0 runtime
+	// in STARTED, so verification deliberately outlives the request context.
+	verificationCtx := context.WithoutCancel(ctx)
+	if err := s.runtime.Verify(verificationCtx, s.verifier); err != nil {
 		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority, Execution: execution}, err
 	}
 	if err := s.runtime.Commit(); err != nil {
