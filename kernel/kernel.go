@@ -156,10 +156,9 @@ func Reconcile(o Observation, p NormalizedProposal) (Transition, error) {
 		t.Decision = DecisionExecute
 	}
 	t.Fingerprint = fingerprint(struct {
-		Subject                                                  string
-		Decision                                                 Decision
-		Before, After, ObservationFingerprint, ProposalFingerprint string
-	}{t.Subject, t.Decision, t.Before, t.After, t.ObservationFingerprint, t.ProposalFingerprint})
+		Subject, Before, After, ObservationFingerprint, ProposalFingerprint string
+		Decision                                                            Decision
+	}{t.Subject, t.Before, t.After, t.ObservationFingerprint, t.ProposalFingerprint, t.Decision})
 	t.ID = t.Fingerprint
 	return t, nil
 }
