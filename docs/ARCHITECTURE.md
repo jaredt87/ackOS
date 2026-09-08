@@ -37,6 +37,14 @@ Execution is not commitment. A provider may report successful execution without 
 
 Providers implement the execution and observation boundaries. The kernel decides whether an execution is authorized and whether verified evidence permits commitment.
 
+## Evidence freshness
+
+Verification is gated on completion of the execution attempt. A verifier cannot advance the lifecycle while the provider execution is still running, and a failed execution moves the runtime directly to recovery.
+
+Post-execution verification evidence must also be fresh relative to the execution attempt: its observation version must advance beyond the pre-execution observation or its observation timestamp must be later than the recorded execution completion time. This prevents cached or pre-execution observations from being accepted as proof of a postcondition.
+
+Recovery applies the same freshness boundary. An observation used to recover from a failed or abandoned attempt must be newer by version or timestamp than the completed execution attempt. Recovery therefore cannot simply replay the observation that authorized the abandoned execution.
+
 ## V0 guarantees and boundaries
 
 V0 is a single-process, in-memory implementation. Authority consumption is atomic within the runtime and concurrent attempts cannot both cross the same execution boundary. CAS is atomic within the in-memory state store.
@@ -47,4 +55,4 @@ Recovery never reuses forward execution authority. It returns to an observation 
 
 ## Design rule
 
-The provider executes; ackOS governs. Provider success is evidence about an execution attempt, not permission to commit. Only verified evidence for the exact governed transition can advance the authoritative root through the CAS boundary.
+The provider executes; ackOS governs. Provider success is evidence about an execution attempt, not permission to commit. Only fresh, independently verified evidence for the exact governed transition can advance the authoritative root through the CAS boundary.
