@@ -54,6 +54,9 @@ func TestObserveRejectedDuringRecovery(t *testing.T) {
 	if err := r.Observe(fresh); !errors.Is(err, ErrInvalidLifecycle) {
 		t.Fatalf("expected recovery observation to be rejected, got %v", err)
 	}
+	if r.Phase() != PhaseRecovery {
+		t.Fatalf("expected recovery phase, got %s", r.Phase())
+	}
 }
 
 func TestRecoverRejectsUnrelatedSubject(t *testing.T) {
@@ -72,12 +75,16 @@ func TestRecoverRejectsUnrelatedSubject(t *testing.T) {
 }
 
 func TestVerifyCancellationReleasesReservation(t *testing.T) {
-	r := NewRuntime("A", nil)
 	now := time.Unix(100, 0)
+	r := NewRuntime("A", nil)
 	r.clock = func() time.Time { return now }
 	o := observation(t, "resource", "A", 1, now)
 	authorize(t, r, o, "B")
-	exec := &blockingExecutor{started: make(chan struct{}), release: make(chan struct{}), result: ExecutionResult{Success: true}}
+	exec := &blockingExecutor{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		result:  ExecutionResult{Success: true},
+	}
 	startDone := make(chan error, 1)
 	go func() {
 		_, err := r.Start(context.Background(), exec)
@@ -102,6 +109,7 @@ func TestStaleVerificationCannotClearLaterReservation(t *testing.T) {
 	r := NewRuntime("A", nil)
 	o := observation(t, "resource", "A", 1, time.Unix(100, 0))
 	authorize(t, r, o, "B")
+
 	oldDone := make(chan struct{})
 	newDone := make(chan struct{})
 	r.mu.Lock()
@@ -109,25 +117,34 @@ func TestStaleVerificationCannotClearLaterReservation(t *testing.T) {
 	r.executionDone = oldDone
 	r.verificationActive = false
 	r.mu.Unlock()
+
 	verifyDone := make(chan error, 1)
-	go func() { verifyDone <- r.Verify(context.Background(), fakeVerifier{}) }()
+	go func() {
+		verifyDone <- r.Verify(context.Background(), fakeVerifier{})
+	}()
+
+	// Wait until Verify has claimed the old lifecycle's reservation.
 	for !verificationActive(r) {
 		time.Sleep(time.Millisecond)
 	}
+
+	// Simulate recovery and a new execution lifecycle before the stale verifier wakes.
 	r.mu.Lock()
 	r.executionDone = newDone
 	r.verificationActive = true
 	r.mu.Unlock()
 	close(oldDone)
+
 	if err := <-verifyDone; !errors.Is(err, ErrInvalidLifecycle) {
 		t.Fatalf("expected stale verifier to be rejected, got %v", err)
 	}
-	if !verificationActive(r) {
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.verificationActive {
 		t.Fatal("stale verifier cleared the later reservation")
 	}
-	r.mu.Lock()
 	r.verificationActive = false
-	r.mu.Unlock()
 }
 
 func verificationActive(r *Runtime) bool {
@@ -140,6 +157,7 @@ func TestObservationRejectsUnencodableTimestamp(t *testing.T) {
 	if _, err := NewObservation("resource", "A", 1, time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)); !errors.Is(err, ErrInvalidObservation) {
 		t.Fatalf("expected unencodable observation to be rejected at construction, got %v", err)
 	}
+
 	o := observation(t, "resource", "A", 1, time.Unix(100, 0))
 	o.ObservedAt = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
 	if err := o.Validate(); !errors.Is(err, ErrInvalidObservation) {
@@ -226,17 +244,14 @@ func TestRecoverRejectsFutureDatedEvidence(t *testing.T) {
 
 func TestObserveRejectsDifferentSubjectAfterCommit(t *testing.T) {
 	now := time.Unix(100, 0)
-	postTime := now.Add(time.Second)
-	clockNow := now
 	r := NewRuntime("A", nil)
-	r.clock = func() time.Time { return clockNow }
+	r.clock = func() time.Time { return now }
 	o := observation(t, "resource-a", "A", 1, now)
 	authorize(t, r, o, "B")
 	if _, err := r.Start(context.Background(), &fakeExecutor{result: ExecutionResult{Success: true}}); err != nil {
 		t.Fatal(err)
 	}
-	clockNow = postTime
-	post := observation(t, "resource-a", "B", 2, postTime)
+	post := observation(t, "resource-a", "B", 2, now.Add(time.Second))
 	if err := r.Verify(context.Background(), fakeVerifier{observation: post}); err != nil {
 		t.Fatal(err)
 	}
