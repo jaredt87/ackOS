@@ -25,10 +25,18 @@ func (e *testExecutor) Execute(context.Context, kernel.Transition, kernel.Author
 type testVerifier struct {
 	calls int
 	err   error
+	block <-chan struct{}
 }
 
-func (v *testVerifier) Verify(context.Context, kernel.Transition, kernel.Authority) (kernel.Observation, error) {
+func (v *testVerifier) Verify(ctx context.Context, _ kernel.Transition, _ kernel.Authority) (kernel.Observation, error) {
 	v.calls++
+	if v.block != nil {
+		select {
+		case <-v.block:
+		case <-ctx.Done():
+			return kernel.Observation{}, ctx.Err()
+		}
+	}
 	if v.err != nil {
 		return kernel.Observation{}, v.err
 	}
@@ -146,11 +154,40 @@ func TestControlCommitsOnlyAfterIndependentVerification(t *testing.T) {
 	if !out.Verified || !out.Committed || out.Phase != kernel.PhaseCommitted {
 		t.Fatalf("unexpected successful result: %+v", out)
 	}
+	if !out.Authority.Consumed {
+		t.Fatalf("authority = %+v, want consumed", out.Authority)
+	}
 	if executor.calls != 1 || verifier.calls != 1 {
 		t.Fatalf("expected one executor and verifier call, got %d and %d", executor.calls, verifier.calls)
 	}
 	if got := runtime.Root(); got != "ready" {
 		t.Fatalf("root = %q, want ready", got)
+	}
+}
+
+func TestControlBoundsIndependentVerification(t *testing.T) {
+	executor := &testExecutor{success: true}
+	verifier := &testVerifier{block: make(chan struct{})}
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	server := newTestServer(t, runtime, executor, verifier)
+	server.verifyTimeout = 10 * time.Millisecond
+
+	_, out, err := server.control(context.Background(), nil, ControlRequest{
+		Subject:       "svc",
+		ObservedState: "initial",
+		DesiredState:  "ready",
+	})
+	if err == nil {
+		t.Fatal("expected bounded verification failure")
+	}
+	if out.Verified || out.Committed || out.Phase != kernel.PhaseRecovery {
+		t.Fatalf("unexpected timeout result: %+v", out)
+	}
+	if !out.Authority.Consumed {
+		t.Fatalf("authority = %+v, want consumed after Start", out.Authority)
+	}
+	if runtime.Root() != "initial" {
+		t.Fatalf("root changed after verification timeout: %q", runtime.Root())
 	}
 }
 
