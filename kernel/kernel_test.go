@@ -10,112 +10,16 @@ import (
 
 type fakeExecutor struct { result ExecutionResult; mu sync.Mutex; calls int }
 func (f *fakeExecutor) Execute(context.Context, Transition, Authority) ExecutionResult { f.mu.Lock(); f.calls++; f.mu.Unlock(); return f.result }
-
 type fakeVerifier struct { observation Observation; err error }
-func (f fakeVerifier) Verify(context.Context, Transition, Authority) (Observation, error) { return f.observation, f.err }
+func (f fakeVerifier) Verify(context.Context, Transition, Authority) (Observation,error) { return f.observation,f.err }
+func observation(t *testing.T,subject,state string,version uint64,at time.Time) Observation { t.Helper();o,err:=NewObservation(subject,state,version,at);if err!=nil{t.Fatal(err)};return o }
+func authorize(t *testing.T,r *Runtime,o Observation,target string)(Transition,Authority){t.Helper();if err:=r.Observe(o);err!=nil{t.Fatal(err)};if _,err:=r.Normalize(Proposal{Subject:o.Subject,TargetState:target});err!=nil{t.Fatal(err)};tr,err:=r.Reconcile();if err!=nil{t.Fatal(err)};if _,err:=r.Govern();err!=nil{t.Fatal(err)};a,err:=r.Reserve(time.Hour);if err!=nil{t.Fatal(err)};return tr,a}
 
-func observation(t *testing.T, subject, state string, version uint64, at time.Time) Observation {
-	t.Helper(); o, err := NewObservation(subject,state,version,at); if err != nil { t.Fatal(err) }; return o
-}
-
-func authorize(t *testing.T, r *Runtime, o Observation, target string) (Transition, Authority) {
-	t.Helper()
-	if err := r.Observe(o); err != nil { t.Fatal(err) }
-	if _, err := r.Normalize(Proposal{Subject:o.Subject,TargetState:target}); err != nil { t.Fatal(err) }
-	tr, err := r.Reconcile(); if err != nil { t.Fatal(err) }
-	if _, err := r.Govern(); err != nil { t.Fatal(err) }
-	a, err := r.Reserve(time.Hour); if err != nil { t.Fatal(err) }
-	return tr,a
-}
-
-func TestLifecycleCommitRequiresIndependentVerification(t *testing.T) {
-	now := time.Unix(100,0)
-	r := NewRuntime("A", nil)
-	o := observation(t,"resource","A",1,now)
-	tr,_ := authorize(t,r,o,"B")
-	e := &fakeExecutor{result:ExecutionResult{Success:true}}
-	if _, err := r.Start(context.Background(),e); err != nil { t.Fatal(err) }
-	bad := observation(t,"resource","C",2,now.Add(time.Second))
-	if err := r.Verify(context.Background(),fakeVerifier{observation:bad}); !errors.Is(err,ErrVerificationFailed) { t.Fatalf("expected verification failure, got %v",err) }
-	if r.Root() != "A" { t.Fatalf("failed verification changed root: %s",r.Root()) }
-	if r.Phase() != PhaseRecovery { t.Fatalf("expected recovery, got %s",r.Phase()) }
-	_ = tr
-}
-
-func TestAuthorityCannotBeReplayed(t *testing.T) {
-	r := NewRuntime("A",nil)
-	o := observation(t,"resource","A",1,time.Unix(100,0))
-	_, a := authorize(t,r,o,"B")
-	// Start consumes the authority at the execution boundary.
-	if _, err := r.Start(context.Background(),&fakeExecutor{result:ExecutionResult{Success:false}}); err != nil { t.Fatal(err) }
-	if !a.Consumed { t.Fatalf("returned authority should remain a snapshot; runtime consumption is internal") }
-	if r.phase != PhaseRecovery { t.Fatalf("expected recovery after failed execution") }
-	if err := r.Observe(o); err != nil { t.Fatal(err) }
-	// The old authority is no longer attached to the runtime and cannot be reused.
-	if err := r.Start(context.Background(),&fakeExecutor{}); !errors.Is(err,ErrInvalidLifecycle) { t.Fatalf("expected old authority to be unusable, got %v",err) }
-}
-
-func TestConcurrentCASOnlyOneSucceeds(t *testing.T) {
-	s := NewStateStore("A")
-	var wg sync.WaitGroup
-	results := make(chan error,2)
-	for i:=0;i<2;i++ { wg.Add(1); go func(){ defer wg.Done(); results <- s.CompareAndSwap("A","B") }() }
-	wg.Wait(); close(results)
-	var ok, conflicts int
-	for err := range results { if err == nil { ok++ } else if errors.Is(err,ErrCASConflict) { conflicts++ } }
-	if ok != 1 || conflicts != 1 { t.Fatalf("expected one success and one conflict, got success=%d conflict=%d",ok,conflicts) }
-}
-
-func TestConcurrentAuthorityStartAtMostOne(t *testing.T) {
-	r := NewRuntime("A",nil)
-	o := observation(t,"resource","A",1,time.Unix(100,0))
-	authorize(t,r,o,"B")
-	e := &fakeExecutor{result:ExecutionResult{Success:true}}
-	var wg sync.WaitGroup
-	results := make(chan error,2)
-	for i:=0;i<2;i++ { wg.Add(1); go func(){ defer wg.Done(); _,err:=r.Start(context.Background(),e); results<-err }() }
-	wg.Wait(); close(results)
-	var success, failure int
-	for err:=range results { if err==nil { success++ } else { failure++ } }
-	if success != 1 || failure != 1 { t.Fatalf("expected one accepted execution, got success=%d failure=%d",success,failure) }
-}
-
-func TestExpiredAuthority(t *testing.T) {
-	r := NewRuntime("A",nil)
-	now := time.Unix(100,0)
-	r.clock = func() time.Time { return now }
-	o := observation(t,"resource","A",1,now)
-	authorize(t,r,o,"B")
-	if _, err := r.Reserve(time.Nanosecond); !errors.Is(err,ErrInvalidLifecycle) { t.Fatalf("second reservation should be rejected, got %v",err) }
-	// A fresh runtime demonstrates expiration at the execution boundary.
-	r = NewRuntime("A",nil); r.clock = func() time.Time { return now }
-	if err:=r.Observe(o); err!=nil { t.Fatal(err) }; if _,err:=r.Normalize(Proposal{Subject:"resource",TargetState:"B"});err!=nil{t.Fatal(err)}; if _,err:=r.Reconcile();err!=nil{t.Fatal(err)};if _,err:=r.Govern();err!=nil{t.Fatal(err)};if _,err:=r.Reserve(time.Nanosecond);err!=nil{t.Fatal(err)}
-	r.clock = func() time.Time { return now.Add(time.Second) }
-	if _,err:=r.Start(context.Background(),&fakeExecutor{}); !errors.Is(err,ErrAuthorityExpired){t.Fatalf("expected expiration, got %v",err)}
-}
-
-func TestStaleObservationInvalidatesAuthorization(t *testing.T) {
-	r := NewRuntime("A",nil)
-	o1 := observation(t,"resource","A",1,time.Unix(100,0))
-	authorize(t,r,o1,"B")
-	o2 := observation(t,"resource","A",2,time.Unix(101,0))
-	if err:=r.Observe(o2);err!=nil{t.Fatal(err)}
-	if _,err:=r.Start(context.Background(),&fakeExecutor{}); !errors.Is(err,ErrInvalidLifecycle){t.Fatalf("expected stale authorization to be cleared, got %v",err)}
-}
-
-func TestDeterministicNormalizationAndReconciliation(t *testing.T) {
-	now:=time.Unix(100,0); o:=observation(t,"resource","A",1,now); p:=Proposal{Subject:"resource",TargetState:"B"}
-	n1,err:=Normalize(p);if err!=nil{t.Fatal(err)};n2,err:=Normalize(p);if err!=nil{t.Fatal(err)}
-	if n1 != n2 { t.Fatalf("normalization is not deterministic") }
-	t1,err:=Reconcile(o,n1);if err!=nil{t.Fatal(err)};t2,err:=Reconcile(o,n2);if err!=nil{t.Fatal(err)}
-	if t1 != t2 { t.Fatalf("reconciliation is not deterministic") }
-}
-
-func TestCASConflictPreventsCommit(t *testing.T) {
-	r:=NewRuntime("A",nil);o:=observation(t,"resource","A",1,time.Unix(100,0));authorize(t,r,o,"B")
-	if _,err:=r.Start(context.Background(),&fakeExecutor{result:ExecutionResult{Success:true}});err!=nil{t.Fatal(err)}
-	post:=observation(t,"resource","B",2,time.Unix(101,0));if err:=r.Verify(context.Background(),fakeVerifier{observation:post});err!=nil{t.Fatal(err)}
-	if err:=r.store.CompareAndSwap("A","C");err!=nil{t.Fatal(err)}
-	if !errors.Is(r.Commit(),ErrCASConflict){t.Fatalf("expected CAS conflict")}
-	if r.Root()!="C"{t.Fatalf("conflicting commit overwrote root: %s",r.Root())}
-}
+func TestLifecycleCommitRequiresIndependentVerification(t *testing.T){now:=time.Unix(100,0);r:=NewRuntime("A",nil);o:=observation(t,"resource","A",1,now);authorize(t,r,o,"B");if _,err:=r.Start(context.Background(),&fakeExecutor{result:ExecutionResult{Success:true}});err!=nil{t.Fatal(err)};bad:=observation(t,"resource","C",2,now.Add(time.Second));if err:=r.Verify(context.Background(),fakeVerifier{observation:bad});!errors.Is(err,ErrVerificationFailed){t.Fatalf("expected verification failure, got %v",err)};if r.Root()!="A"{t.Fatalf("failed verification changed root: %s",r.Root())};if r.Phase()!=PhaseRecovery{t.Fatalf("expected recovery, got %s",r.Phase())}}
+func TestAuthorityCannotBeReplayed(t *testing.T){r:=NewRuntime("A",nil);o:=observation(t,"resource","A",1,time.Unix(100,0));_,a:=authorize(t,r,o,"B");if _,err:=r.Start(context.Background(),&fakeExecutor{result:ExecutionResult{Success:false}});err!=nil{t.Fatal(err)};if a.Consumed{t.Fatalf("returned authority must be an immutable pre-consumption snapshot")};if r.phase!=PhaseRecovery{t.Fatalf("expected recovery after failed execution")};if err:=r.Observe(o);err!=nil{t.Fatal(err)};if _,err:=r.Start(context.Background(),&fakeExecutor{});!errors.Is(err,ErrInvalidLifecycle){t.Fatalf("expected old authority to be unusable, got %v",err)}}
+func TestConcurrentCASOnlyOneSucceeds(t *testing.T){s:=NewStateStore("A");var wg sync.WaitGroup;results:=make(chan error,2);for i:=0;i<2;i++{wg.Add(1);go func(){defer wg.Done();results<-s.CompareAndSwap("A","B")}()};wg.Wait();close(results);var ok,conflicts int;for err:=range results{if err==nil{ok++}else if errors.Is(err,ErrCASConflict){conflicts++}};if ok!=1||conflicts!=1{t.Fatalf("expected one success and one conflict, got success=%d conflict=%d",ok,conflicts)}}
+func TestConcurrentAuthorityStartAtMostOne(t *testing.T){r:=NewRuntime("A",nil);o:=observation(t,"resource","A",1,time.Unix(100,0));authorize(t,r,o,"B");e:=&fakeExecutor{result:ExecutionResult{Success:true}};var wg sync.WaitGroup;results:=make(chan error,2);for i:=0;i<2;i++{wg.Add(1);go func(){defer wg.Done();_,err:=r.Start(context.Background(),e);results<-err}()};wg.Wait();close(results);var success,failure int;for err:=range results{if err==nil{success++}else{failure++}};if success!=1||failure!=1{t.Fatalf("expected one accepted execution, got success=%d failure=%d",success,failure)}}
+func TestExpiredAuthority(t *testing.T){now:=time.Unix(100,0);o:=observation(t,"resource","A",1,now);r:=NewRuntime("A",nil);r.clock=func()time.Time{return now};authorize(t,r,o,"B");r=NewRuntime("A",nil);r.clock=func()time.Time{return now};if err:=r.Observe(o);err!=nil{t.Fatal(err)};if _,err:=r.Normalize(Proposal{Subject:"resource",TargetState:"B"});err!=nil{t.Fatal(err)};if _,err:=r.Reconcile();err!=nil{t.Fatal(err)};if _,err:=r.Govern();err!=nil{t.Fatal(err)};if _,err:=r.Reserve(time.Nanosecond);err!=nil{t.Fatal(err)};r.clock=func()time.Time{return now.Add(time.Second)};if _,err:=r.Start(context.Background(),&fakeExecutor{});!errors.Is(err,ErrAuthorityExpired){t.Fatalf("expected expiration, got %v",err)}}
+func TestStaleObservationInvalidatesAuthorization(t *testing.T){r:=NewRuntime("A",nil);o1:=observation(t,"resource","A",1,time.Unix(100,0));authorize(t,r,o1,"B");o2:=observation(t,"resource","A",2,time.Unix(101,0));if err:=r.Observe(o2);err!=nil{t.Fatal(err)};if _,err:=r.Start(context.Background(),&fakeExecutor{});!errors.Is(err,ErrInvalidLifecycle){t.Fatalf("expected stale authorization to be cleared, got %v",err)}}
+func TestDeterministicNormalizationAndReconciliation(t *testing.T){o:=observation(t,"resource","A",1,time.Unix(100,0));p:=Proposal{Subject:"resource",TargetState:"B"};n1,err:=Normalize(p);if err!=nil{t.Fatal(err)};n2,err:=Normalize(p);if err!=nil{t.Fatal(err)};if n1!=n2{t.Fatal("normalization is not deterministic")};t1,err:=Reconcile(o,n1);if err!=nil{t.Fatal(err)};t2,err:=Reconcile(o,n2);if err!=nil{t.Fatal(err)};if t1!=t2{t.Fatal("reconciliation is not deterministic")}}
+func TestCASConflictPreventsCommit(t *testing.T){r:=NewRuntime("A",nil);o:=observation(t,"resource","A",1,time.Unix(100,0));authorize(t,r,o,"B");if _,err:=r.Start(context.Background(),&fakeExecutor{result:ExecutionResult{Success:true}});err!=nil{t.Fatal(err)};post:=observation(t,"resource","B",2,time.Unix(101,0));if err:=r.Verify(context.Background(),fakeVerifier{observation:post});err!=nil{t.Fatal(err)};if err:=r.store.CompareAndSwap("A","C");err!=nil{t.Fatal(err)};if !errors.Is(r.Commit(),ErrCASConflict){t.Fatalf("expected CAS conflict")};if r.Root()!="C"{t.Fatalf("conflicting commit overwrote root: %s",r.Root())}}
