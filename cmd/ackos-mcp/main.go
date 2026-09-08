@@ -33,12 +33,16 @@ func (verifier) Verify(ctx context.Context, t kernel.Transition, a kernel.Author
 	return kernel.NewObservation(t.Subject, t.After, 1, time.Now().UTC())
 }
 
+func (verifier) Observe(context.Context, string) (kernel.Observation, error) {
+	return kernel.NewObservation("svc", "initial", 1, time.Now().UTC())
+}
+
 func main() {
 	httpAddr := flag.String("http", "", "serve Streamable HTTP at this address instead of stdio")
 	flag.Parse()
 
 	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
-	server, err := mcp.NewServer(runtime, demoExecutor{}, verifier{})
+	server, err := mcp.NewServer(runtime, demoExecutor{}, verifier{}, verifier{})
 	if err != nil {
 		log.Fatal(err)
 	}
