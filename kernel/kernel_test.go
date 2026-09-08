@@ -175,6 +175,34 @@ func TestConcurrentAuthorityStartAtMostOne(t *testing.T) {
 	}
 }
 
+func TestObserveRejectedWhileExecutionInFlight(t *testing.T) {
+	now := time.Unix(100, 0)
+	r := NewRuntime("A", nil)
+	r.clock = func() time.Time { return now }
+	o := observation(t, "resource", "A", 1, now)
+	authorize(t, r, o, "B")
+	exec := &blockingExecutor{started: make(chan struct{}), release: make(chan struct{}), result: ExecutionResult{Success: true}}
+	startDone := make(chan error, 1)
+	go func() {
+		_, err := r.Start(context.Background(), exec)
+		startDone <- err
+	}()
+	<-exec.started
+
+	o2 := observation(t, "resource", "A", 2, now.Add(time.Second))
+	if err := r.Observe(o2); !errors.Is(err, ErrInvalidLifecycle) {
+		t.Fatalf("expected in-flight observation to be rejected, got %v", err)
+	}
+	if r.Phase() != PhaseStarted {
+		t.Fatalf("expected started phase to remain intact, got %s", r.Phase())
+	}
+
+	close(exec.release)
+	if err := <-startDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestVerifyWaitsForExecutionCompletion(t *testing.T) {
 	now := time.Unix(100, 0)
 	r := NewRuntime("A", nil)
@@ -215,6 +243,47 @@ func TestVerifyWaitsForExecutionCompletion(t *testing.T) {
 	}
 }
 
+func TestConcurrentVerifyAllowsOnlyOneVerifier(t *testing.T) {
+	now := time.Unix(100, 0)
+	r := NewRuntime("A", nil)
+	r.clock = func() time.Time { return now }
+	o := observation(t, "resource", "A", 1, now)
+	authorize(t, r, o, "B")
+	if _, err := r.Start(context.Background(), &fakeExecutor{result: ExecutionResult{Success: true}}); err != nil {
+		t.Fatal(err)
+	}
+	post := observation(t, "resource", "B", 2, now.Add(time.Second))
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	first := blockingVerifier{entered: firstEntered, release: releaseFirst, observation: post}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- r.Verify(context.Background(), &first) }()
+	<-firstEntered
+
+	if err := r.Verify(context.Background(), fakeVerifier{observation: post}); !errors.Is(err, ErrInvalidLifecycle) {
+		t.Fatalf("expected second verifier to be rejected, got %v", err)
+	}
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if r.Phase() != PhaseVerified {
+		t.Fatalf("expected verified phase, got %s", r.Phase())
+	}
+}
+
+type blockingVerifier struct {
+	entered     chan struct{}
+	release     chan struct{}
+	observation Observation
+}
+
+func (v *blockingVerifier) Verify(context.Context, Transition, Authority) (Observation, error) {
+	close(v.entered)
+	<-v.release
+	return v.observation, nil
+}
+
 func TestFailedExecutionCannotBeVerified(t *testing.T) {
 	now := time.Unix(100, 0)
 	r := NewRuntime("A", nil)
@@ -244,6 +313,29 @@ func TestVerificationRejectsPreExecutionEvidence(t *testing.T) {
 	}
 }
 
+func TestVerificationRejectsHigherVersionPreExecutionEvidence(t *testing.T) {
+	now := time.Unix(100, 0)
+	r := NewRuntime("A", nil)
+	r.clock = func() time.Time { return now }
+	o := observation(t, "resource", "A", 1, now)
+	authorize(t, r, o, "B")
+	if _, err := r.Start(context.Background(), &fakeExecutor{result: ExecutionResult{Success: true}}); err != nil {
+		t.Fatal(err)
+	}
+	cached := observation(t, "resource", "B", 2, now.Add(-time.Second))
+	if err := r.Verify(context.Background(), fakeVerifier{observation: cached}); !errors.Is(err, ErrVerificationFailed) {
+		t.Fatalf("expected higher-version pre-execution evidence to be rejected, got %v", err)
+	}
+}
+
+func TestObservationTimestampIsBoundToFingerprint(t *testing.T) {
+	o := observation(t, "resource", "A", 1, time.Unix(100, 0))
+	o.ObservedAt = o.ObservedAt.Add(time.Hour)
+	if !errors.Is(o.Validate(), ErrStaleEvidence) {
+		t.Fatalf("expected timestamp tampering to invalidate evidence, got %v", o.Validate())
+	}
+}
+
 func TestRecoverRequiresFreshEvidence(t *testing.T) {
 	now := time.Unix(100, 0)
 	r := NewRuntime("A", nil)
@@ -256,9 +348,13 @@ func TestRecoverRequiresFreshEvidence(t *testing.T) {
 	if err := r.Recover(o); !errors.Is(err, ErrStaleEvidence) {
 		t.Fatalf("expected old recovery evidence to be rejected, got %v", err)
 	}
-	fresh := observation(t, "resource", "A", 2, now)
+	freshVersionButOldTime := observation(t, "resource", "A", 2, now.Add(-time.Second))
+	if err := r.Recover(freshVersionButOldTime); !errors.Is(err, ErrStaleEvidence) {
+		t.Fatalf("expected pre-attempt higher-version evidence to be rejected, got %v", err)
+	}
+	fresh := observation(t, "resource", "A", 2, now.Add(time.Second))
 	if err := r.Recover(fresh); err != nil {
-		t.Fatalf("expected newer-version recovery evidence to be accepted, got %v", err)
+		t.Fatalf("expected post-attempt recovery evidence to be accepted, got %v", err)
 	}
 	if r.Phase() != PhaseObserved {
 		t.Fatalf("expected observed phase after recovery, got %s", r.Phase())
