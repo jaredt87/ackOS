@@ -70,11 +70,7 @@ func NewObservation(subject, state string, version uint64, observedAt time.Time)
 		return Observation{}, fmt.Errorf("%w: observed time is required", ErrInvalidObservation)
 	}
 	o := Observation{Subject: subject, State: state, Version: version, ObservedAt: observedAt.UTC()}
-	o.Fingerprint = fingerprint(struct {
-		Subject string
-		State   string
-		Version uint64
-	}{o.Subject, o.State, o.Version})
+	o.Fingerprint = observationFingerprint(o)
 	return o, nil
 }
 
@@ -82,14 +78,19 @@ func (o Observation) Validate() error {
 	if o.Subject == "" || o.State == "" || o.ObservedAt.IsZero() || o.Fingerprint == "" {
 		return ErrInvalidObservation
 	}
-	if fingerprint(struct {
-		Subject string
-		State   string
-		Version uint64
-	}{o.Subject, o.State, o.Version}) != o.Fingerprint {
+	if observationFingerprint(o) != o.Fingerprint {
 		return ErrStaleEvidence
 	}
 	return nil
+}
+
+func observationFingerprint(o Observation) string {
+	return fingerprint(struct {
+		Subject    string
+		State      string
+		Version    uint64
+		ObservedAt time.Time
+	}{o.Subject, o.State, o.Version, o.ObservedAt.UTC()})
 }
 
 type Proposal struct {
@@ -234,11 +235,13 @@ type StateStore struct {
 }
 
 func NewStateStore(root string) *StateStore { return &StateStore{root: root} }
+
 func (s *StateStore) Root() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.root
 }
+
 func (s *StateStore) CompareAndSwap(expected, next string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -262,6 +265,7 @@ type Runtime struct {
 	phase                Phase
 	executionDone        chan struct{}
 	executionCompletedAt time.Time
+	verificationActive   bool
 }
 
 func NewRuntime(initialRoot string, policy Policy) *Runtime {
@@ -272,6 +276,7 @@ func NewRuntime(initialRoot string, policy Policy) *Runtime {
 }
 
 func (r *Runtime) Root() string { return r.store.Root() }
+
 func (r *Runtime) Phase() Phase {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -282,6 +287,7 @@ func (r *Runtime) resetLifecycleLocked() {
 	r.proposal, r.transition, r.decision, r.authority = nil, nil, nil, nil
 	r.executionDone = nil
 	r.executionCompletedAt = time.Time{}
+	r.verificationActive = false
 }
 
 func (r *Runtime) Observe(o Observation) error {
@@ -290,6 +296,9 @@ func (r *Runtime) Observe(o Observation) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.phase == PhaseStarted {
+		return ErrInvalidLifecycle
+	}
 	r.observation = &o
 	r.resetLifecycleLocked()
 	r.phase = PhaseObserved
@@ -384,6 +393,7 @@ func (r *Runtime) Start(ctx context.Context, e Executor) (ExecutionResult, error
 	t := *r.transition
 	r.executionDone = make(chan struct{})
 	r.executionCompletedAt = time.Time{}
+	r.verificationActive = false
 	r.phase = PhaseStarted
 	done := r.executionDone
 	r.mu.Unlock()
@@ -391,11 +401,13 @@ func (r *Runtime) Start(ctx context.Context, e Executor) (ExecutionResult, error
 	result := e.Execute(ctx, t, a)
 
 	r.mu.Lock()
-	r.executionCompletedAt = r.clock().UTC()
-	if !result.Success {
-		r.phase = PhaseRecovery
+	if r.phase == PhaseStarted && r.executionDone == done {
+		r.executionCompletedAt = r.clock().UTC()
+		if !result.Success {
+			r.phase = PhaseRecovery
+		}
+		close(done)
 	}
-	close(done)
 	r.mu.Unlock()
 	return result, nil
 }
@@ -405,17 +417,19 @@ func (r *Runtime) Verify(ctx context.Context, v Verifier) error {
 		return ErrVerificationFailed
 	}
 	r.mu.Lock()
-	if r.phase != PhaseStarted || r.authority == nil || r.transition == nil || r.executionDone == nil {
+	if r.phase != PhaseStarted || r.authority == nil || r.transition == nil || r.observation == nil || r.executionDone == nil || r.verificationActive {
 		r.mu.Unlock()
 		return ErrInvalidLifecycle
 	}
 	done := r.executionDone
+	r.verificationActive = true
 	r.mu.Unlock()
 
 	<-done
 
 	r.mu.Lock()
-	if r.phase != PhaseStarted || r.authority == nil || r.transition == nil {
+	if r.phase != PhaseStarted || r.authority == nil || r.transition == nil || r.observation == nil || r.executionDone != done {
+		r.verificationActive = false
 		r.mu.Unlock()
 		return ErrInvalidLifecycle
 	}
@@ -427,28 +441,38 @@ func (r *Runtime) Verify(ctx context.Context, v Verifier) error {
 	o, err := v.Verify(ctx, t, a)
 	if err != nil {
 		r.mu.Lock()
-		r.phase = PhaseRecovery
+		if r.phase == PhaseStarted && r.executionDone == done && r.verificationActive {
+			r.phase = PhaseRecovery
+			r.verificationActive = false
+		}
 		r.mu.Unlock()
 		return fmt.Errorf("%w: %v", ErrVerificationFailed, err)
 	}
 	if err := o.Validate(); err != nil {
 		r.mu.Lock()
-		r.phase = PhaseRecovery
+		if r.phase == PhaseStarted && r.executionDone == done && r.verificationActive {
+			r.phase = PhaseRecovery
+			r.verificationActive = false
+		}
 		r.mu.Unlock()
 		return fmt.Errorf("%w: %v", ErrVerificationFailed, err)
 	}
-	fresh := o.Version > pre.Version || o.ObservedAt.After(completedAt)
-	if o.Subject != t.Subject || o.State != t.After || o.Fingerprint == t.ObservationFingerprint || !fresh {
+	if o.Subject != t.Subject || o.State != t.After || o.Fingerprint == t.ObservationFingerprint || !o.ObservedAt.After(completedAt) {
 		r.mu.Lock()
-		r.phase = PhaseRecovery
+		if r.phase == PhaseStarted && r.executionDone == done && r.verificationActive {
+			r.phase = PhaseRecovery
+			r.verificationActive = false
+		}
 		r.mu.Unlock()
 		return ErrVerificationFailed
 	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.phase != PhaseStarted {
+	if r.phase != PhaseStarted || r.executionDone != done || !r.verificationActive {
 		return ErrInvalidLifecycle
 	}
+	r.verificationActive = false
 	r.phase = PhaseVerified
 	return nil
 }
@@ -476,8 +500,7 @@ func (r *Runtime) Recover(o Observation) error {
 	if r.phase != PhaseRecovery || r.observation == nil || r.executionCompletedAt.IsZero() {
 		return ErrInvalidLifecycle
 	}
-	fresh := o.Version > r.observation.Version || o.ObservedAt.After(r.executionCompletedAt)
-	if !fresh {
+	if !o.ObservedAt.After(r.executionCompletedAt) {
 		return ErrStaleEvidence
 	}
 	r.observation = &o
