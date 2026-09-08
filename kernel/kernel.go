@@ -435,7 +435,6 @@ func (r *Runtime) Verify(ctx context.Context, v Verifier) error {
 	}
 	a, t := *r.authority, *r.transition
 	completedAt := r.executionCompletedAt
-	pre := *r.observation
 	r.mu.Unlock()
 
 	o, err := v.Verify(ctx, t, a)
