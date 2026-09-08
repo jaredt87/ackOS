@@ -441,7 +441,9 @@ func (r *Runtime) Verify(ctx context.Context, v Verifier) error {
 
 	r.mu.Lock()
 	if r.phase != PhaseStarted || r.authority == nil || r.transition == nil || r.observation == nil || r.executionDone != done {
-		r.verificationActive = false
+		if r.executionDone == done && r.verificationActive {
+			r.verificationActive = false
+		}
 		r.mu.Unlock()
 		return ErrInvalidLifecycle
 	}
