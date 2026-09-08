@@ -70,7 +70,11 @@ func NewObservation(subject, state string, version uint64, observedAt time.Time)
 		return Observation{}, fmt.Errorf("%w: observed time is required", ErrInvalidObservation)
 	}
 	o := Observation{Subject: subject, State: state, Version: version, ObservedAt: observedAt.UTC()}
-	o.Fingerprint = observationFingerprint(o)
+	fp, err := observationFingerprint(o)
+	if err != nil {
+		return Observation{}, fmt.Errorf("%w: observation fingerprint serialization failed: %v", ErrInvalidObservation, err)
+	}
+	o.Fingerprint = fp
 	return o, nil
 }
 
@@ -78,19 +82,28 @@ func (o Observation) Validate() error {
 	if o.Subject == "" || o.State == "" || o.ObservedAt.IsZero() || o.Fingerprint == "" {
 		return ErrInvalidObservation
 	}
-	if observationFingerprint(o) != o.Fingerprint {
+	fp, err := observationFingerprint(o)
+	if err != nil {
+		return fmt.Errorf("%w: observation fingerprint serialization failed: %v", ErrInvalidObservation, err)
+	}
+	if fp != o.Fingerprint {
 		return ErrStaleEvidence
 	}
 	return nil
 }
 
-func observationFingerprint(o Observation) string {
-	return fingerprint(struct {
+func observationFingerprint(o Observation) (string, error) {
+	b, err := json.Marshal(struct {
 		Subject    string
 		State      string
 		Version    uint64
 		ObservedAt time.Time
 	}{o.Subject, o.State, o.Version, o.ObservedAt.UTC()})
+	if err != nil {
+		return "", err
+	}
+	s := sha256.Sum256(b)
+	return hex.EncodeToString(s[:]), nil
 }
 
 type Proposal struct {
