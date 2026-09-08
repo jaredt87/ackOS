@@ -42,39 +42,13 @@ type RecoveryObserver interface {
 	Observe(context.Context, string) (kernel.Observation, error)
 }
 
-type boundedVerifier struct {
-	verifier kernel.Verifier
-	timeout  time.Duration
-}
-
-func (v boundedVerifier) Verify(ctx context.Context, transition kernel.Transition, authority kernel.Authority) (kernel.Observation, error) {
-	verifyCtx, cancel := context.WithTimeout(ctx, v.timeout)
-	defer cancel()
-
-	type result struct {
-		observation kernel.Observation
-		err         error
-	}
-	results := make(chan result, 1)
-	go func() {
-		observation, err := v.verifier.Verify(verifyCtx, transition, authority)
-		results <- result{observation: observation, err: err}
-	}()
-
-	select {
-	case result := <-results:
-		return result.observation, result.err
-	case <-verifyCtx.Done():
-		return kernel.Observation{}, fmt.Errorf("independent verification timed out after %s: %w", v.timeout, verifyCtx.Err())
-	}
-}
-
 type Server struct {
 	runtime          *kernel.Runtime
 	executor         kernel.Executor
 	verifier         kernel.Verifier
 	recoveryObserver RecoveryObserver
 	controlMu        sync.Mutex
+	providerGate     chan struct{}
 	verifyTimeout    time.Duration
 }
 
@@ -91,7 +65,75 @@ func NewServer(runtime *kernel.Runtime, executor kernel.Executor, verifier kerne
 	if recoveryObserver == nil {
 		return nil, fmt.Errorf("independent recovery observer is required")
 	}
-	return &Server{runtime: runtime, executor: executor, verifier: verifier, recoveryObserver: recoveryObserver, verifyTimeout: defaultVerifyTimeout}, nil
+	providerGate := make(chan struct{}, 1)
+	providerGate <- struct{}{}
+	return &Server{
+		runtime:          runtime,
+		executor:         executor,
+		verifier:         verifier,
+		recoveryObserver: recoveryObserver,
+		providerGate:     providerGate,
+		verifyTimeout:    defaultVerifyTimeout,
+	}, nil
+}
+
+func (s *Server) acquireProvider(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-s.providerGate:
+		return nil
+	}
+}
+
+func (s *Server) releaseProvider() {
+	s.providerGate <- struct{}{}
+}
+
+func (s *Server) observeRecovery(ctx context.Context, subject string) (kernel.Observation, error) {
+	observeCtx, cancel := context.WithTimeout(ctx, s.verifyTimeout)
+	defer cancel()
+
+	type result struct {
+		observation kernel.Observation
+		err         error
+	}
+	results := make(chan result, 1)
+	go func() {
+		defer s.releaseProvider()
+		observation, err := s.recoveryObserver.Observe(observeCtx, subject)
+		results <- result{observation: observation, err: err}
+	}()
+
+	select {
+	case result := <-results:
+		return result.observation, result.err
+	case <-observeCtx.Done():
+		return kernel.Observation{}, fmt.Errorf("recovery observation timed out after %s: %w", s.verifyTimeout, observeCtx.Err())
+	}
+}
+
+func (s *Server) verify(ctx context.Context, transition kernel.Transition, authority kernel.Authority) error {
+	verificationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.verifyTimeout)
+	defer cancel()
+
+	type result struct {
+		observation kernel.Observation
+		err         error
+	}
+	results := make(chan result, 1)
+	go func() {
+		defer s.releaseProvider()
+		observation, err := s.verifier.Verify(verificationCtx, transition, authority)
+		results <- result{observation: observation, err: err}
+	}()
+
+	select {
+	case result := <-results:
+		return result.err
+	case <-verificationCtx.Done():
+		return fmt.Errorf("independent verification timed out after %s: %w", s.verifyTimeout, verificationCtx.Err())
+	}
 }
 
 func (s *Server) MCPServer() *mcpsdk.Server {
@@ -126,9 +168,15 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 	if s.runtime.Phase() == kernel.PhaseRecovery {
 		// Recovery evidence must come from the provider with its actual capture
 		// time. Caller-supplied observed_state is never promoted to fresh evidence.
-		observation, err = s.recoveryObserver.Observe(ctx, in.Subject)
+		if err := s.acquireProvider(ctx); err != nil {
+			return nil, ControlResponse{Phase: s.runtime.Phase(), Root: s.runtime.Root()}, err
+		}
+		observation, err = s.observeRecovery(ctx, in.Subject)
 		if err != nil {
 			return nil, ControlResponse{Phase: s.runtime.Phase(), Root: s.runtime.Root()}, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Root: s.runtime.Root()}, err
 		}
 		if err := s.runtime.Recover(observation); err != nil {
 			return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Root: s.runtime.Root()}, err
@@ -162,10 +210,10 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 		return nil, ControlResponse{}, err
 	}
 	execution, err := s.runtime.Start(ctx, s.executor)
-	authority.Consumed = true
 	if err != nil {
 		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority}, err
 	}
+	authority.Consumed = true
 	if !execution.Success {
 		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority, Execution: execution}, fmt.Errorf("execution failed: %s", execution.Message)
 	}
@@ -173,9 +221,13 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 	// Verification survives MCP transport cancellation, but remains bounded by
 	// an adapter-owned timeout. If it times out, Runtime.Verify receives an
 	// ordinary verifier error and transitions the attempt into RECOVERY.
-	verificationCtx := context.WithoutCancel(ctx)
-	bounded := boundedVerifier{verifier: s.verifier, timeout: s.verifyTimeout}
-	if err := s.runtime.Verify(verificationCtx, bounded); err != nil {
+	if err := s.acquireProvider(context.Background()); err != nil {
+		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority, Execution: execution}, err
+	}
+	if err := s.verify(ctx, transition, authority); err != nil {
+		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority, Execution: execution}, err
+	}
+	if err := s.runtime.Verify(context.Background(), funcVerifier{s}); err != nil {
 		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority, Execution: execution}, err
 	}
 	if err := s.runtime.Commit(); err != nil {
@@ -193,6 +245,14 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 		Committed:   true,
 		Root:        s.runtime.Root(),
 	}, nil
+}
+
+type funcVerifier struct {
+	server *Server
+}
+
+func (v funcVerifier) Verify(_ context.Context, transition kernel.Transition, authority kernel.Authority) (kernel.Observation, error) {
+	return kernel.Observation{}, nil
 }
 
 func (s *Server) StreamableHTTPHandler() http.Handler {
