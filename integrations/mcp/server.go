@@ -52,6 +52,10 @@ type Server struct {
 	verifyTimeout    time.Duration
 }
 
+type boundedVerifier struct {
+	server *Server
+}
+
 func NewServer(runtime *kernel.Runtime, executor kernel.Executor, verifier kernel.Verifier, recoveryObserver RecoveryObserver) (*Server, error) {
 	if runtime == nil {
 		return nil, fmt.Errorf("runtime is required")
@@ -113,9 +117,12 @@ func (s *Server) observeRecovery(ctx context.Context, subject string) (kernel.Ob
 	}
 }
 
-func (s *Server) verify(ctx context.Context, transition kernel.Transition, authority kernel.Authority) error {
-	verificationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.verifyTimeout)
+func (v boundedVerifier) Verify(ctx context.Context, transition kernel.Transition, authority kernel.Authority) (kernel.Observation, error) {
+	verificationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), v.server.verifyTimeout)
 	defer cancel()
+	if err := v.server.acquireProvider(verificationCtx); err != nil {
+		return kernel.Observation{}, err
+	}
 
 	type result struct {
 		observation kernel.Observation
@@ -123,16 +130,16 @@ func (s *Server) verify(ctx context.Context, transition kernel.Transition, autho
 	}
 	results := make(chan result, 1)
 	go func() {
-		defer s.releaseProvider()
-		observation, err := s.verifier.Verify(verificationCtx, transition, authority)
+		defer v.server.releaseProvider()
+		observation, err := v.server.verifier.Verify(verificationCtx, transition, authority)
 		results <- result{observation: observation, err: err}
 	}()
 
 	select {
 	case result := <-results:
-		return result.err
+		return result.observation, result.err
 	case <-verificationCtx.Done():
-		return fmt.Errorf("independent verification timed out after %s: %w", s.verifyTimeout, verificationCtx.Err())
+		return kernel.Observation{}, fmt.Errorf("independent verification timed out after %s: %w", v.server.verifyTimeout, verificationCtx.Err())
 	}
 }
 
@@ -221,13 +228,7 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 	// Verification survives MCP transport cancellation, but remains bounded by
 	// an adapter-owned timeout. If it times out, Runtime.Verify receives an
 	// ordinary verifier error and transitions the attempt into RECOVERY.
-	if err := s.acquireProvider(context.Background()); err != nil {
-		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority, Execution: execution}, err
-	}
-	if err := s.verify(ctx, transition, authority); err != nil {
-		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority, Execution: execution}, err
-	}
-	if err := s.runtime.Verify(context.Background(), funcVerifier{s}); err != nil {
+	if err := s.runtime.Verify(context.Background(), boundedVerifier{server: s}); err != nil {
 		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority, Execution: execution}, err
 	}
 	if err := s.runtime.Commit(); err != nil {
@@ -245,14 +246,6 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 		Committed:   true,
 		Root:        s.runtime.Root(),
 	}, nil
-}
-
-type funcVerifier struct {
-	server *Server
-}
-
-func (v funcVerifier) Verify(_ context.Context, transition kernel.Transition, authority kernel.Authority) (kernel.Observation, error) {
-	return kernel.Observation{}, nil
 }
 
 func (s *Server) StreamableHTTPHandler() http.Handler {
