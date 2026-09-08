@@ -35,24 +35,37 @@ func (v *testVerifier) Verify(context.Context, kernel.Transition, kernel.Authori
 	return kernel.NewObservation("svc", "ready", 1, time.Now().UTC())
 }
 
-func TestNewServerRequiresExecutorAndVerifier(t *testing.T) {
+func (v *testVerifier) Observe(context.Context, string) (kernel.Observation, error) {
+	return kernel.NewObservation("svc", "initial", 1, time.Now().UTC())
+}
+
+func TestNewServerRequiresExecutorVerifierAndRecoveryObserver(t *testing.T) {
 	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
-	if _, err := NewServer(runtime, nil, &testVerifier{}); err == nil {
+	if _, err := NewServer(runtime, nil, &testVerifier{}, &testVerifier{}); err == nil {
 		t.Fatal("expected executor requirement")
 	}
-	if _, err := NewServer(runtime, &testExecutor{success: true}, nil); err == nil {
+	if _, err := NewServer(runtime, &testExecutor{success: true}, nil, &testVerifier{}); err == nil {
 		t.Fatal("expected independent verifier requirement")
 	}
+	if _, err := NewServer(runtime, &testExecutor{success: true}, &testVerifier{}, nil); err == nil {
+		t.Fatal("expected independent recovery observer requirement")
+	}
+}
+
+func newTestServer(t *testing.T, runtime *kernel.Runtime, executor *testExecutor, verifier *testVerifier) *Server {
+	t.Helper()
+	server, err := NewServer(runtime, executor, verifier, verifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return server
 }
 
 func TestControlCommitsOnlyAfterIndependentVerification(t *testing.T) {
 	executor := &testExecutor{success: true}
 	verifier := &testVerifier{}
 	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
-	server, err := NewServer(runtime, executor, verifier)
-	if err != nil {
-		t.Fatal(err)
-	}
+	server := newTestServer(t, runtime, executor, verifier)
 
 	_, out, err := server.control(context.Background(), nil, ControlRequest{
 		Subject:       "svc",
@@ -77,12 +90,9 @@ func TestControlRejectsNoopBeforeExecution(t *testing.T) {
 	executor := &testExecutor{success: true}
 	verifier := &testVerifier{}
 	runtime := kernel.NewRuntime("ready", kernel.AllowPolicy{})
-	server, err := NewServer(runtime, executor, verifier)
-	if err != nil {
-		t.Fatal(err)
-	}
+	server := newTestServer(t, runtime, executor, verifier)
 
-	_, _, err = server.control(context.Background(), nil, ControlRequest{
+	_, _, err := server.control(context.Background(), nil, ControlRequest{
 		Subject:       "svc",
 		ObservedState: "ready",
 		DesiredState:  "ready",
@@ -102,10 +112,7 @@ func TestControlFailsClosedWhenVerificationFails(t *testing.T) {
 	executor := &testExecutor{success: true}
 	verifier := &testVerifier{err: errors.New("independent evidence unavailable")}
 	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
-	server, err := NewServer(runtime, executor, verifier)
-	if err != nil {
-		t.Fatal(err)
-	}
+	server := newTestServer(t, runtime, executor, verifier)
 
 	_, out, err := server.control(context.Background(), nil, ControlRequest{
 		Subject:       "svc",
@@ -126,16 +133,13 @@ func TestControlFailsClosedWhenVerificationFails(t *testing.T) {
 	}
 }
 
-func TestControlRecoversOnNextFreshObservation(t *testing.T) {
+func TestControlRecoversUsingIndependentProviderEvidence(t *testing.T) {
 	executor := &testExecutor{success: true}
 	verifier := &testVerifier{err: errors.New("temporary evidence failure")}
 	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
-	server, err := NewServer(runtime, executor, verifier)
-	if err != nil {
-		t.Fatal(err)
-	}
+	server := newTestServer(t, runtime, executor, verifier)
 
-	_, _, err = server.control(context.Background(), nil, ControlRequest{
+	_, _, err := server.control(context.Background(), nil, ControlRequest{
 		Subject:       "svc",
 		ObservedState: "initial",
 		DesiredState:  "ready",
@@ -147,7 +151,7 @@ func TestControlRecoversOnNextFreshObservation(t *testing.T) {
 	verifier.err = nil
 	_, out, err := server.control(context.Background(), nil, ControlRequest{
 		Subject:       "svc",
-		ObservedState: "initial",
+		ObservedState: "bogus-stale-caller-state",
 		DesiredState:  "ready",
 	})
 	if err != nil {
@@ -159,18 +163,18 @@ func TestControlRecoversOnNextFreshObservation(t *testing.T) {
 	if executor.calls != 2 || verifier.calls != 2 {
 		t.Fatalf("expected fresh execution and verification after recovery, got %d and %d", executor.calls, verifier.calls)
 	}
+	if out.Observation.State != "initial" {
+		t.Fatalf("recovery trusted caller state instead of provider evidence: %+v", out.Observation)
+	}
 }
 
 func TestControlRecoversAfterExecutionFailure(t *testing.T) {
 	executor := &testExecutor{}
 	verifier := &testVerifier{}
 	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
-	server, err := NewServer(runtime, executor, verifier)
-	if err != nil {
-		t.Fatal(err)
-	}
+	server := newTestServer(t, runtime, executor, verifier)
 
-	_, _, err = server.control(context.Background(), nil, ControlRequest{
+	_, _, err := server.control(context.Background(), nil, ControlRequest{
 		Subject:       "svc",
 		ObservedState: "initial",
 		DesiredState:  "ready",
