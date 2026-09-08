@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/jaredt87/ackOS/kernel"
@@ -20,21 +21,22 @@ type ControlRequest struct {
 }
 
 type ControlResponse struct {
-	Phase       kernel.Phase               `json:"phase"`
-	Observation kernel.Observation         `json:"observation"`
-	Transition  kernel.Transition          `json:"transition"`
-	Governance  kernel.GovernanceDecision  `json:"governance"`
-	Authority   kernel.Authority            `json:"authority"`
-	Execution   kernel.ExecutionResult      `json:"execution"`
-	Verified    bool                        `json:"verified"`
-	Committed   bool                        `json:"committed"`
-	Root        string                      `json:"root"`
+	Phase       kernel.Phase              `json:"phase"`
+	Observation kernel.Observation        `json:"observation"`
+	Transition  kernel.Transition         `json:"transition"`
+	Governance  kernel.GovernanceDecision `json:"governance"`
+	Authority   kernel.Authority           `json:"authority"`
+	Execution   kernel.ExecutionResult     `json:"execution"`
+	Verified    bool                       `json:"verified"`
+	Committed   bool                       `json:"committed"`
+	Root        string                     `json:"root"`
 }
 
 type Server struct {
 	runtime  *kernel.Runtime
 	executor kernel.Executor
 	verifier kernel.Verifier
+	controlMu sync.Mutex
 }
 
 func NewServer(runtime *kernel.Runtime, executor kernel.Executor, verifier kernel.Verifier) (*Server, error) {
@@ -60,6 +62,9 @@ func (s *Server) MCPServer() *mcpsdk.Server {
 }
 
 func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in ControlRequest) (*mcpsdk.CallToolResult, ControlResponse, error) {
+	s.controlMu.Lock()
+	defer s.controlMu.Unlock()
+
 	if in.AuthorityTTLMS < 0 {
 		return nil, ControlResponse{}, fmt.Errorf("authority_ttl_ms must not be negative")
 	}
@@ -69,6 +74,16 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 	if err != nil {
 		return nil, ControlResponse{}, err
 	}
+
+	// A failed execution or verification leaves the runtime in RECOVERY. The
+	// next control call must supply fresh post-failure evidence to re-enter the
+	// normal lifecycle; recovery never reuses the prior transition authority.
+	if s.runtime.Phase() == kernel.PhaseRecovery {
+		if err := s.runtime.Recover(observation); err != nil {
+			return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Root: s.runtime.Root()}, err
+		}
+	}
+
 	if err := s.runtime.Observe(observation); err != nil {
 		return nil, ControlResponse{}, err
 	}
