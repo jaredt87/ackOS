@@ -1,0 +1,10 @@
+{
+  "name": "ackos",
+  "description": "Use ackOS as a control boundary between agent decisions, real-world execution, independent verification, and committed state.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Jared Thomson"
+  },
+  "license": "Apache-2.0",
+  "repository": "https://github.com/jaredt87/ackOS"
+}
