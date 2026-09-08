@@ -96,27 +96,48 @@ func TestVerifyCancellationReleasesReservation(t *testing.T) {
 
 func TestStaleVerificationCannotClearLaterReservation(t *testing.T) {
 	r := NewRuntime("A", nil)
+	o := observation(t, "resource", "A", 1, time.Unix(100, 0))
+	authorize(t, r, o, "B")
+
 	oldDone := make(chan struct{})
 	newDone := make(chan struct{})
+	r.mu.Lock()
+	r.phase = PhaseStarted
+	r.executionDone = oldDone
+	r.verificationActive = false
+	r.mu.Unlock()
+
+	verifyDone := make(chan error, 1)
+	go func() {
+		verifyDone <- r.Verify(context.Background(), fakeVerifier{})
+	}()
+
+	// Wait until Verify has claimed the old lifecycle's reservation.
+	for {
+		r.mu.Lock()
+		active := r.verificationActive
+		r.mu.Unlock()
+		if active {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// Simulate recovery and a new execution lifecycle before the stale verifier wakes.
+	r.mu.Lock()
 	r.executionDone = newDone
 	r.verificationActive = true
+	r.mu.Unlock()
+	close(oldDone)
+
+	if err := <-verifyDone; !errors.Is(err, ErrInvalidLifecycle) {
+		t.Fatalf("expected stale verifier to be rejected, got %v", err)
+	}
 
 	r.mu.Lock()
-	if r.executionDone == oldDone && r.verificationActive {
-		r.verificationActive = false
-	}
-	r.mu.Unlock()
-
+	defer r.mu.Unlock()
 	if !r.verificationActive {
-		t.Fatal("stale verification cleared the later reservation")
+		t.Fatal("stale verifier cleared the later reservation")
 	}
-
-	r.mu.Lock()
-	if r.executionDone == newDone && r.verificationActive {
-		r.verificationActive = false
-	}
-	r.mu.Unlock()
-	if r.verificationActive {
-		t.Fatal("current verification reservation was not releasable")
-	}
+	r.verificationActive = false
 }
