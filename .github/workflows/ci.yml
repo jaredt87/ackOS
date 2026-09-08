@@ -16,8 +16,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
-      - name: Format
-        run: gofmt -w .
+      - name: Check formatting
+        run: test -z "$(gofmt -l .)"
       - name: Vet
         run: go vet ./...
       - name: Test
