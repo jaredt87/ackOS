@@ -312,6 +312,9 @@ func (r *Runtime) Observe(o Observation) error {
 	if r.phase == PhaseStarted || r.phase == PhaseRecovery {
 		return ErrInvalidLifecycle
 	}
+	if r.observation != nil && o.Subject != r.observation.Subject {
+		return ErrInvalidObservation
+	}
 	r.observation = &o
 	r.resetLifecycleLocked()
 	r.phase = PhaseObserved
@@ -361,10 +364,10 @@ func (r *Runtime) Govern() (GovernanceDecision, error) {
 	if d.TransitionFingerprint != r.transition.Fingerprint || d.ObservationFingerprint != r.transition.ObservationFingerprint || d.ProposalFingerprint != r.transition.ProposalFingerprint {
 		return d, ErrGovernanceDenied
 	}
+	if r.transition.Decision == DecisionNoop {
+		return d, ErrGovernanceDenied
+	}
 	if !d.Allowed {
-		if r.transition.Decision == DecisionNoop {
-			return d, nil
-		}
 		return d, ErrGovernanceDenied
 	}
 	r.decision = &d
@@ -380,6 +383,9 @@ func (r *Runtime) Reserve(lifetime time.Duration) (Authority, error) {
 	}
 	if !r.decision.Allowed {
 		return Authority{}, ErrGovernanceDenied
+	}
+	if lifetime < 0 {
+		return Authority{}, ErrInvalidLifecycle
 	}
 	now := r.clock().UTC()
 	a := Authority{ExecutionID: randomExecutionID(r.transition.Fingerprint, now), TransitionFingerprint: r.transition.Fingerprint, ObservationFingerprint: r.transition.ObservationFingerprint, ProposalFingerprint: r.transition.ProposalFingerprint, CreatedAt: now}
@@ -403,6 +409,10 @@ func (r *Runtime) Start(ctx context.Context, e Executor) (ExecutionResult, error
 	if err := r.authority.validFor(*r.transition, *r.observation, r.clock().UTC()); err != nil {
 		r.mu.Unlock()
 		return ExecutionResult{}, err
+	}
+	if r.store.Root() != r.transition.Before {
+		r.mu.Unlock()
+		return ExecutionResult{}, ErrCASConflict
 	}
 	r.authority.Consumed = true
 	a := *r.authority
@@ -428,6 +438,21 @@ func (r *Runtime) Start(ctx context.Context, e Executor) (ExecutionResult, error
 	return result, nil
 }
 
+func (r *Runtime) releaseVerificationIfCurrent(done chan struct{}) {
+	if r.executionDone == done && r.verificationActive {
+		r.verificationActive = false
+	}
+}
+
+func (r *Runtime) failVerification(done chan struct{}) {
+	r.mu.Lock()
+	if r.phase == PhaseStarted && r.executionDone == done && r.verificationActive {
+		r.phase = PhaseRecovery
+		r.verificationActive = false
+	}
+	r.mu.Unlock()
+}
+
 func (r *Runtime) Verify(ctx context.Context, v Verifier) error {
 	if v == nil {
 		return ErrVerificationFailed
@@ -445,51 +470,33 @@ func (r *Runtime) Verify(ctx context.Context, v Verifier) error {
 	case <-done:
 	case <-ctx.Done():
 		r.mu.Lock()
-		if r.executionDone == done && r.verificationActive {
-			r.verificationActive = false
-		}
+		r.releaseVerificationIfCurrent(done)
 		r.mu.Unlock()
 		return ctx.Err()
 	}
 
 	r.mu.Lock()
 	if r.phase != PhaseStarted || r.authority == nil || r.transition == nil || r.observation == nil || r.executionDone != done {
-		if r.executionDone == done && r.verificationActive {
-			r.verificationActive = false
-		}
+		r.releaseVerificationIfCurrent(done)
 		r.mu.Unlock()
 		return ErrInvalidLifecycle
 	}
 	a, t := *r.authority, *r.transition
 	completedAt := r.executionCompletedAt
+	now := r.clock().UTC()
 	r.mu.Unlock()
 
 	o, err := v.Verify(ctx, t, a)
 	if err != nil {
-		r.mu.Lock()
-		if r.phase == PhaseStarted && r.executionDone == done && r.verificationActive {
-			r.phase = PhaseRecovery
-			r.verificationActive = false
-		}
-		r.mu.Unlock()
+		r.failVerification(done)
 		return fmt.Errorf("%w: %v", ErrVerificationFailed, err)
 	}
 	if err := o.Validate(); err != nil {
-		r.mu.Lock()
-		if r.phase == PhaseStarted && r.executionDone == done && r.verificationActive {
-			r.phase = PhaseRecovery
-			r.verificationActive = false
-		}
-		r.mu.Unlock()
+		r.failVerification(done)
 		return fmt.Errorf("%w: %v", ErrVerificationFailed, err)
 	}
-	if o.Subject != t.Subject || o.State != t.After || o.Fingerprint == t.ObservationFingerprint || !o.ObservedAt.After(completedAt) {
-		r.mu.Lock()
-		if r.phase == PhaseStarted && r.executionDone == done && r.verificationActive {
-			r.phase = PhaseRecovery
-			r.verificationActive = false
-		}
-		r.mu.Unlock()
+	if o.Subject != t.Subject || o.State != t.After || o.Fingerprint == t.ObservationFingerprint || !o.ObservedAt.After(completedAt) || o.ObservedAt.After(now) {
+		r.failVerification(done)
 		return ErrVerificationFailed
 	}
 
@@ -530,6 +537,9 @@ func (r *Runtime) Recover(o Observation) error {
 		return ErrInvalidObservation
 	}
 	if !o.ObservedAt.After(r.executionCompletedAt) {
+		return ErrStaleEvidence
+	}
+	if o.ObservedAt.After(r.clock().UTC()) {
 		return ErrStaleEvidence
 	}
 	r.observation = &o
