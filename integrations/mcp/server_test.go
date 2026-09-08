@@ -27,7 +27,7 @@ type testVerifier struct {
 	err         error
 	block       <-chan struct{}
 	observeErr  error
-	observeDone <-chan struct{}
+	observeDone chan struct{}
 }
 
 func (v *testVerifier) Verify(ctx context.Context, _ kernel.Transition, _ kernel.Authority) (kernel.Observation, error) {
