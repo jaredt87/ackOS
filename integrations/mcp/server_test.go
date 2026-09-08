@@ -116,9 +116,9 @@ func TestControlRejectsAuthorityTTLOverflow(t *testing.T) {
 
 	const maxInt64 = int64(^uint64(0) >> 1)
 	_, _, err := server.control(context.Background(), nil, ControlRequest{
-		Subject:       "svc",
-		ObservedState: "initial",
-		DesiredState:  "ready",
+		Subject:        "svc",
+		ObservedState:  "initial",
+		DesiredState:   "ready",
 		AuthorityTTLMS: maxInt64,
 	})
 	if err == nil {
