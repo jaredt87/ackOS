@@ -45,6 +45,36 @@ Execution itself remains outside the kernel. ackOS governs whether an execution 
 
 The research program behind ackOS established an evidence-backed safety theory and documented the boundaries where stronger guarantees require additional mechanisms. It does **not** claim universal correctness or a mathematical proof of the entire implementation.
 
+## Agent plugin
+
+ackOS now includes a **Claude Code plugin** so you can add the control-boundary workflow to an agent without replacing the agent or its existing tools.
+
+```text
+Agent / LLM
+    ↓
+ackOS
+    ↓
+Executor / API
+    ↓
+Independent verification
+    ↓
+ackOS
+    ↓
+Commit / Reject
+```
+
+Try it locally with:
+
+```bash
+claude --plugin-dir .
+```
+
+Then invoke `/ackos:control`, or let the skill load automatically for side-effecting work.
+
+The plugin is an agent-facing adapter, **not the security boundary itself**. A real control boundary still requires an executable ackOS integration for the relevant executor and independent verifier. The kernel remains the authority for authorization, verification, recovery, and commitment semantics.
+
+See [`docs/CLAUDE_CODE_PLUGIN.md`](docs/CLAUDE_CODE_PLUGIN.md) for details.
+
 ## Status
 
 ackOS V0 is the implementation phase following the completed ACK research program (E11–E17).
