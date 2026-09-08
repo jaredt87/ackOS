@@ -141,3 +141,15 @@ func TestStaleVerificationCannotClearLaterReservation(t *testing.T) {
 	}
 	r.verificationActive = false
 }
+
+func TestObservationRejectsUnencodableTimestamp(t *testing.T) {
+	if _, err := NewObservation("resource", "A", 1, time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)); !errors.Is(err, ErrInvalidObservation) {
+		t.Fatalf("expected unencodable observation to be rejected at construction, got %v", err)
+	}
+
+	o := observation(t, "resource", "A", 1, time.Unix(100, 0))
+	o.ObservedAt = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := o.Validate(); !errors.Is(err, ErrInvalidObservation) {
+		t.Fatalf("expected mutated unencodable observation to be rejected, got %v", err)
+	}
+}
