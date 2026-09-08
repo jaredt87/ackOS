@@ -340,6 +340,7 @@ func TestControlBoundsRecoveryObservation(t *testing.T) {
 	if out.Phase != kernel.PhaseRecovery || runtime.Phase() != kernel.PhaseRecovery {
 		t.Fatalf("timeout should leave runtime recoverable: out=%+v phase=%s", out, runtime.Phase())
 	}
+	close(verifier.observeDone)
 }
 
 func TestControlDoesNotOverlapTimedOutProviderCall(t *testing.T) {
