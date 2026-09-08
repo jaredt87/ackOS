@@ -33,8 +33,8 @@ func (verifier) Verify(ctx context.Context, t kernel.Transition, a kernel.Author
 	return kernel.NewObservation(t.Subject, t.After, 1, time.Now().UTC())
 }
 
-func (verifier) Observe(context.Context, string) (kernel.Observation, error) {
-	return kernel.NewObservation("svc", "initial", 1, time.Now().UTC())
+func (verifier) Observe(_ context.Context, subject string) (kernel.Observation, error) {
+	return kernel.NewObservation(subject, "initial", 1, time.Now().UTC())
 }
 
 func main() {
