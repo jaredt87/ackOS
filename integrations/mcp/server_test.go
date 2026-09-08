@@ -23,9 +23,11 @@ func (e *testExecutor) Execute(context.Context, kernel.Transition, kernel.Author
 }
 
 type testVerifier struct {
-	calls int
-	err   error
-	block <-chan struct{}
+	calls       int
+	err         error
+	block       <-chan struct{}
+	observeErr  error
+	observeDone <-chan struct{}
 }
 
 func (v *testVerifier) Verify(ctx context.Context, _ kernel.Transition, _ kernel.Authority) (kernel.Observation, error) {
@@ -43,7 +45,17 @@ func (v *testVerifier) Verify(ctx context.Context, _ kernel.Transition, _ kernel
 	return kernel.NewObservation("svc", "ready", 1, time.Now().UTC())
 }
 
-func (v *testVerifier) Observe(_ context.Context, subject string) (kernel.Observation, error) {
+func (v *testVerifier) Observe(ctx context.Context, subject string) (kernel.Observation, error) {
+	if v.observeDone != nil {
+		select {
+		case <-v.observeDone:
+		case <-ctx.Done():
+			return kernel.Observation{}, ctx.Err()
+		}
+	}
+	if v.observeErr != nil {
+		return kernel.Observation{}, v.observeErr
+	}
 	return kernel.NewObservation(subject, "initial", 1, time.Now().UTC())
 }
 
@@ -103,7 +115,6 @@ func TestControlRejectsCanceledRequestAfterSerializationWait(t *testing.T) {
 		done <- err
 	}()
 
-	// The call is blocked on the lifecycle mutex until this test releases it.
 	time.Sleep(10 * time.Millisecond)
 	server.controlMu.Unlock()
 	defer func() { server.controlMu.Lock() }()
@@ -300,4 +311,66 @@ func TestControlRecoversAfterExecutionFailure(t *testing.T) {
 	if !out.Verified || !out.Committed || runtime.Phase() != kernel.PhaseCommitted {
 		t.Fatalf("unexpected recovered result: %+v", out)
 	}
+}
+
+func TestControlBoundsRecoveryObservation(t *testing.T) {
+	executor := &testExecutor{}
+	verifier := &testVerifier{observeDone: make(chan struct{})}
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	server := newTestServer(t, runtime, executor, verifier)
+	server.verifyTimeout = 10 * time.Millisecond
+
+	_, _, err := server.control(context.Background(), nil, ControlRequest{
+		Subject:       "svc",
+		ObservedState: "initial",
+		DesiredState:  "ready",
+	})
+	if err == nil || runtime.Phase() != kernel.PhaseRecovery {
+		t.Fatalf("expected execution failure and recovery, err=%v phase=%s", err, runtime.Phase())
+	}
+
+	_, out, err := server.control(context.Background(), nil, ControlRequest{
+		Subject:       "svc",
+		ObservedState: "initial",
+		DesiredState:  "ready",
+	})
+	if err == nil {
+		t.Fatal("expected recovery observation timeout")
+	}
+	if out.Phase != kernel.PhaseRecovery || runtime.Phase() != kernel.PhaseRecovery {
+		t.Fatalf("timeout should leave runtime recoverable: out=%+v phase=%s", out, runtime.Phase())
+	}
+}
+
+func TestControlDoesNotOverlapTimedOutProviderCall(t *testing.T) {
+	executor := &testExecutor{success: true}
+	verifier := &testVerifier{block: make(chan struct{})}
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	server := newTestServer(t, runtime, executor, verifier)
+	server.verifyTimeout = 10 * time.Millisecond
+
+	_, _, err := server.control(context.Background(), nil, ControlRequest{
+		Subject:       "svc",
+		ObservedState: "initial",
+		DesiredState:  "ready",
+	})
+	if err == nil || runtime.Phase() != kernel.PhaseRecovery {
+		t.Fatalf("expected verification timeout and recovery, err=%v phase=%s", err, runtime.Phase())
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	_, _, err = server.control(ctx, nil, ControlRequest{
+		Subject:       "svc",
+		ObservedState: "initial",
+		DesiredState:  "ready",
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context deadline while prior verifier remains in flight", err)
+	}
+	if verifier.calls != 1 {
+		t.Fatalf("overlapping provider call started: verifier calls=%d, want 1", verifier.calls)
+	}
+
+	close(verifier.block)
 }
