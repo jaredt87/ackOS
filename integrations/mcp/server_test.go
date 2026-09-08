@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,7 +24,7 @@ func (e *testExecutor) Execute(context.Context, kernel.Transition, kernel.Author
 }
 
 type testVerifier struct {
-	calls                   int
+	calls                   atomic.Int64
 	err                     error
 	block                   chan struct{}
 	ignoreBlockCancellation bool
@@ -31,8 +32,12 @@ type testVerifier struct {
 	observeDone             chan struct{}
 }
 
+func (v *testVerifier) callCount() int64 {
+	return v.calls.Load()
+}
+
 func (v *testVerifier) Verify(ctx context.Context, _ kernel.Transition, _ kernel.Authority) (kernel.Observation, error) {
-	v.calls++
+	v.calls.Add(1)
 	if v.block != nil {
 		if v.ignoreBlockCancellation {
 			<-v.block
@@ -98,8 +103,8 @@ func TestControlRejectsCanceledRequestBeforeLifecycleAdmission(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
-	if executor.calls != 0 || verifier.calls != 0 || runtime.Phase() != kernel.PhaseIdle {
-		t.Fatalf("canceled request entered lifecycle: executor=%d verifier=%d phase=%s", executor.calls, verifier.calls, runtime.Phase())
+	if executor.calls != 0 || verifier.callCount() != 0 || runtime.Phase() != kernel.PhaseIdle {
+		t.Fatalf("canceled request entered lifecycle: executor=%d verifier=%d phase=%s", executor.calls, verifier.callCount(), runtime.Phase())
 	}
 }
 
@@ -127,8 +132,8 @@ func TestControlRejectsCanceledRequestAfterSerializationWait(t *testing.T) {
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
 	}
-	if executor.calls != 0 || verifier.calls != 0 || runtime.Phase() != kernel.PhaseIdle {
-		t.Fatalf("canceled request entered lifecycle: executor=%d verifier=%d phase=%s", executor.calls, verifier.calls, runtime.Phase())
+	if executor.calls != 0 || verifier.callCount() != 0 || runtime.Phase() != kernel.PhaseIdle {
+		t.Fatalf("canceled request entered lifecycle: executor=%d verifier=%d phase=%s", executor.calls, verifier.callCount(), runtime.Phase())
 	}
 }
 
@@ -148,8 +153,8 @@ func TestControlRejectsAuthorityTTLOverflow(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected TTL overflow rejection")
 	}
-	if executor.calls != 0 || verifier.calls != 0 || runtime.Phase() != kernel.PhaseIdle {
-		t.Fatalf("overflowing TTL entered lifecycle: executor=%d verifier=%d phase=%s", executor.calls, verifier.calls, runtime.Phase())
+	if executor.calls != 0 || verifier.callCount() != 0 || runtime.Phase() != kernel.PhaseIdle {
+		t.Fatalf("overflowing TTL entered lifecycle: executor=%d verifier=%d phase=%s", executor.calls, verifier.callCount(), runtime.Phase())
 	}
 }
 
@@ -169,8 +174,8 @@ func TestControlCommitsOnlyAfterIndependentVerification(t *testing.T) {
 	if !out.Authority.Consumed {
 		t.Fatalf("authority = %+v, want consumed", out.Authority)
 	}
-	if executor.calls != 1 || verifier.calls != 1 {
-		t.Fatalf("expected one executor and verifier call, got %d and %d", executor.calls, verifier.calls)
+	if executor.calls != 1 || verifier.callCount() != 1 {
+		t.Fatalf("expected one executor and verifier call, got %d and %d", executor.calls, verifier.callCount())
 	}
 	if got := runtime.Root(); got != "ready" {
 		t.Fatalf("root = %q, want ready", got)
@@ -210,8 +215,8 @@ func TestControlRejectsNoopBeforeExecution(t *testing.T) {
 	if !errors.Is(err, kernel.ErrGovernanceDenied) {
 		t.Fatalf("err = %v, want governance denial", err)
 	}
-	if executor.calls != 0 || verifier.calls != 0 {
-		t.Fatalf("side-effect path ran for NOOP: executor=%d verifier=%d", executor.calls, verifier.calls)
+	if executor.calls != 0 || verifier.callCount() != 0 {
+		t.Fatalf("side-effect path ran for NOOP: executor=%d verifier=%d", executor.calls, verifier.callCount())
 	}
 	if got := runtime.Root(); got != "ready" {
 		t.Fatalf("root changed to %q", got)
@@ -258,8 +263,8 @@ func TestControlRecoversUsingIndependentProviderEvidence(t *testing.T) {
 	if !out.Verified || !out.Committed || runtime.Phase() != kernel.PhaseCommitted {
 		t.Fatalf("unexpected recovered result: %+v", out)
 	}
-	if executor.calls != 2 || verifier.calls != 2 {
-		t.Fatalf("expected fresh execution and verification after recovery, got %d and %d", executor.calls, verifier.calls)
+	if executor.calls != 2 || verifier.callCount() != 2 {
+		t.Fatalf("expected fresh execution and verification after recovery, got %d and %d", executor.calls, verifier.callCount())
 	}
 	if out.Observation.State != "initial" {
 		t.Fatalf("recovery trusted caller state instead of provider evidence: %+v", out.Observation)
@@ -319,8 +324,8 @@ func TestControlDoesNotOverlapTimedOutProviderCall(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("err = %v, want context deadline while prior verifier remains in flight", err)
 	}
-	if verifier.calls != 1 {
-		t.Fatalf("overlapping provider call started: verifier calls=%d, want 1", verifier.calls)
+	if verifier.callCount() != 1 {
+		t.Fatalf("overlapping provider call started: verifier calls=%d, want 1", verifier.callCount())
 	}
 
 	close(verifier.block)
