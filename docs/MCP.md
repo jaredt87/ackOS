@@ -30,6 +30,10 @@ V0 exposes one high-level tool:
 
 The MCP adapter owns the call to the configured `kernel.Executor` and requires a configured `kernel.Verifier`. A skill or LLM response cannot authorize a separate side-effecting call around the MCP server.
 
+If execution or independent verification fails, the kernel enters `RECOVERY`. A later `ackos_control` call must provide a fresh observation; the adapter feeds that evidence through `Runtime.Recover` before beginning a new lifecycle. The failed transition's authority is never reused.
+
+The adapter serializes complete control lifecycles because the V0 runtime is a single mutable state machine. This prevents concurrent MCP calls from invalidating each other's reserved authority.
+
 ## Transports
 
 `integrations/mcp.Server` supports:
