@@ -81,7 +81,7 @@ Then restart Gemini CLI and inspect the installed extension/skills:
 /skills list
 ```
 
-See [`docs/AGENT_INSTALL.md`](docs/AGENT_INSTALL.md).
+See [`docs/GEMINI_EXTENSION.md`](docs/GEMINI_EXTENSION.md).
 
 ### ChatGPT
 
