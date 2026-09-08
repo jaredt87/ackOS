@@ -14,6 +14,7 @@ import (
 const (
 	ToolControl       = "ackos_control"
 	maxAuthorityTTLMS = int64((1<<63 - 1) / int64(time.Millisecond))
+	defaultVerifyTimeout = 30 * time.Second
 )
 
 type ControlRequest struct {
@@ -41,12 +42,40 @@ type RecoveryObserver interface {
 	Observe(context.Context, string) (kernel.Observation, error)
 }
 
+type boundedVerifier struct {
+	verifier kernel.Verifier
+	timeout  time.Duration
+}
+
+func (v boundedVerifier) Verify(ctx context.Context, transition kernel.Transition, authority kernel.Authority) (kernel.Observation, error) {
+	verifyCtx, cancel := context.WithTimeout(ctx, v.timeout)
+	defer cancel()
+
+	type result struct {
+		observation kernel.Observation
+		err         error
+	}
+	results := make(chan result, 1)
+	go func() {
+		observation, err := v.verifier.Verify(verifyCtx, transition, authority)
+		results <- result{observation: observation, err: err}
+	}()
+
+	select {
+	case result := <-results:
+		return result.observation, result.err
+	case <-verifyCtx.Done():
+		return kernel.Observation{}, fmt.Errorf("independent verification timed out after %s: %w", v.timeout, verifyCtx.Err())
+	}
+}
+
 type Server struct {
 	runtime          *kernel.Runtime
 	executor         kernel.Executor
 	verifier         kernel.Verifier
 	recoveryObserver RecoveryObserver
 	controlMu        sync.Mutex
+	verifyTimeout    time.Duration
 }
 
 func NewServer(runtime *kernel.Runtime, executor kernel.Executor, verifier kernel.Verifier, recoveryObserver RecoveryObserver) (*Server, error) {
@@ -62,7 +91,7 @@ func NewServer(runtime *kernel.Runtime, executor kernel.Executor, verifier kerne
 	if recoveryObserver == nil {
 		return nil, fmt.Errorf("independent recovery observer is required")
 	}
-	return &Server{runtime: runtime, executor: executor, verifier: verifier, recoveryObserver: recoveryObserver}, nil
+	return &Server{runtime: runtime, executor: executor, verifier: verifier, recoveryObserver: recoveryObserver, verifyTimeout: defaultVerifyTimeout}, nil
 }
 
 func (s *Server) MCPServer() *mcpsdk.Server {
@@ -133,6 +162,7 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 		return nil, ControlResponse{}, err
 	}
 	execution, err := s.runtime.Start(ctx, s.executor)
+	authority.Consumed = true
 	if err != nil {
 		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority}, err
 	}
@@ -140,11 +170,12 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority, Execution: execution}, fmt.Errorf("execution failed: %s", execution.Message)
 	}
 
-	// The executor has already completed before Verify is entered. A transport
-	// disconnect must not cancel verification and strand the shared V0 runtime
-	// in STARTED, so verification deliberately outlives the request context.
+	// Verification survives MCP transport cancellation, but remains bounded by
+	// an adapter-owned timeout. If it times out, Runtime.Verify receives an
+	// ordinary verifier error and transitions the attempt into RECOVERY.
 	verificationCtx := context.WithoutCancel(ctx)
-	if err := s.runtime.Verify(verificationCtx, s.verifier); err != nil {
+	bounded := boundedVerifier{verifier: s.verifier, timeout: s.verifyTimeout}
+	if err := s.runtime.Verify(verificationCtx, bounded); err != nil {
 		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority, Execution: execution}, err
 	}
 	if err := s.runtime.Commit(); err != nil {
