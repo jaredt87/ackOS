@@ -8,9 +8,11 @@ The project is nevertheless intended to be developed with explicit security and 
 
 ## Reporting a vulnerability
 
-For a security-sensitive vulnerability, please use GitHub's private vulnerability reporting mechanism for this repository when available rather than opening a public issue with exploit details.
+For a security-sensitive vulnerability, please use GitHub's private vulnerability reporting mechanism for this repository rather than opening a public issue with exploit details, if that mechanism is enabled.
 
-When reporting, include:
+If private vulnerability reporting is unavailable, **do not publish exploit details, proof-of-concept code, credentials, private infrastructure details, or other sensitive information in a public issue**. Instead, open a minimal public issue titled `[SECURITY] Private reporting channel requested` with no vulnerability details. This signals that a private reporting path is needed without disclosing the finding; the maintainer can then provide or establish a private channel.
+
+When reporting through a private channel, include:
 
 - a concise description of the issue;
 - the affected commit or version;
