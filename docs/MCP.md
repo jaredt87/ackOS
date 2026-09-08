@@ -1,0 +1,48 @@
+# ackOS MCP control plane
+
+ackOS exposes an MCP server so an LLM or agent can call the control boundary as a tool instead of implementing the lifecycle itself.
+
+```text
+LLM / Agent
+    |
+    | MCP
+    v
+ackOS MCP integration
+    |
+    v
+Observe -> Normalize -> Reconcile -> Govern -> Reserve
+    |
+    v
+Executor owned by integration
+    |
+    v
+Independent verifier
+    |
+    v
+Verify -> CAS Commit / Recovery
+```
+
+## Tool
+
+V0 exposes one high-level tool:
+
+- `ackos_control` — accepts a subject, observed state, desired state, and optional authority lifetime, then runs the transition through the kernel.
+
+The MCP adapter owns the call to the configured `kernel.Executor` and requires a configured `kernel.Verifier`. A skill or LLM response cannot authorize a separate side-effecting call around the MCP server.
+
+## Transports
+
+`integrations/mcp.Server` supports:
+
+- stdio for local MCP clients such as Claude Code, Gemini, and other local agents;
+- Streamable HTTP for remote MCP clients.
+
+The standalone `cmd/ackos-mcp` binary uses an in-memory demonstration executor and verifier. It is intentionally a development/demo server, not a production infrastructure adapter.
+
+For real use, embed the integration and provide an executor that performs the actual side effect and an independent verifier that obtains fresh evidence from the target system.
+
+## Security boundary
+
+The MCP protocol is transport, not authority. The kernel remains authoritative for governance, single-use authority, execution, independent verification, recovery, and CAS commitment.
+
+The V0 HTTP server does not provide authentication, authorization for arbitrary callers, durable state, or distributed coordination. Do not expose the demo server directly to an untrusted network.
