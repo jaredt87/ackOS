@@ -93,3 +93,30 @@ func TestVerifyCancellationReleasesReservation(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestStaleVerificationCannotClearLaterReservation(t *testing.T) {
+	r := NewRuntime("A", nil)
+	oldDone := make(chan struct{})
+	newDone := make(chan struct{})
+	r.executionDone = newDone
+	r.verificationActive = true
+
+	r.mu.Lock()
+	if r.executionDone == oldDone && r.verificationActive {
+		r.verificationActive = false
+	}
+	r.mu.Unlock()
+
+	if !r.verificationActive {
+		t.Fatal("stale verification cleared the later reservation")
+	}
+
+	r.mu.Lock()
+	if r.executionDone == newDone && r.verificationActive {
+		r.verificationActive = false
+	}
+	r.mu.Unlock()
+	if r.verificationActive {
+		t.Fatal("current verification reservation was not releasable")
+	}
+}
