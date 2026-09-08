@@ -25,17 +25,17 @@ type ControlResponse struct {
 	Observation kernel.Observation        `json:"observation"`
 	Transition  kernel.Transition         `json:"transition"`
 	Governance  kernel.GovernanceDecision `json:"governance"`
-	Authority   kernel.Authority           `json:"authority"`
-	Execution   kernel.ExecutionResult     `json:"execution"`
-	Verified    bool                       `json:"verified"`
-	Committed   bool                       `json:"committed"`
-	Root        string                     `json:"root"`
+	Authority   kernel.Authority          `json:"authority"`
+	Execution   kernel.ExecutionResult    `json:"execution"`
+	Verified    bool                      `json:"verified"`
+	Committed   bool                      `json:"committed"`
+	Root        string                    `json:"root"`
 }
 
 type Server struct {
-	runtime  *kernel.Runtime
-	executor kernel.Executor
-	verifier kernel.Verifier
+	runtime   *kernel.Runtime
+	executor  kernel.Executor
+	verifier  kernel.Verifier
 	controlMu sync.Mutex
 }
 
