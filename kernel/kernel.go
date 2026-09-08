@@ -309,7 +309,7 @@ func (r *Runtime) Observe(o Observation) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.phase == PhaseStarted || r.phase == PhaseRecovery {
+	if r.phase == PhaseStarted || r.phase == PhaseRecovery || r.phase == PhaseVerified {
 		return ErrInvalidLifecycle
 	}
 	if r.observation != nil && o.Subject != r.observation.Subject {
@@ -427,13 +427,15 @@ func (r *Runtime) Start(ctx context.Context, e Executor) (ExecutionResult, error
 	result := e.Execute(ctx, t, a)
 
 	r.mu.Lock()
-	if r.phase == PhaseStarted && r.executionDone == done {
-		r.executionCompletedAt = r.clock().UTC()
-		if !result.Success {
-			r.phase = PhaseRecovery
-		}
-		close(done)
+	if r.phase != PhaseStarted || r.executionDone != done {
+		r.mu.Unlock()
+		return result, nil
 	}
+	r.executionCompletedAt = r.clock().UTC()
+	if !result.Success {
+		r.phase = PhaseRecovery
+	}
+	close(done)
 	r.mu.Unlock()
 	return result, nil
 }
@@ -483,10 +485,10 @@ func (r *Runtime) Verify(ctx context.Context, v Verifier) error {
 	}
 	a, t := *r.authority, *r.transition
 	completedAt := r.executionCompletedAt
-	now := r.clock().UTC()
 	r.mu.Unlock()
 
 	o, err := v.Verify(ctx, t, a)
+	now := r.clock().UTC()
 	if err != nil {
 		r.failVerification(done)
 		return fmt.Errorf("%w: %v", ErrVerificationFailed, err)
