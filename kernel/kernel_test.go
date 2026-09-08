@@ -111,8 +111,8 @@ func TestAuthorityCannotBeReplayed(t *testing.T) {
 	if r.phase != PhaseRecovery {
 		t.Fatalf("expected recovery after failed execution")
 	}
-	if err := r.Observe(o); err != nil {
-		t.Fatal(err)
+	if r.authority == nil || !r.authority.Consumed {
+		t.Fatal("runtime authority was not consumed")
 	}
 	if _, err := r.Start(context.Background(), &fakeExecutor{}); !errors.Is(err, ErrInvalidLifecycle) {
 		t.Fatalf("expected old authority to be unusable, got %v", err)
