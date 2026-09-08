@@ -30,7 +30,9 @@ V0 exposes one high-level tool:
 
 The MCP adapter owns the call to the configured `kernel.Executor` and requires a configured `kernel.Verifier`. A skill or LLM response cannot authorize a separate side-effecting call around the MCP server.
 
-If execution or independent verification fails, the kernel enters `RECOVERY`. A later `ackos_control` call must provide a fresh observation; the adapter feeds that evidence through `Runtime.Recover` before beginning a new lifecycle. The failed transition's authority is never reused.
+If execution or independent verification fails, the kernel enters `RECOVERY`. A later `ackos_control` call obtains post-failure evidence from an independent recovery observer. The caller's `observed_state` is not used as recovery evidence, and the failed transition's authority is never reused.
+
+Recovery is deliberately fail-closed when provider evidence disagrees with the kernel's committed root. V0 does not guess whether an ambiguous external effect succeeded and does not silently adopt a provider state as a new committed root. That case requires an explicit higher-level reconciliation policy.
 
 The adapter serializes complete control lifecycles because the V0 runtime is a single mutable state machine. This prevents concurrent MCP calls from invalidating each other's reserved authority.
 
@@ -41,12 +43,14 @@ The adapter serializes complete control lifecycles because the V0 runtime is a s
 - stdio for local MCP clients such as Claude Code, Gemini, and other local agents;
 - Streamable HTTP for remote MCP clients.
 
-The standalone `cmd/ackos-mcp` binary uses an in-memory demonstration executor and verifier. It is intentionally a development/demo server, not a production infrastructure adapter.
+The standalone `cmd/ackos-mcp` binary uses in-memory demonstration executor, verifier, and recovery-observer adapters. It is intentionally a development/demo server, not a production infrastructure adapter.
 
-For real use, embed the integration and provide an executor that performs the actual side effect and an independent verifier that obtains fresh evidence from the target system.
+For real use, embed the integration and provide an executor that performs the actual side effect, an independent verifier that obtains fresh evidence from the target system, and an independent recovery observer that obtains provider-captured post-failure evidence.
 
 ## Security boundary
 
 The MCP protocol is transport, not authority. The kernel remains authoritative for governance, single-use authority, execution, independent verification, recovery, and CAS commitment.
+
+Verification is run independently of MCP request cancellation after execution has completed, so a disconnected caller cannot strand the shared V0 runtime in `STARTED`.
 
 The V0 HTTP server does not provide authentication, authorization for arbitrary callers, durable state, or distributed coordination. Do not expose the demo server directly to an untrusted network.
