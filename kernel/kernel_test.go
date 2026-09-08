@@ -125,10 +125,7 @@ func TestConcurrentCASOnlyOneSucceeds(t *testing.T) {
 	results := make(chan error, 2)
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			results <- s.CompareAndSwap("A", "B")
-		}()
+		go func() { defer wg.Done(); results <- s.CompareAndSwap("A", "B") }()
 	}
 	wg.Wait()
 	close(results)
@@ -154,11 +151,7 @@ func TestConcurrentAuthorityStartAtMostOne(t *testing.T) {
 	results := make(chan error, 2)
 	for i := 0; i < 2; i++ {
 		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_, err := r.Start(context.Background(), e)
-			results <- err
-		}()
+		go func() { defer wg.Done(); _, err := r.Start(context.Background(), e); results <- err }()
 	}
 	wg.Wait()
 	close(results)
@@ -183,12 +176,8 @@ func TestObserveRejectedWhileExecutionInFlight(t *testing.T) {
 	authorize(t, r, o, "B")
 	exec := &blockingExecutor{started: make(chan struct{}), release: make(chan struct{}), result: ExecutionResult{Success: true}}
 	startDone := make(chan error, 1)
-	go func() {
-		_, err := r.Start(context.Background(), exec)
-		startDone <- err
-	}()
+	go func() { _, err := r.Start(context.Background(), exec); startDone <- err }()
 	<-exec.started
-
 	o2 := observation(t, "resource", "A", 2, now.Add(time.Second))
 	if err := r.Observe(o2); !errors.Is(err, ErrInvalidLifecycle) {
 		t.Fatalf("expected in-flight observation to be rejected, got %v", err)
@@ -196,7 +185,6 @@ func TestObserveRejectedWhileExecutionInFlight(t *testing.T) {
 	if r.Phase() != PhaseStarted {
 		t.Fatalf("expected started phase to remain intact, got %s", r.Phase())
 	}
-
 	close(exec.release)
 	if err := <-startDone; err != nil {
 		t.Fatal(err)
@@ -205,66 +193,35 @@ func TestObserveRejectedWhileExecutionInFlight(t *testing.T) {
 
 func TestVerifyWaitsForExecutionCompletion(t *testing.T) {
 	now := time.Unix(100, 0)
+	clockNow := now
 	r := NewRuntime("A", nil)
-	r.clock = func() time.Time { return now }
+	r.clock = func() time.Time { return clockNow }
 	o := observation(t, "resource", "A", 1, now)
 	authorize(t, r, o, "B")
 	exec := &blockingExecutor{started: make(chan struct{}), release: make(chan struct{}), result: ExecutionResult{Success: true}}
 	startDone := make(chan error, 1)
-	go func() {
-		_, err := r.Start(context.Background(), exec)
-		startDone <- err
-	}()
+	go func() { _, err := r.Start(context.Background(), exec); startDone <- err }()
 	<-exec.started
-
 	verified := make(chan error, 1)
-	called := make(chan struct{})
-	post := observation(t, "resource", "B", 2, now.Add(time.Second))
-	go func() {
-		verified <- r.Verify(context.Background(), fakeVerifier{observation: post, called: called})
-	}()
+	post := observation(t, "resource", "B", 2, now.Add(2*time.Second))
+	verifier := &blockingVerifier{entered: make(chan struct{}), release: make(chan struct{}), observation: post}
+	go func() { verified <- r.Verify(context.Background(), verifier) }()
 	select {
-	case <-called:
+	case <-verifier.entered:
 		t.Fatal("verifier ran before execution completed")
 	case <-verified:
 		t.Fatal("verification returned before execution completed")
 	case <-time.After(50 * time.Millisecond):
 	}
-
+	clockNow = now.Add(time.Second)
 	close(exec.release)
 	if err := <-startDone; err != nil {
 		t.Fatal(err)
 	}
+	<-verifier.entered
+	clockNow = now.Add(3 * time.Second)
+	close(verifier.release)
 	if err := <-verified; err != nil {
-		t.Fatal(err)
-	}
-	if r.Phase() != PhaseVerified {
-		t.Fatalf("expected verified phase, got %s", r.Phase())
-	}
-}
-
-func TestConcurrentVerifyAllowsOnlyOneVerifier(t *testing.T) {
-	now := time.Unix(100, 0)
-	r := NewRuntime("A", nil)
-	r.clock = func() time.Time { return now }
-	o := observation(t, "resource", "A", 1, now)
-	authorize(t, r, o, "B")
-	if _, err := r.Start(context.Background(), &fakeExecutor{result: ExecutionResult{Success: true}}); err != nil {
-		t.Fatal(err)
-	}
-	post := observation(t, "resource", "B", 2, now.Add(time.Second))
-	firstEntered := make(chan struct{})
-	releaseFirst := make(chan struct{})
-	first := blockingVerifier{entered: firstEntered, release: releaseFirst, observation: post}
-	firstDone := make(chan error, 1)
-	go func() { firstDone <- r.Verify(context.Background(), &first) }()
-	<-firstEntered
-
-	if err := r.Verify(context.Background(), fakeVerifier{observation: post}); !errors.Is(err, ErrInvalidLifecycle) {
-		t.Fatalf("expected second verifier to be rejected, got %v", err)
-	}
-	close(releaseFirst)
-	if err := <-firstDone; err != nil {
 		t.Fatal(err)
 	}
 	if r.Phase() != PhaseVerified {
@@ -282,6 +239,36 @@ func (v *blockingVerifier) Verify(context.Context, Transition, Authority) (Obser
 	close(v.entered)
 	<-v.release
 	return v.observation, nil
+}
+
+func TestConcurrentVerifyAllowsOnlyOneVerifier(t *testing.T) {
+	now := time.Unix(100, 0)
+	clockNow := now
+	r := NewRuntime("A", nil)
+	r.clock = func() time.Time { return clockNow }
+	o := observation(t, "resource", "A", 1, now)
+	authorize(t, r, o, "B")
+	if _, err := r.Start(context.Background(), &fakeExecutor{result: ExecutionResult{Success: true}}); err != nil {
+		t.Fatal(err)
+	}
+	clockNow = now.Add(2 * time.Second)
+	post := observation(t, "resource", "B", 2, now.Add(time.Second))
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	first := blockingVerifier{entered: firstEntered, release: releaseFirst, observation: post}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- r.Verify(context.Background(), &first) }()
+	<-firstEntered
+	if err := r.Verify(context.Background(), fakeVerifier{observation: post}); !errors.Is(err, ErrInvalidLifecycle) {
+		t.Fatalf("expected second verifier to be rejected, got %v", err)
+	}
+	close(releaseFirst)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
+	}
+	if r.Phase() != PhaseVerified {
+		t.Fatalf("expected verified phase, got %s", r.Phase())
+	}
 }
 
 func TestFailedExecutionCannotBeVerified(t *testing.T) {
@@ -338,8 +325,9 @@ func TestObservationTimestampIsBoundToFingerprint(t *testing.T) {
 
 func TestRecoverRequiresFreshEvidence(t *testing.T) {
 	now := time.Unix(100, 0)
+	clockNow := now
 	r := NewRuntime("A", nil)
-	r.clock = func() time.Time { return now }
+	r.clock = func() time.Time { return clockNow }
 	o := observation(t, "resource", "A", 1, now)
 	authorize(t, r, o, "B")
 	if _, err := r.Start(context.Background(), &fakeExecutor{result: ExecutionResult{Success: false}}); err != nil {
@@ -353,6 +341,7 @@ func TestRecoverRequiresFreshEvidence(t *testing.T) {
 		t.Fatalf("expected pre-attempt higher-version evidence to be rejected, got %v", err)
 	}
 	fresh := observation(t, "resource", "A", 2, now.Add(time.Second))
+	clockNow = now.Add(2 * time.Second)
 	if err := r.Recover(fresh); err != nil {
 		t.Fatalf("expected post-attempt recovery evidence to be accepted, got %v", err)
 	}
@@ -432,14 +421,16 @@ func TestDeterministicNormalizationAndReconciliation(t *testing.T) {
 
 func TestCASConflictPreventsCommit(t *testing.T) {
 	now := time.Unix(100, 0)
+	clockNow := now
 	r := NewRuntime("A", nil)
-	r.clock = func() time.Time { return now }
+	r.clock = func() time.Time { return clockNow }
 	o := observation(t, "resource", "A", 1, now)
 	authorize(t, r, o, "B")
 	if _, err := r.Start(context.Background(), &fakeExecutor{result: ExecutionResult{Success: true}}); err != nil {
 		t.Fatal(err)
 	}
 	post := observation(t, "resource", "B", 2, now.Add(time.Second))
+	clockNow = now.Add(2 * time.Second)
 	if err := r.Verify(context.Background(), fakeVerifier{observation: post}); err != nil {
 		t.Fatal(err)
 	}
