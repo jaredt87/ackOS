@@ -20,15 +20,15 @@ type ControlRequest struct {
 }
 
 type ControlResponse struct {
-	Phase      kernel.Phase              `json:"phase"`
-	Observation kernel.Observation       `json:"observation"`
-	Transition  kernel.Transition        `json:"transition"`
-	Governance  kernel.GovernanceDecision `json:"governance"`
-	Authority   kernel.Authority         `json:"authority"`
-	Execution   kernel.ExecutionResult   `json:"execution"`
-	Verified    bool                     `json:"verified"`
-	Committed   bool                     `json:"committed"`
-	Root        string                   `json:"root"`
+	Phase       kernel.Phase               `json:"phase"`
+	Observation kernel.Observation         `json:"observation"`
+	Transition  kernel.Transition          `json:"transition"`
+	Governance  kernel.GovernanceDecision  `json:"governance"`
+	Authority   kernel.Authority            `json:"authority"`
+	Execution   kernel.ExecutionResult      `json:"execution"`
+	Verified    bool                        `json:"verified"`
+	Committed   bool                        `json:"committed"`
+	Root        string                      `json:"root"`
 }
 
 type Server struct {
@@ -73,8 +73,7 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 		return nil, ControlResponse{}, err
 	}
 
-	proposal, err := s.runtime.Normalize(kernel.Proposal{Subject: in.Subject, TargetState: in.DesiredState})
-	if err != nil {
+	if _, err := s.runtime.Normalize(kernel.Proposal{Subject: in.Subject, TargetState: in.DesiredState}); err != nil {
 		return nil, ControlResponse{}, err
 	}
 	transition, err := s.runtime.Reconcile()
