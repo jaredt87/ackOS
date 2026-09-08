@@ -11,7 +11,10 @@ import (
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-const ToolControl = "ackos_control"
+const (
+	ToolControl       = "ackos_control"
+	maxAuthorityTTLMS = int64((1<<63 - 1) / int64(time.Millisecond))
+)
 
 type ControlRequest struct {
 	Subject        string `json:"subject" jsonschema:"the stable subject identity being controlled"`
@@ -72,11 +75,21 @@ func (s *Server) MCPServer() *mcpsdk.Server {
 }
 
 func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in ControlRequest) (*mcpsdk.CallToolResult, ControlResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, ControlResponse{}, err
+	}
+
 	s.controlMu.Lock()
 	defer s.controlMu.Unlock()
 
-	if in.AuthorityTTLMS < 0 {
-		return nil, ControlResponse{}, fmt.Errorf("authority_ttl_ms must not be negative")
+	// A caller may have canceled while waiting for the shared V0 runtime.
+	// Check admission again before creating observation/authority or executing.
+	if err := ctx.Err(); err != nil {
+		return nil, ControlResponse{}, err
+	}
+
+	if in.AuthorityTTLMS < 0 || in.AuthorityTTLMS > maxAuthorityTTLMS {
+		return nil, ControlResponse{}, fmt.Errorf("authority_ttl_ms must be between 0 and %d", maxAuthorityTTLMS)
 	}
 
 	var observation kernel.Observation
