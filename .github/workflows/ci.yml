@@ -30,7 +30,10 @@ jobs:
         with:
           go-version: '1.25'
       - name: Check formatting
-        run: test -z "$(gofmt -l .)"
+        run: |
+          files=$(gofmt -l .)
+          printf '%s\n' "$files"
+          test -z "$files"
       - name: Vet
         run: go vet ./...
       - name: Test
