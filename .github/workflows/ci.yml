@@ -13,6 +13,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Validate agent integrations
+        run: |
+          test -f .claude-plugin/plugin.json
+          test -f skills/control/SKILL.md
+          test -f skills/ackos-control/SKILL.md
+          test -f gemini-extension.json
+          test -f GEMINI.md
+          test -f integrations/chatgpt/SKILL.md
+          python -m json.tool .claude-plugin/plugin.json >/dev/null
+          python -m json.tool gemini-extension.json >/dev/null
+          grep -q '^description:' skills/control/SKILL.md
+          grep -q '^description:' skills/ackos-control/SKILL.md
+          grep -q '^description:' integrations/chatgpt/SKILL.md
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24'

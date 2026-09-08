@@ -32,6 +32,65 @@ Commit
 
 Execution itself remains outside the kernel. ackOS governs whether an execution may proceed and whether its resulting evidence is sufficient to commit a state transition.
 
+## The idea
+
+Use the AI agent you already have.
+
+```text
+LLM / AGENT
+    ↓ proposal
+ackOS CONTROL BOUNDARY
+    ↓ authorized transition
+EXECUTOR / API
+    ↓ real-world action
+INDEPENDENT VERIFIER
+    ↓ evidence
+ackOS
+    ↓
+COMMIT / REJECT
+```
+
+The agent provides intelligence. ackOS provides the control boundary. You can therefore put the same kernel underneath an AI coding agent, cloud automation, DevOps workflow, security system, business application, data system, robotics controller, or another tool that can produce and act on intent.
+
+## Agent integrations
+
+ackOS is designed to plug into the agent you already use rather than requiring you to replace it.
+
+### Claude Code
+
+The repository includes a Claude Code plugin and `/ackos:control` skill.
+
+```bash
+claude --plugin-dir .
+```
+
+See [`docs/CLAUDE_CODE_PLUGIN.md`](docs/CLAUDE_CODE_PLUGIN.md).
+
+### Gemini CLI
+
+The repository is also a Gemini CLI extension. Install it directly from GitHub:
+
+```bash
+gemini extensions install https://github.com/jaredt87/ackOS
+```
+
+Then restart Gemini CLI and inspect the installed extension/skills:
+
+```text
+/extensions list
+/skills list
+```
+
+See [`docs/GEMINI_EXTENSION.md`](docs/GEMINI_EXTENSION.md).
+
+### ChatGPT
+
+ChatGPT uses the current **Apps/MCP** integration model rather than the old ChatGPT plugin model. ackOS includes a ChatGPT-facing skill bundle at [`integrations/chatgpt/SKILL.md`](integrations/chatgpt/SKILL.md), and the intended executable integration is an MCP-backed ackOS app.
+
+A skill alone is model-facing guidance; it is **not** the security boundary. For actual side-effect protection, ChatGPT must be connected to an executable ackOS integration that owns authorization, execution authority, independent verification, and commitment.
+
+See [`docs/AGENT_INSTALL.md`](docs/AGENT_INSTALL.md) for the integration paths.
+
 ## Design principles
 
 - Deterministic reconciliation
@@ -44,6 +103,12 @@ Execution itself remains outside the kernel. ackOS governs whether an execution 
 - Provider-neutral kernel semantics
 
 The research program behind ackOS established an evidence-backed safety theory and documented the boundaries where stronger guarantees require additional mechanisms. It does **not** claim universal correctness or a mathematical proof of the entire implementation.
+
+## Important boundary
+
+Agent skills and plugins are **adapters, not the security boundary**. They teach an agent how to route side effects through ackOS, but model-facing instructions cannot by themselves prevent an agent from bypassing them.
+
+The executable ackOS kernel remains the authority for authorization, verification, recovery, and commitment semantics. An integration should never collapse those stages into one model action.
 
 ## Status
 

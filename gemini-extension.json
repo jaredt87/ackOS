@@ -1,0 +1,6 @@
+{
+  "name": "ackos",
+  "version": "0.1.0",
+  "description": "Use ackOS as the control boundary between agent decisions, real-world execution, independent verification, and committed state.",
+  "contextFileName": "GEMINI.md"
+}
