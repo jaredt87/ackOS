@@ -35,8 +35,8 @@ func (v *testVerifier) Verify(context.Context, kernel.Transition, kernel.Authori
 	return kernel.NewObservation("svc", "ready", 1, time.Now().UTC())
 }
 
-func (v *testVerifier) Observe(context.Context, string) (kernel.Observation, error) {
-	return kernel.NewObservation("svc", "initial", 1, time.Now().UTC())
+func (v *testVerifier) Observe(_ context.Context, subject string) (kernel.Observation, error) {
+	return kernel.NewObservation(subject, "initial", 1, time.Now().UTC())
 }
 
 func TestNewServerRequiresExecutorVerifierAndRecoveryObserver(t *testing.T) {
@@ -59,6 +59,74 @@ func newTestServer(t *testing.T, runtime *kernel.Runtime, executor *testExecutor
 		t.Fatal(err)
 	}
 	return server
+}
+
+func TestControlRejectsCanceledRequestBeforeLifecycleAdmission(t *testing.T) {
+	executor := &testExecutor{success: true}
+	verifier := &testVerifier{}
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	server := newTestServer(t, runtime, executor, verifier)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, _, err := server.control(ctx, nil, ControlRequest{Subject: "svc", ObservedState: "initial", DesiredState: "ready"})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if executor.calls != 0 || verifier.calls != 0 || runtime.Phase() != kernel.PhaseIdle {
+		t.Fatalf("canceled request entered lifecycle: executor=%d verifier=%d phase=%s", executor.calls, verifier.calls, runtime.Phase())
+	}
+}
+
+func TestControlRejectsCanceledRequestAfterSerializationWait(t *testing.T) {
+	executor := &testExecutor{success: true}
+	verifier := &testVerifier{}
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	server := newTestServer(t, runtime, executor, verifier)
+
+	server.controlMu.Lock()
+	defer server.controlMu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := server.control(ctx, nil, ControlRequest{Subject: "svc", ObservedState: "initial", DesiredState: "ready"})
+		done <- err
+	}()
+
+	// The call is blocked on the lifecycle mutex until this test releases it.
+	time.Sleep(10 * time.Millisecond)
+	server.controlMu.Unlock()
+	defer func() { server.controlMu.Lock() }()
+
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if executor.calls != 0 || verifier.calls != 0 || runtime.Phase() != kernel.PhaseIdle {
+		t.Fatalf("canceled request entered lifecycle: executor=%d verifier=%d phase=%s", executor.calls, verifier.calls, runtime.Phase())
+	}
+}
+
+func TestControlRejectsAuthorityTTLOverflow(t *testing.T) {
+	executor := &testExecutor{success: true}
+	verifier := &testVerifier{}
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	server := newTestServer(t, runtime, executor, verifier)
+
+	const maxInt64 = int64(^uint64(0) >> 1)
+	_, _, err := server.control(context.Background(), nil, ControlRequest{
+		Subject:       "svc",
+		ObservedState: "initial",
+		DesiredState:  "ready",
+		AuthorityTTLMS: maxInt64,
+	})
+	if err == nil {
+		t.Fatal("expected TTL overflow rejection")
+	}
+	if executor.calls != 0 || verifier.calls != 0 || runtime.Phase() != kernel.PhaseIdle {
+		t.Fatalf("overflowing TTL entered lifecycle: executor=%d verifier=%d phase=%s", executor.calls, verifier.calls, runtime.Phase())
+	}
 }
 
 func TestControlCommitsOnlyAfterIndependentVerification(t *testing.T) {
