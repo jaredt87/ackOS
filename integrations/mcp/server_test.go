@@ -13,10 +13,18 @@ import (
 type testExecutor struct {
 	calls   int
 	success bool
+	block   chan struct{}
 }
 
-func (e *testExecutor) Execute(context.Context, kernel.Transition, kernel.Authority) kernel.ExecutionResult {
+func (e *testExecutor) Execute(ctx context.Context, _ kernel.Transition, _ kernel.Authority) kernel.ExecutionResult {
 	e.calls++
+	if e.block != nil {
+		select {
+		case <-e.block:
+		case <-ctx.Done():
+			return kernel.ExecutionResult{Success: false, Message: ctx.Err().Error()}
+		}
+	}
 	if !e.success {
 		return kernel.ExecutionResult{Success: false, Message: "executor rejected transition"}
 	}
@@ -114,8 +122,9 @@ func TestControlRejectsCanceledRequestAfterSerializationWait(t *testing.T) {
 	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
 	server := newTestServer(t, runtime, executor, verifier)
 
-	server.controlMu.Lock()
-	defer server.controlMu.Unlock()
+	if err := runtime.AcquireLifecycle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -126,8 +135,7 @@ func TestControlRejectsCanceledRequestAfterSerializationWait(t *testing.T) {
 	}()
 
 	time.Sleep(10 * time.Millisecond)
-	server.controlMu.Unlock()
-	defer func() { server.controlMu.Lock() }()
+	runtime.ReleaseLifecycle()
 
 	if err := <-done; !errors.Is(err, context.Canceled) {
 		t.Fatalf("err = %v, want context.Canceled", err)
@@ -205,6 +213,26 @@ func TestControlBoundsIndependentVerification(t *testing.T) {
 	close(verifier.block)
 }
 
+func TestControlBoundsExecution(t *testing.T) {
+	executor := &testExecutor{success: true, block: make(chan struct{})}
+	verifier := &testVerifier{}
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	server := newTestServer(t, runtime, executor, verifier)
+	server.verifyTimeout = 10 * time.Millisecond
+
+	_, out, err := server.control(context.Background(), nil, ControlRequest{Subject: "svc", ObservedState: "initial", DesiredState: "ready"})
+	if err == nil {
+		t.Fatal("expected bounded execution failure")
+	}
+	if out.Execution.Success || out.Verified || out.Committed || out.Phase != kernel.PhaseRecovery {
+		t.Fatalf("unexpected execution timeout result: %+v", out)
+	}
+	if runtime.Root() != "initial" {
+		t.Fatalf("root changed after execution timeout: %q", runtime.Root())
+	}
+	close(executor.block)
+}
+
 func TestControlRejectsNoopBeforeExecution(t *testing.T) {
 	executor := &testExecutor{success: true}
 	verifier := &testVerifier{}
@@ -271,6 +299,23 @@ func TestControlRecoversUsingIndependentProviderEvidence(t *testing.T) {
 	}
 }
 
+func TestControlRejectsMismatchedRecoverySubject(t *testing.T) {
+	executor := &testExecutor{}
+	verifier := &testVerifier{}
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	server := newTestServer(t, runtime, executor, verifier)
+
+	_, _, err := server.control(context.Background(), nil, ControlRequest{Subject: "svc", ObservedState: "initial", DesiredState: "ready"})
+	if err == nil || runtime.Phase() != kernel.PhaseRecovery {
+		t.Fatalf("expected execution failure and recovery, err=%v phase=%s", err, runtime.Phase())
+	}
+
+	_, _, err = server.control(context.Background(), nil, ControlRequest{Subject: "other", ObservedState: "initial", DesiredState: "ready"})
+	if err == nil || runtime.Phase() != kernel.PhaseRecovery {
+		t.Fatalf("expected mismatched recovery subject rejection, err=%v phase=%s", err, runtime.Phase())
+	}
+}
+
 func TestControlRecoversAfterExecutionFailure(t *testing.T) {
 	executor := &testExecutor{}
 	verifier := &testVerifier{}
@@ -302,6 +347,10 @@ func TestControlBoundsRecoveryObservation(t *testing.T) {
 	_, _, err := server.control(context.Background(), nil, ControlRequest{Subject: "svc", ObservedState: "initial", DesiredState: "ready"})
 	if err == nil || runtime.Phase() != kernel.PhaseRecovery {
 		t.Fatalf("expected execution failure and recovery, err=%v phase=%s", err, runtime.Phase())
+	}
+	_, out, err := server.control(context.Background(), nil, ControlRequest{Subject: "svc", ObservedState: "initial", DesiredState: "ready"})
+	if err == nil || out.Phase != kernel.PhaseRecovery {
+		t.Fatalf("expected bounded recovery observation failure, out=%+v err=%v", out, err)
 	}
 	close(verifier.observeDone)
 }
