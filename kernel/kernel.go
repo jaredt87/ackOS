@@ -267,6 +267,7 @@ func (s *StateStore) CompareAndSwap(expected, next string) error {
 
 type Runtime struct {
 	mu                   sync.Mutex
+	lifecycleGate        chan struct{}
 	store                *StateStore
 	policy               Policy
 	clock                func() time.Time
@@ -285,7 +286,37 @@ func NewRuntime(initialRoot string, policy Policy) *Runtime {
 	if policy == nil {
 		policy = AllowPolicy{}
 	}
-	return &Runtime{store: NewStateStore(initialRoot), policy: policy, clock: time.Now, phase: PhaseIdle}
+	gate := make(chan struct{}, 1)
+	gate <- struct{}{}
+	return &Runtime{store: NewStateStore(initialRoot), policy: policy, clock: time.Now, phase: PhaseIdle, lifecycleGate: gate}
+}
+
+// AcquireLifecycle serializes a complete lifecycle for callers sharing this runtime.
+// The gate is owned by the runtime so separate adapters cannot interleave its mutable state.
+func (r *Runtime) AcquireLifecycle(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-r.lifecycleGate:
+		return nil
+	}
+}
+
+func (r *Runtime) ReleaseLifecycle() {
+	r.lifecycleGate <- struct{}{}
+}
+
+// RecoverySubject returns the subject bound to the currently recovering lifecycle.
+func (r *Runtime) RecoverySubject() (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.phase != PhaseRecovery || r.observation == nil {
+		return "", false
+	}
+	return r.observation.Subject, true
 }
 
 func (r *Runtime) Root() string { return r.store.Root() }
