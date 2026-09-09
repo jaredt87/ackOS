@@ -122,10 +122,48 @@ func TestVerifierRejectsPostExecutionMutation(t *testing.T) {
 	}
 }
 
+func TestVerifierRejectsCommitWithWrongTargetDiff(t *testing.T) {
+	target, observer, _, verifier, _ := newTestProvider(t, "initial")
+	observation, err := observer.Observe(context.Background(), target.Subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition := kernel.Transition{Subject: target.Subject, Before: observation.State, After: "updated"}
+	authority := kernel.Authority{ExecutionID: "attempt-5"}
+	if err := os.WriteFile(filepath.Join(target.Repository, target.Path), []byte(transition.After), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wrongPath := filepath.Join(target.Repository, "docs", "other.md")
+	if err := os.WriteFile(wrongPath, []byte("wrong-change"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, target.Repository, "add", "--", "docs/other.md")
+	gitTest(t, target.Repository, "commit", "--no-verify", "-m", "ackOS: execute "+authority.ExecutionID)
+	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil {
+		t.Fatal("verifier accepted commit with wrong target diff")
+	}
+}
+
 func TestNewTargetRejectsPathTraversal(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := NewTarget(dir, "../outside.txt", "repo:file"); err == nil {
 		t.Fatal("accepted path traversal")
+	}
+}
+
+func TestNewTargetRejectsSymlinkTarget(t *testing.T) {
+	dir := t.TempDir()
+	gitTest(t, dir, "init")
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "target.txt")
+	if err := os.Symlink(outside, path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewTarget(dir, "target.txt", "repo:target.txt"); err == nil {
+		t.Fatal("accepted symlink target")
 	}
 }
 
