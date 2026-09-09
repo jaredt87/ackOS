@@ -57,6 +57,26 @@ func TestProviderLifecycleCommitsExactTransition(t *testing.T) {
 	_ = recovery
 }
 
+func TestProviderLifecyclePreservesBlobWhitespace(t *testing.T) {
+	target, observer, executor, verifier, _ := newTestProvider(t, "initial\n")
+	observation, err := observer.Observe(context.Background(), target.Subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition := kernel.Transition{Subject: target.Subject, Before: observation.State, After: "updated\n"}
+	authority := kernel.Authority{ExecutionID: "attempt-whitespace"}
+	result := executor.Execute(context.Background(), transition, authority)
+	if !result.Success {
+		t.Fatal(result.Message)
+	}
+	if _, err := verifier.Verify(context.Background(), transition, authority); err != nil {
+		t.Fatal(err)
+	}
+	if got := readTestFile(t, target); got != "updated\n" {
+		t.Fatalf("file = %q, want trailing newline preserved", got)
+	}
+}
+
 func TestExecutorRejectsResourceSubstitution(t *testing.T) {
 	target, _, executor, _, _ := newTestProvider(t, "initial")
 	transition := kernel.Transition{Subject: "different-resource", Before: "initial", After: "updated"}
@@ -141,6 +161,31 @@ func TestVerifierRejectsCommitWithWrongTargetDiff(t *testing.T) {
 	gitTest(t, target.Repository, "commit", "--no-verify", "-m", "ackOS: execute "+authority.ExecutionID)
 	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil {
 		t.Fatal("verifier accepted commit with wrong target diff")
+	}
+}
+
+func TestExecutorRejectsUntrackedTarget(t *testing.T) {
+	dir := t.TempDir()
+	gitTest(t, dir, "init")
+	gitTest(t, dir, "config", "user.email", "ackos-test@example.invalid")
+	gitTest(t, dir, "config", "user.name", "ackOS test")
+	path := filepath.Join(dir, "docs", "ignored.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("initial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	target, err := NewTarget(dir, "docs/ignored.md", "test-repo:docs/ignored.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := (Executor{Target: target}).Execute(context.Background(), kernel.Transition{Subject: target.Subject, Before: "initial", After: "updated"}, kernel.Authority{ExecutionID: "attempt-untracked"})
+	if result.Success || !strings.Contains(result.Message, "not tracked") {
+		t.Fatalf("result = %+v, want untracked rejection", result)
+	}
+	if got := readTestFile(t, target); got != "initial" {
+		t.Fatalf("untracked target changed during rejection: %q", got)
 	}
 }
 
