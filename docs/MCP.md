@@ -36,6 +36,10 @@ Recovery is deliberately fail-closed when provider evidence disagrees with the k
 
 The adapter serializes complete control lifecycles because the V0 runtime is a single mutable state machine. This prevents concurrent MCP calls from invalidating each other's reserved authority.
 
+### Standalone synthetic demo identity
+
+The standalone `cmd/ackos-mcp` binary uses one synthetic resource whose stable subject identity is `demo-resource`. Calls to the standalone demo must use `subject: "demo-resource"`; this identity is intentionally fixed so the provider can exercise resource-substitution and identity enforcement. Real deployments must configure the MCP adapter with the subject identities accepted by their resource provider rather than relying on the synthetic demo identity.
+
 ## Transports
 
 `integrations/mcp.Server` supports:
