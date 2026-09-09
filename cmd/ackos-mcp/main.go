@@ -52,7 +52,7 @@ func main() {
 		httpHandler := mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server {
 			return server.MCPServer()
 		}, &mcpsdk.StreamableHTTPOptions{
-			JSONResponse:                true,
+			JSONResponse:               true,
 			DisableLocalhostProtection: true,
 		})
 		log.Fatal(http.ListenAndServe(*httpAddr, httpHandler))
