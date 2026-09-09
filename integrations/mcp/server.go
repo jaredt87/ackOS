@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/jaredt87/ackOS/kernel"
@@ -47,12 +46,15 @@ type Server struct {
 	executor         kernel.Executor
 	verifier         kernel.Verifier
 	recoveryObserver RecoveryObserver
-	controlMu        sync.Mutex
 	providerGate     chan struct{}
 	verifyTimeout    time.Duration
 }
 
 type boundedVerifier struct {
+	server *Server
+}
+
+type boundedExecutor struct {
 	server *Server
 }
 
@@ -95,8 +97,11 @@ func (s *Server) releaseProvider() {
 }
 
 func (s *Server) observeRecovery(ctx context.Context, subject string) (kernel.Observation, error) {
-	observeCtx, cancel := context.WithTimeout(ctx, s.verifyTimeout)
+	observeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.verifyTimeout)
 	defer cancel()
+	if err := s.acquireProvider(observeCtx); err != nil {
+		return kernel.Observation{}, err
+	}
 
 	type result struct {
 		observation kernel.Observation
@@ -143,6 +148,27 @@ func (v boundedVerifier) Verify(ctx context.Context, transition kernel.Transitio
 	}
 }
 
+func (e boundedExecutor) Execute(ctx context.Context, transition kernel.Transition, authority kernel.Authority) kernel.ExecutionResult {
+	executionCtx, cancel := context.WithTimeout(ctx, e.server.verifyTimeout)
+	defer cancel()
+	if err := e.server.acquireProvider(executionCtx); err != nil {
+		return kernel.ExecutionResult{Success: false, Message: fmt.Sprintf("executor admission failed: %v", err)}
+	}
+
+	results := make(chan kernel.ExecutionResult, 1)
+	go func() {
+		defer e.server.releaseProvider()
+		results <- e.server.executor.Execute(executionCtx, transition, authority)
+	}()
+
+	select {
+	case result := <-results:
+		return result
+	case <-executionCtx.Done():
+		return kernel.ExecutionResult{Success: false, Message: fmt.Sprintf("executor timed out after %s: %v", e.server.verifyTimeout, executionCtx.Err())}
+	}
+}
+
 func (s *Server) MCPServer() *mcpsdk.Server {
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "ackOS", Version: "0.2.0"}, nil)
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
@@ -156,12 +182,11 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 	if err := ctx.Err(); err != nil {
 		return nil, ControlResponse{}, err
 	}
+	if err := s.runtime.AcquireLifecycle(ctx); err != nil {
+		return nil, ControlResponse{}, err
+	}
+	defer s.runtime.ReleaseLifecycle()
 
-	s.controlMu.Lock()
-	defer s.controlMu.Unlock()
-
-	// A caller may have canceled while waiting for the shared V0 runtime.
-	// Check admission again before creating observation/authority or executing.
 	if err := ctx.Err(); err != nil {
 		return nil, ControlResponse{}, err
 	}
@@ -173,12 +198,11 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 	var observation kernel.Observation
 	var err error
 	if s.runtime.Phase() == kernel.PhaseRecovery {
-		// Recovery evidence must come from the provider with its actual capture
-		// time. Caller-supplied observed_state is never promoted to fresh evidence.
-		if err := s.acquireProvider(ctx); err != nil {
-			return nil, ControlResponse{Phase: s.runtime.Phase(), Root: s.runtime.Root()}, err
+		recoverySubject, ok := s.runtime.RecoverySubject()
+		if !ok || in.Subject != recoverySubject {
+			return nil, ControlResponse{Phase: s.runtime.Phase(), Root: s.runtime.Root()}, fmt.Errorf("recovery subject must match the failed lifecycle")
 		}
-		observation, err = s.observeRecovery(ctx, in.Subject)
+		observation, err = s.observeRecovery(ctx, recoverySubject)
 		if err != nil {
 			return nil, ControlResponse{Phase: s.runtime.Phase(), Root: s.runtime.Root()}, err
 		}
@@ -211,12 +235,15 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 	if err != nil {
 		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition}, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance}, err
+	}
 
 	authority, err := s.runtime.Reserve(time.Duration(in.AuthorityTTLMS) * time.Millisecond)
 	if err != nil {
 		return nil, ControlResponse{}, err
 	}
-	execution, err := s.runtime.Start(ctx, s.executor)
+	execution, err := s.runtime.Start(ctx, boundedExecutor{server: s})
 	if err != nil {
 		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority}, err
 	}
@@ -228,7 +255,7 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 	// Verification survives MCP transport cancellation, but remains bounded by
 	// an adapter-owned timeout. If it times out, Runtime.Verify receives an
 	// ordinary verifier error and transitions the attempt into RECOVERY.
-	if err := s.runtime.Verify(context.Background(), boundedVerifier{server: s}); err != nil {
+	if err := s.runtime.Verify(context.WithoutCancel(ctx), boundedVerifier{server: s}); err != nil {
 		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority, Execution: execution}, err
 	}
 	if err := s.runtime.Commit(); err != nil {
