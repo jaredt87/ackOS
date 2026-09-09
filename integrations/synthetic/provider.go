@@ -15,10 +15,11 @@ import (
 // It is deliberately separate from kernel.StateStore so provider tests exercise
 // an actual external-resource observation and execution boundary.
 type Resource struct {
-	mu      sync.Mutex
-	subject string
-	state   string
-	version uint64
+	mu          sync.Mutex
+	subject     string
+	state       string
+	version     uint64
+	executionID string
 }
 
 func NewResource(subject, state string) *Resource {
@@ -33,22 +34,27 @@ func (r *Resource) Observe() (string, string, uint64) {
 
 // Set mutates the external resource directly. Tests use this to model changes
 // that occur outside ackOS between authorization and execution or verification.
+// An out-of-band mutation clears the execution marker so it cannot be mistaken
+// for the result of the authorized execution attempt.
 func (r *Resource) Set(subject, state string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.subject = subject
 	r.state = state
 	r.version++
+	r.executionID = ""
 }
 
 // Executor performs an exact transition against the external resource. It
 // re-reads the resource immediately before mutation, providing the provider's
-// domain-specific TOCTOU and identity guard.
+// domain-specific TOCTOU and identity guard. A successful mutation records the
+// authority execution ID so independent verification can bind its evidence to
+// this specific execution attempt.
 type Executor struct {
 	Resource *Resource
 }
 
-func (e Executor) Execute(ctx context.Context, t kernel.Transition, _ kernel.Authority) kernel.ExecutionResult {
+func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority kernel.Authority) kernel.ExecutionResult {
 	if e.Resource == nil {
 		return kernel.ExecutionResult{Message: "synthetic resource is required"}
 	}
@@ -63,6 +69,9 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, _ kernel.Aut
 	if state != t.Before {
 		return kernel.ExecutionResult{Message: fmt.Sprintf("resource state changed before execution: got %q, want %q", state, t.Before)}
 	}
+	if authority.ExecutionID == "" {
+		return kernel.ExecutionResult{Message: "execution authority ID is required"}
+	}
 
 	e.Resource.mu.Lock()
 	defer e.Resource.mu.Unlock()
@@ -74,23 +83,36 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, _ kernel.Aut
 	}
 	e.Resource.state = t.After
 	e.Resource.version++
+	e.Resource.executionID = authority.ExecutionID
 	return kernel.ExecutionResult{Success: true, Message: "synthetic resource transitioned"}
 }
 
 // Verifier independently reads the external resource. It contains no executor
-// state and derives its observation only from the resource at verification time.
+// state and requires the resource's execution marker to match the authority
+// used for this specific execution attempt.
 type Verifier struct {
 	Resource *Resource
 }
 
-func (v Verifier) Verify(ctx context.Context, t kernel.Transition, _ kernel.Authority) (kernel.Observation, error) {
+func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority kernel.Authority) (kernel.Observation, error) {
 	if v.Resource == nil {
 		return kernel.Observation{}, fmt.Errorf("synthetic resource is required")
 	}
 	if err := ctx.Err(); err != nil {
 		return kernel.Observation{}, err
 	}
-	subject, state, version := v.Resource.Observe()
+	v.Resource.mu.Lock()
+	subject, state, version, executionID := v.Resource.subject, v.Resource.state, v.Resource.version, v.Resource.executionID
+	v.Resource.mu.Unlock()
+	if subject != t.Subject {
+		return kernel.Observation{}, fmt.Errorf("verification subject mismatch: got %q, want %q", subject, t.Subject)
+	}
+	if state != t.After {
+		return kernel.Observation{}, fmt.Errorf("verification state mismatch: got %q, want %q", state, t.After)
+	}
+	if executionID != authority.ExecutionID {
+		return kernel.Observation{}, fmt.Errorf("verification execution mismatch: got %q, want %q", executionID, authority.ExecutionID)
+	}
 	return kernel.NewObservation(subject, state, version, time.Now().UTC())
 }
 
