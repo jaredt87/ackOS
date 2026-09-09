@@ -136,6 +136,34 @@ func TestIndependentVerifierRejectsFalseExecutionSuccess(t *testing.T) {
 	}
 }
 
+func TestVerifierRejectsOutOfBandMatchingState(t *testing.T) {
+	resource := NewResource("resource-a", "initial")
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	verifier := Verifier{Resource: resource}
+
+	authorize(t, runtime, "resource-a", "initial", "running")
+	result, err := runtime.Start(context.Background(), noOpExecutor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Success {
+		t.Fatalf("unexpected executor failure: %s", result.Message)
+	}
+
+	// An out-of-band actor reaches the desired state without performing the
+	// authorized execution. Matching state alone must not be enough to commit.
+	resource.Set("resource-a", "running")
+	if err := runtime.Verify(context.Background(), verifier); err == nil {
+		t.Fatal("verification unexpectedly accepted matching state without execution binding")
+	}
+	if runtime.Phase() != kernel.PhaseRecovery {
+		t.Fatalf("phase = %s, want RECOVERY", runtime.Phase())
+	}
+	if got := runtime.Root(); got != "initial" {
+		t.Fatalf("root = %q, want initial", got)
+	}
+}
+
 func TestVerifierUsesFreshExternalObservation(t *testing.T) {
 	resource := NewResource("resource-a", "initial")
 	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
