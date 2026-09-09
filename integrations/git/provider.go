@@ -138,7 +138,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if strings.TrimSpace(cachedPaths) != e.Target.Path {
 		return kernel.ExecutionResult{Message: "staged Git diff contains an unauthorized path"}
 	}
-	cachedBefore, err := e.git(ctx, "show", ":HEAD:"+e.Target.Path)
+	cachedBefore, err := e.git(ctx, "show", "HEAD:"+e.Target.Path)
 	if err != nil {
 		return kernel.ExecutionResult{Message: fmt.Sprintf("read staged Git parent: %v", err)}
 	}
