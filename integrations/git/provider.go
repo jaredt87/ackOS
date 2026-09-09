@@ -72,8 +72,8 @@ func (o Observer) Observe(ctx context.Context, _ string) (kernel.Observation, er
 // Executor performs one exact file-content transition and records the
 // execution attempt in the resulting Git commit. It re-reads the target at
 // the mutation boundary, rejects symlinked targets, requires a clean
-// worktree, and verifies that the resulting commit contains exactly the
-// authorized target diff.
+// worktree, verifies the target is tracked, and verifies that the resulting
+// commit contains exactly the authorized target diff.
 type Executor struct {
 	Target Target
 }
@@ -89,6 +89,9 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return kernel.ExecutionResult{Message: err.Error()}
 	}
 	if err := validateNoSymlinks(e.Target); err != nil {
+		return kernel.ExecutionResult{Message: err.Error()}
+	}
+	if err := e.requireTracked(ctx); err != nil {
 		return kernel.ExecutionResult{Message: err.Error()}
 	}
 
@@ -116,6 +119,9 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	// ordinary out-of-band mutations; filesystem-level concurrency is still a
 	// provider-specific concern and is intentionally not hidden by the kernel.
 	if err := validateNoSymlinks(e.Target); err != nil {
+		return kernel.ExecutionResult{Message: err.Error()}
+	}
+	if err := e.requireTracked(ctx); err != nil {
 		return kernel.ExecutionResult{Message: err.Error()}
 	}
 	current, err := e.read(ctx)
@@ -180,6 +186,9 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, err
 	}
 	if err := validateNoSymlinks(v.Target); err != nil {
+		return kernel.Observation{}, err
+	}
+	if err := v.requireTracked(ctx); err != nil {
 		return kernel.Observation{}, err
 	}
 	content, err := v.read(ctx)
@@ -329,6 +338,28 @@ func verifyCommitAt(target Target, git func(...string) (string, error), expected
 	return nil
 }
 
+func (e Executor) requireTracked(ctx context.Context) error {
+	tracked, err := e.git(ctx, "ls-files", "--error-unmatch", "--", e.Target.Path)
+	if err != nil {
+		return fmt.Errorf("git target is not tracked: %v", err)
+	}
+	if strings.TrimSpace(tracked) != e.Target.Path {
+		return fmt.Errorf("git target is not tracked")
+	}
+	return nil
+}
+
+func (v Verifier) requireTracked(ctx context.Context) error {
+	tracked, err := v.git(ctx, "ls-files", "--error-unmatch", "--", v.Target.Path)
+	if err != nil {
+		return fmt.Errorf("git target is not tracked: %v", err)
+	}
+	if strings.TrimSpace(tracked) != v.Target.Path {
+		return fmt.Errorf("git target is not tracked")
+	}
+	return nil
+}
+
 func (e Executor) git(ctx context.Context, args ...string) (string, error) {
 	return runGit(ctx, e.Target.Repository, args...)
 }
@@ -343,6 +374,13 @@ func runGit(ctx context.Context, repository string, args ...string) (string, err
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	}
+	// `git show <rev>:<path>` returns blob bytes. Preserve them exactly so
+	// authorized states such as "updated\n" remain distinguishable from
+	// "updated". Other commands in this provider consume metadata, where
+	// trimming command framing whitespace is appropriate.
+	if len(args) > 0 && args[0] == "show" {
+		return string(output), nil
 	}
 	return strings.TrimSpace(string(output)), nil
 }
