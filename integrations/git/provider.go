@@ -44,6 +44,9 @@ func NewTarget(repository, path, subject string) (Target, error) {
 		return Target{}, fmt.Errorf("path must be repository-relative")
 	}
 	target := Target{Repository: absRepo, Path: cleanPath, Subject: subject}
+	if err := requireWorktreeRoot(target); err != nil {
+		return Target{}, err
+	}
 	if err := validateNoSymlinks(target); err != nil {
 		return Target{}, err
 	}
@@ -72,8 +75,8 @@ func (o Observer) Observe(ctx context.Context, _ string) (kernel.Observation, er
 // Executor performs one exact file-content transition and records the
 // execution attempt in the resulting Git commit. It re-reads the target at
 // the mutation boundary, rejects symlinked targets, requires a clean
-// worktree, verifies the target is tracked, and verifies that the resulting
-// commit contains exactly the authorized target diff.
+// worktree, verifies the target is tracked and stageable, and verifies that
+// the resulting commit contains exactly the authorized target diff.
 type Executor struct {
 	Target Target
 }
@@ -86,6 +89,9 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return kernel.ExecutionResult{Message: fmt.Sprintf("git subject mismatch: got %q, want %q", t.Subject, e.Target.Subject)}
 	}
 	if err := ctx.Err(); err != nil {
+		return kernel.ExecutionResult{Message: err.Error()}
+	}
+	if err := requireWorktreeRoot(e.Target); err != nil {
 		return kernel.ExecutionResult{Message: err.Error()}
 	}
 	if err := validateNoSymlinks(e.Target); err != nil {
@@ -118,6 +124,9 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	// between the initial observation/status checks and the actual write for
 	// ordinary out-of-band mutations; filesystem-level concurrency is still a
 	// provider-specific concern and is intentionally not hidden by the kernel.
+	if err := requireWorktreeRoot(e.Target); err != nil {
+		return kernel.ExecutionResult{Message: err.Error()}
+	}
 	if err := validateNoSymlinks(e.Target); err != nil {
 		return kernel.ExecutionResult{Message: err.Error()}
 	}
@@ -137,11 +146,11 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if _, err := e.git(ctx, "add", "--", e.Target.Path); err != nil {
 		return kernel.ExecutionResult{Message: fmt.Sprintf("git add: %v", err)}
 	}
-	cachedPaths, err := e.git(ctx, "diff", "--cached", "--name-only")
+	cachedPaths, err := e.git(ctx, "diff", "--cached", "--name-only", "-z")
 	if err != nil {
 		return kernel.ExecutionResult{Message: fmt.Sprintf("inspect staged Git diff: %v", err)}
 	}
-	if strings.TrimSpace(cachedPaths) != e.Target.Path {
+	if !exactNULPathList(cachedPaths, e.Target.Path) {
 		return kernel.ExecutionResult{Message: "staged Git diff contains an unauthorized path"}
 	}
 	cachedBefore, err := e.git(ctx, "show", "HEAD:"+e.Target.Path)
@@ -183,6 +192,9 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, fmt.Errorf("git subject mismatch: got %q, want %q", t.Subject, v.Target.Subject)
 	}
 	if err := ctx.Err(); err != nil {
+		return kernel.Observation{}, err
+	}
+	if err := requireWorktreeRoot(v.Target); err != nil {
 		return kernel.Observation{}, err
 	}
 	if err := validateNoSymlinks(v.Target); err != nil {
@@ -234,6 +246,18 @@ func readFile(ctx context.Context, target Target) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(target.Repository, target.Path)
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", fmt.Errorf("inspect git file: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("git target is not a regular file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("open git file: %w", err)
+	}
+	defer file.Close()
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return "", fmt.Errorf("read git file: %w", err)
@@ -280,6 +304,32 @@ func validateNoSymlinks(target Target) error {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("git target path escapes repository")
 	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return fmt.Errorf("stat git target: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("git target is not a regular file")
+	}
+	return nil
+}
+
+func requireWorktreeRoot(target Target) error {
+	root, err := runGit(context.Background(), target.Repository, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return fmt.Errorf("resolve Git worktree root: %w", err)
+	}
+	configured, err := filepath.Abs(target.Repository)
+	if err != nil {
+		return fmt.Errorf("resolve configured repository: %w", err)
+	}
+	gitRoot, err := filepath.Abs(strings.TrimSpace(root))
+	if err != nil {
+		return fmt.Errorf("resolve Git worktree root path: %w", err)
+	}
+	if configured != gitRoot {
+		return fmt.Errorf("repository must be the Git worktree root")
+	}
 	return nil
 }
 
@@ -314,11 +364,11 @@ func verifyCommitAt(target Target, git func(...string) (string, error), expected
 	if strings.TrimSpace(message) != "ackOS: execute "+executionID {
 		return fmt.Errorf("git execution marker mismatch")
 	}
-	paths, err := git("diff-tree", "--no-commit-id", "--name-only", "-r", head)
+	paths, err := git("diff-tree", "--no-commit-id", "--name-only", "-r", "-z", head)
 	if err != nil {
 		return fmt.Errorf("inspect committed Git diff: %w", err)
 	}
-	if strings.TrimSpace(paths) != target.Path {
+	if !exactNULPathList(paths, target.Path) {
 		return fmt.Errorf("committed Git diff contains an unauthorized path")
 	}
 	before, err := git("show", head+"^:"+target.Path)
@@ -339,25 +389,58 @@ func verifyCommitAt(target Target, git func(...string) (string, error), expected
 }
 
 func (e Executor) requireTracked(ctx context.Context) error {
-	tracked, err := e.git(ctx, "ls-files", "--error-unmatch", "--", e.Target.Path)
+	tracked, err := e.git(ctx, "ls-files", "-z", "--error-unmatch", "--", e.Target.Path)
 	if err != nil {
 		return fmt.Errorf("git target is not tracked: %v", err)
 	}
-	if strings.TrimSpace(tracked) != e.Target.Path {
+	paths := strings.Split(strings.TrimSuffix(tracked, "\x00"), "\x00")
+	if len(paths) != 1 || paths[0] != e.Target.Path {
 		return fmt.Errorf("git target is not tracked")
+	}
+	stageable, err := e.git(ctx, "ls-files", "-v", "-z", "--error-unmatch", "--", e.Target.Path)
+	if err != nil {
+		return fmt.Errorf("inspect Git target index state: %v", err)
+	}
+	if len(stageable) < 2 || (stageable[0] >= 'a' && stageable[0] <= 'z') {
+		return fmt.Errorf("git target is assume-unchanged and cannot be staged")
+	}
+	stagePath := strings.TrimSuffix(stageable[1:], "\x00")
+	if stagePath != e.Target.Path {
+		return fmt.Errorf("git target index path mismatch")
 	}
 	return nil
 }
 
 func (v Verifier) requireTracked(ctx context.Context) error {
-	tracked, err := v.git(ctx, "ls-files", "--error-unmatch", "--", v.Target.Path)
+	tracked, err := v.git(ctx, "ls-files", "-z", "--error-unmatch", "--", v.Target.Path)
 	if err != nil {
 		return fmt.Errorf("git target is not tracked: %v", err)
 	}
-	if strings.TrimSpace(tracked) != v.Target.Path {
+	paths := strings.Split(strings.TrimSuffix(tracked, "\x00"), "\x00")
+	if len(paths) != 1 || paths[0] != v.Target.Path {
 		return fmt.Errorf("git target is not tracked")
 	}
+	stageable, err := v.git(ctx, "ls-files", "-v", "-z", "--error-unmatch", "--", v.Target.Path)
+	if err != nil {
+		return fmt.Errorf("inspect Git target index state: %v", err)
+	}
+	if len(stageable) < 2 || (stageable[0] >= 'a' && stageable[0] <= 'z') {
+		return fmt.Errorf("git target is assume-unchanged and cannot be staged")
+	}
+	stagePath := strings.TrimSuffix(stageable[1:], "\x00")
+	if stagePath != v.Target.Path {
+		return fmt.Errorf("git target index path mismatch")
+	}
 	return nil
+}
+
+func exactNULPathList(output, expected string) bool {
+	output = strings.TrimSuffix(output, "\x00")
+	if output == "" {
+		return false
+	}
+	paths := strings.Split(output, "\x00")
+	return len(paths) == 1 && paths[0] == expected
 }
 
 func (e Executor) git(ctx context.Context, args ...string) (string, error) {
