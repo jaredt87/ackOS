@@ -5,8 +5,6 @@ package git
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -89,6 +87,13 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	}
 	if before != t.Before {
 		return kernel.ExecutionResult{Message: "git file changed before execution"}
+	}
+	status, err := e.git(ctx, "status", "--porcelain")
+	if err != nil {
+		return kernel.ExecutionResult{Message: fmt.Sprintf("read git status: %v", err)}
+	}
+	if status != "" {
+		return kernel.ExecutionResult{Message: "git worktree is not clean"}
 	}
 	head, err := e.git(ctx, "rev-parse", "HEAD")
 	if err != nil {
@@ -186,10 +191,6 @@ func readFile(ctx context.Context, target Target) (string, error) {
 	return string(content), nil
 }
 
-func (o Observer) git(ctx context.Context, args ...string) (string, error) {
-	return runGit(ctx, o.Target.Repository, args...)
-}
-
 func (e Executor) git(ctx context.Context, args ...string) (string, error) {
 	return runGit(ctx, e.Target.Repository, args...)
 }
@@ -206,9 +207,4 @@ func runGit(ctx context.Context, repository string, args ...string) (string, err
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return strings.TrimSpace(string(output)), nil
-}
-
-func ContentFingerprint(content string) string {
-	sum := sha256.Sum256([]byte(content))
-	return hex.EncodeToString(sum[:])
 }
