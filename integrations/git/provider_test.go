@@ -94,7 +94,7 @@ func TestVerifierRejectsFalseExecutorSuccess(t *testing.T) {
 	}
 	transition := kernel.Transition{Subject: target.Subject, Before: observation.State, After: "updated"}
 	authority := kernel.Authority{ExecutionID: "attempt-3"}
-	if result := falseExecutor{}.Execute(context.Background(), transition, authority); !result.Success {
+	if result := (falseExecutor{}).Execute(context.Background(), transition, authority); !result.Success {
 		t.Fatal("false executor test setup did not report success")
 	}
 	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil {
