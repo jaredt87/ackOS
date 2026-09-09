@@ -1,5 +1,4 @@
 // Package kernel implements the minimal ackOS autonomous-control boundary.
-
 package kernel
 
 import (
@@ -55,7 +54,7 @@ const (
 type Observation struct {
 	Subject     string
 	State       string
-	Version    uint64
+	Version     uint64
 	ObservedAt  time.Time
 	Fingerprint string
 }
