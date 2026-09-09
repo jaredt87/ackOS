@@ -6,43 +6,27 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"time"
 
 	"github.com/jaredt87/ackOS/integrations/mcp"
+	"github.com/jaredt87/ackOS/integrations/synthetic"
 	"github.com/jaredt87/ackOS/kernel"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
-
-type demoExecutor struct{}
-
-func (demoExecutor) Execute(context.Context, kernel.Transition, kernel.Authority) kernel.ExecutionResult {
-	return kernel.ExecutionResult{Success: true, Message: "demo executor completed the authorized transition"}
-}
-
-type demoVerifier struct{}
-
-func (demoVerifier) Verify(context.Context, kernel.Transition, kernel.Authority) (kernel.Observation, error) {
-	return kernel.NewObservation("demo", "unused", 0, time.Now().UTC())
-}
-
-type verifier struct {
-	executor demoExecutor
-}
-
-func (verifier) Verify(ctx context.Context, t kernel.Transition, a kernel.Authority) (kernel.Observation, error) {
-	return kernel.NewObservation(t.Subject, t.After, 1, time.Now().UTC())
-}
-
-func (verifier) Observe(_ context.Context, subject string) (kernel.Observation, error) {
-	return kernel.NewObservation(subject, "initial", 1, time.Now().UTC())
-}
 
 func main() {
 	httpAddr := flag.String("http", "", "serve Streamable HTTP at this address instead of stdio")
 	flag.Parse()
 
+	// The standalone binary uses a synthetic external resource so the demo
+	// exercises the real provider boundary without pretending to control Git,
+	// AWS, Kubernetes, or another domain-specific system.
+	resource := synthetic.NewResource("demo-resource", "initial")
+	executor := synthetic.Executor{Resource: resource}
+	verifier := synthetic.Verifier{Resource: resource}
+	recoveryObserver := synthetic.RecoveryObserver{Resource: resource}
+
 	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
-	server, err := mcp.NewServer(runtime, demoExecutor{}, verifier{}, verifier{})
+	server, err := mcp.NewServer(runtime, executor, verifier, recoveryObserver)
 	if err != nil {
 		log.Fatal(err)
 	}
