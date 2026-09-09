@@ -40,7 +40,7 @@ func TestProviderHappyPath(t *testing.T) {
 	executor := Executor{Resource: resource}
 	verifier := Verifier{Resource: resource}
 
-	transition, authority := authorize(t, runtime, "resource-a", "initial", "running")
+	transition, _ := authorize(t, runtime, "resource-a", "initial", "running")
 	result, err := runtime.Start(context.Background(), executor)
 	if err != nil {
 		t.Fatal(err)
