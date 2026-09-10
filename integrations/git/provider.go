@@ -356,53 +356,34 @@ func (e Executor) requireTracked(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("git target is not tracked: %v", err)
 	}
-	paths := strings.Split(strings.TrimSuffix(tracked, "\x00"), "\x00")
-	if len(paths) != 1 || paths[0] != e.Target.Path {
+	if !exactNULPathList(tracked, e.Target.Path) {
 		return fmt.Errorf("git target is not tracked")
 	}
-	stageable, err := e.git(ctx, "ls-files", "-v", "-z", "--error-unmatch", "--", e.Target.Path)
+	status, err := e.git(ctx, "ls-files", "-v", "--error-unmatch", "--", e.Target.Path)
 	if err != nil {
 		return fmt.Errorf("inspect Git target index state: %v", err)
 	}
-	if len(stageable) < 2 || (stageable[0] >= 'a' && stageable[0] <= 'z') {
+	if len(status) == 0 || (status[0] >= 'a' && status[0] <= 'z') {
 		return fmt.Errorf("git target is assume-unchanged and cannot be staged")
-	}
-	stagePath := parseIndexPath(stageable)
-	if stagePath != e.Target.Path {
-		return fmt.Errorf("git target index path mismatch")
 	}
 	return nil
 }
-
 func (v Verifier) requireTracked(ctx context.Context) error {
 	tracked, err := v.git(ctx, "ls-files", "-z", "--error-unmatch", "--", v.Target.Path)
 	if err != nil {
 		return fmt.Errorf("git target is not tracked: %v", err)
 	}
-	paths := strings.Split(strings.TrimSuffix(tracked, "\x00"), "\x00")
-	if len(paths) != 1 || paths[0] != v.Target.Path {
+	if !exactNULPathList(tracked, v.Target.Path) {
 		return fmt.Errorf("git target is not tracked")
 	}
-	stageable, err := v.git(ctx, "ls-files", "-v", "-z", "--error-unmatch", "--", v.Target.Path)
+	status, err := v.git(ctx, "ls-files", "-v", "--error-unmatch", "--", v.Target.Path)
 	if err != nil {
 		return fmt.Errorf("inspect Git target index state: %v", err)
 	}
-	if len(stageable) < 2 || (stageable[0] >= 'a' && stageable[0] <= 'z') {
+	if len(status) == 0 || (status[0] >= 'a' && status[0] <= 'z') {
 		return fmt.Errorf("git target is assume-unchanged and cannot be staged")
 	}
-	stagePath := parseIndexPath(stageable)
-	if stagePath != v.Target.Path {
-		return fmt.Errorf("git target index path mismatch")
-	}
 	return nil
-}
-
-func parseIndexPath(output string) string {
-	entry := strings.TrimSuffix(output, "\x00")
-	if len(entry) < 2 || entry[1] != ' ' {
-		return ""
-	}
-	return entry[2:]
 }
 
 func exactNULPathList(output, expected string) bool {
