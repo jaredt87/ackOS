@@ -1,0 +1,55 @@
+name: PR10 Fix
+
+on:
+  push:
+    branches: [feat/phase2-git-provider]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: Patch provider
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('integrations/git/provider.go')
+          s = p.read_text()
+          s = s.replace('"fmt"\n\t"os"', '"fmt"\n\t"io"\n\t"os"')
+          s = s.replace('"strings"\n\t"time"', '"strings"\n\t"syscall"\n\t"time"')
+          old = '''\tcachedBefore, err := e.git(ctx, "show", "HEAD:"+e.Target.Path)\n\tif err != nil {\n\t\treturn kernel.ExecutionResult{Message: fmt.Sprintf("read staged Git parent: %v", err)}\n\t}\n\tif cachedBefore != t.Before {\n\t\treturn kernel.ExecutionResult{Message: "staged Git parent does not match authorized state"}\n\t}\n\tcachedAfter, err := e.git(ctx, "show", ":"+e.Target.Path)\n\tif err != nil {\n\t\treturn kernel.ExecutionResult{Message: fmt.Sprintf("read staged Git target: %v", err)}\n\t}\n\tif cachedAfter != t.After {\n\t\treturn kernel.ExecutionResult{Message: "staged Git target does not match authorized state"}\n\t}\n'''
+          new = '''\tcachedBeforeHash, err := e.git(ctx, "rev-parse", "HEAD:"+e.Target.Path)\n\tif err != nil {\n\t\treturn kernel.ExecutionResult{Message: fmt.Sprintf("read staged Git parent: %v", err)}\n\t}\n\texpectedBeforeHash, err := gitFilteredBlobHash(ctx, e.Target, t.Before)\n\tif err != nil {\n\t\treturn kernel.ExecutionResult{Message: fmt.Sprintf("normalize authorized Git parent state: %v", err)}\n\t}\n\tif cachedBeforeHash != expectedBeforeHash {\n\t\treturn kernel.ExecutionResult{Message: "staged Git parent does not match authorized state"}\n\t}\n\tcachedAfterHash, err := e.git(ctx, "rev-parse", ":"+e.Target.Path)\n\tif err != nil {\n\t\treturn kernel.ExecutionResult{Message: fmt.Sprintf("read staged Git target: %v", err)}\n\t}\n\texpectedAfterHash, err := gitFilteredBlobHash(ctx, e.Target, t.After)\n\tif err != nil {\n\t\treturn kernel.ExecutionResult{Message: fmt.Sprintf("normalize authorized Git target state: %v", err)}\n\t}\n\tif cachedAfterHash != expectedAfterHash {\n\t\treturn kernel.ExecutionResult{Message: "staged Git target does not match authorized state"}\n\t}\n'''
+          if old not in s: raise SystemExit('executor blob block not found')
+          s = s.replace(old, new)
+          start = s.index('func readFile(ctx context.Context, target Target) (string, error) {')
+          end = s.index('\nfunc validateNoSymlinks', start)
+          read = '''func readFile(ctx context.Context, target Target) (string, error) {\n\tif err := ctx.Err(); err != nil {\n\t\treturn "", err\n\t}\n\tpath := filepath.Join(target.Repository, target.Path)\n\tfd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)\n\tif err != nil {\n\t\treturn "", fmt.Errorf("open git file: %w", err)\n\t}\n\tfile := os.NewFile(uintptr(fd), path)\n\tif file == nil {\n\t\t_ = syscall.Close(fd)\n\t\treturn "", fmt.Errorf("open git file: invalid file descriptor")\n\t}\n\tdefer file.Close()\n\tinfo, err := file.Stat()\n\tif err != nil {\n\t\treturn "", fmt.Errorf("stat git file: %w", err)\n\t}\n\tif !info.Mode().IsRegular() {\n\t\treturn "", fmt.Errorf("git target is not a regular file")\n\t}\n\tcontent, err := io.ReadAll(file)\n\tif err != nil {\n\t\treturn "", fmt.Errorf("read git file: %w", err)\n\t}\n\treturn string(content), nil\n}\n'''
+          s = s[:start] + read + s[end+1:]
+          old = '''\tbefore, err := git("show", head+"^:"+target.Path)\n\tif err != nil {\n\t\treturn fmt.Errorf("read committed Git parent state: %w", err)\n\t}\n\tif before != t.Before {\n\t\treturn fmt.Errorf("committed Git parent does not match authorized state")\n\t}\n\tafter, err := git("show", head+":"+target.Path)\n\tif err != nil {\n\t\treturn fmt.Errorf("read committed Git target state: %w", err)\n\t}\n\tif after != t.After {\n\t\treturn fmt.Errorf("committed Git target does not match authorized state")\n\t}\n'''
+          new = '''\tbeforeHash, err := git("rev-parse", head+"^:"+target.Path)\n\tif err != nil {\n\t\treturn fmt.Errorf("read committed Git parent state: %w", err)\n\t}\n\texpectedBeforeHash, err := gitFilteredBlobHash(context.Background(), target, t.Before)\n\tif err != nil {\n\t\treturn fmt.Errorf("normalize authorized Git parent state: %w", err)\n\t}\n\tif beforeHash != expectedBeforeHash {\n\t\treturn fmt.Errorf("committed Git parent does not match authorized state")\n\t}\n\tafterHash, err := git("rev-parse", head+":"+target.Path)\n\tif err != nil {\n\t\treturn fmt.Errorf("read committed Git target state: %w", err)\n\t}\n\texpectedAfterHash, err := gitFilteredBlobHash(context.Background(), target, t.After)\n\tif err != nil {\n\t\treturn fmt.Errorf("normalize authorized Git target state: %w", err)\n\t}\n\tif afterHash != expectedAfterHash {\n\t\treturn fmt.Errorf("committed Git target does not match authorized state")\n\t}\n'''
+          if old not in s: raise SystemExit('verify blob block not found')
+          s = s.replace(old, new)
+          s = s.replace("if len(status) == 0 || (status[0] >= 'a' && status[0] <= 'z') {", "if len(status) == 0 || (status[0] >= 'a' && status[0] <= 'z') || status[0] == 'S' {")
+          marker = 'func exactNULPathList(output, expected string) bool {'
+          helper = '''func gitFilteredBlobHash(ctx context.Context, target Target, content string) (string, error) {\n\ttmp, err := os.CreateTemp("", "ackos-git-filter-*")\n\tif err != nil {\n\t\treturn "", fmt.Errorf("create temporary Git filter input: %w", err)\n\t}\n\tname := tmp.Name()\n\tdefer os.Remove(name)\n\tif _, err := tmp.WriteString(content); err != nil {\n\t\t_ = tmp.Close()\n\t\treturn "", fmt.Errorf("write temporary Git filter input: %w", err)\n\t}\n\tif err := tmp.Close(); err != nil {\n\t\treturn "", fmt.Errorf("close temporary Git filter input: %w", err)\n\t}\n\thash, err := runGit(ctx, target.Repository, "hash-object", "--path="+target.Path, name)\n\tif err != nil {\n\t\treturn "", fmt.Errorf("hash Git-filtered content: %w", err)\n\t}\n\treturn strings.TrimSpace(hash), nil\n}\n\n'''
+          s = s.replace(marker, helper + marker)
+          p.write_text(s)
+          PY
+      - name: Format
+        run: gofmt -w integrations/git/provider.go
+      - name: Commit fixes
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add integrations/git/provider.go
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m 'fix: harden Git file access and filtered blob verification'
+          git push
