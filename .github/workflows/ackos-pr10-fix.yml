@@ -20,12 +20,19 @@ jobs:
           from pathlib import Path
           p = Path('integrations/git/provider.go')
           s = p.read_text()
-          old = 'stagePath := strings.TrimSuffix(stageable[1:], "\\x00")'
-          new = 'stagePath := parseIndexPath(stageable)'
-          s = s.replace(old, new)
-          marker = 'func exactNULPathList(output, expected string) bool {'
-          helper = '''func parseIndexPath(output string) string {\n\tentry := strings.TrimSuffix(output, "\\x00")\n\tif len(entry) < 2 || entry[1] != ' ' {\n\t\treturn ""\n\t}\n\treturn entry[2:]\n}\n\n'''
-          s = s.replace(marker, helper + marker)
+          start = s.index('func (e Executor) requireTracked(ctx context.Context) error {')
+          end = s.index('\nfunc (v Verifier) requireTracked(ctx context.Context) error {', start)
+          executor = '''func (e Executor) requireTracked(ctx context.Context) error {\n\ttracked, err := e.git(ctx, "ls-files", "-z", "--error-unmatch", "--", e.Target.Path)\n\tif err != nil {\n\t\treturn fmt.Errorf("git target is not tracked: %v", err)\n\t}\n\tif !exactNULPathList(tracked, e.Target.Path) {\n\t\treturn fmt.Errorf("git target is not tracked")\n\t}\n\tstatus, err := e.git(ctx, "ls-files", "-v", "--error-unmatch", "--", e.Target.Path)\n\tif err != nil {\n\t\treturn fmt.Errorf("inspect Git target index state: %v", err)\n\t}\n\tif len(status) == 0 || (status[0] >= 'a' && status[0] <= 'z') {\n\t\treturn fmt.Errorf("git target is assume-unchanged and cannot be staged")\n\t}\n\treturn nil\n}\n'''
+          s = s[:start] + executor + s[end+1:]
+          start = s.index('func (v Verifier) requireTracked(ctx context.Context) error {')
+          end = s.index('\nfunc parseIndexPath', start)
+          verifier = '''func (v Verifier) requireTracked(ctx context.Context) error {\n\ttracked, err := v.git(ctx, "ls-files", "-z", "--error-unmatch", "--", v.Target.Path)\n\tif err != nil {\n\t\treturn fmt.Errorf("git target is not tracked: %v", err)\n\t}\n\tif !exactNULPathList(tracked, v.Target.Path) {\n\t\treturn fmt.Errorf("git target is not tracked")\n\t}\n\tstatus, err := v.git(ctx, "ls-files", "-v", "--error-unmatch", "--", v.Target.Path)\n\tif err != nil {\n\t\treturn fmt.Errorf("inspect Git target index state: %v", err)\n\t}\n\tif len(status) == 0 || (status[0] >= 'a' && status[0] <= 'z') {\n\t\treturn fmt.Errorf("git target is assume-unchanged and cannot be staged")\n\t}\n\treturn nil\n}\n'''
+          s = s[:start] + verifier + s[end+1:]
+          marker = 'func parseIndexPath(output string) string {'
+          if marker in s:
+              hs = s.index(marker)
+              he = s.index('\n}\n\nfunc exactNULPathList', hs) + 3
+              s = s[:hs] + s[he:]
           p.write_text(s)
           PY
       - name: Format
@@ -36,5 +43,5 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add integrations/git/provider.go
           if git diff --cached --quiet; then exit 0; fi
-          git commit -m 'fix: parse Git index status with NUL-safe boundaries'
+          git commit -m 'fix: separate Git index status from path parsing'
           git push
