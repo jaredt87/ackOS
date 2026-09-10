@@ -123,6 +123,9 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if current != t.Before {
 		return kernel.ExecutionResult{Message: "git file changed at mutation boundary"}
 	}
+	if filepath.Base(e.Target.Path) == ".gitattributes" {
+		return kernel.ExecutionResult{Message: "git .gitattributes targets are not supported because the target can change its own filter environment"}
+	}
 	if err := os.WriteFile(filepath.Join(e.Target.Repository, e.Target.Path), []byte(t.After), 0o644); err != nil {
 		return kernel.ExecutionResult{Message: fmt.Sprintf("write git file: %v", err)}
 	}
@@ -236,6 +239,9 @@ func readFile(ctx context.Context, target Target) (string, error) {
 	}
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("git target is not a regular file")
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok && stat.Nlink > 1 {
+		return "", fmt.Errorf("git target has multiple hard links")
 	}
 	content, err := io.ReadAll(file)
 	if err != nil {
