@@ -6,10 +6,12 @@ package git
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jaredt87/ackOS/kernel"
@@ -134,18 +136,26 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if !exactNULPathList(cachedPaths, e.Target.Path) {
 		return kernel.ExecutionResult{Message: "staged Git diff contains an unauthorized path"}
 	}
-	cachedBefore, err := e.git(ctx, "show", "HEAD:"+e.Target.Path)
+	cachedBeforeHash, err := e.git(ctx, "rev-parse", "HEAD:"+e.Target.Path)
 	if err != nil {
 		return kernel.ExecutionResult{Message: fmt.Sprintf("read staged Git parent: %v", err)}
 	}
-	if cachedBefore != t.Before {
+	expectedBeforeHash, err := gitFilteredBlobHash(ctx, e.Target, t.Before)
+	if err != nil {
+		return kernel.ExecutionResult{Message: fmt.Sprintf("normalize authorized Git parent state: %v", err)}
+	}
+	if cachedBeforeHash != expectedBeforeHash {
 		return kernel.ExecutionResult{Message: "staged Git parent does not match authorized state"}
 	}
-	cachedAfter, err := e.git(ctx, "show", ":"+e.Target.Path)
+	cachedAfterHash, err := e.git(ctx, "rev-parse", ":"+e.Target.Path)
 	if err != nil {
 		return kernel.ExecutionResult{Message: fmt.Sprintf("read staged Git target: %v", err)}
 	}
-	if cachedAfter != t.After {
+	expectedAfterHash, err := gitFilteredBlobHash(ctx, e.Target, t.After)
+	if err != nil {
+		return kernel.ExecutionResult{Message: fmt.Sprintf("normalize authorized Git target state: %v", err)}
+	}
+	if cachedAfterHash != expectedAfterHash {
 		return kernel.ExecutionResult{Message: "staged Git target does not match authorized state"}
 	}
 	message := "ackOS: execute " + authority.ExecutionID
@@ -210,25 +220,29 @@ func readFile(ctx context.Context, target Target) (string, error) {
 		return "", err
 	}
 	path := filepath.Join(target.Repository, target.Path)
-	info, err := os.Lstat(path)
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return "", fmt.Errorf("inspect git file: %w", err)
+		return "", fmt.Errorf("open git file: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = syscall.Close(fd)
+		return "", fmt.Errorf("open git file: invalid file descriptor")
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("stat git file: %w", err)
 	}
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("git target is not a regular file")
 	}
-	file, err := os.Open(path)
-	if err != nil {
-		return "", fmt.Errorf("open git file: %w", err)
-	}
-	defer file.Close()
-	content, err := os.ReadFile(path)
+	content, err := io.ReadAll(file)
 	if err != nil {
 		return "", fmt.Errorf("read git file: %w", err)
 	}
 	return string(content), nil
 }
-
 func validateNoSymlinks(target Target) error {
 	if target.Repository == "" || target.Path == "" {
 		return fmt.Errorf("git target is incomplete")
@@ -334,18 +348,26 @@ func verifyCommitAt(target Target, git func(...string) (string, error), expected
 	if !exactNULPathList(paths, target.Path) {
 		return fmt.Errorf("committed Git diff contains an unauthorized path")
 	}
-	before, err := git("show", head+"^:"+target.Path)
+	beforeHash, err := git("rev-parse", head+"^:"+target.Path)
 	if err != nil {
 		return fmt.Errorf("read committed Git parent state: %w", err)
 	}
-	if before != t.Before {
+	expectedBeforeHash, err := gitFilteredBlobHash(context.Background(), target, t.Before)
+	if err != nil {
+		return fmt.Errorf("normalize authorized Git parent state: %w", err)
+	}
+	if beforeHash != expectedBeforeHash {
 		return fmt.Errorf("committed Git parent does not match authorized state")
 	}
-	after, err := git("show", head+":"+target.Path)
+	afterHash, err := git("rev-parse", head+":"+target.Path)
 	if err != nil {
 		return fmt.Errorf("read committed Git target state: %w", err)
 	}
-	if after != t.After {
+	expectedAfterHash, err := gitFilteredBlobHash(context.Background(), target, t.After)
+	if err != nil {
+		return fmt.Errorf("normalize authorized Git target state: %w", err)
+	}
+	if afterHash != expectedAfterHash {
 		return fmt.Errorf("committed Git target does not match authorized state")
 	}
 	return nil
@@ -363,7 +385,7 @@ func (e Executor) requireTracked(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("inspect Git target index state: %v", err)
 	}
-	if len(status) == 0 || (status[0] >= 'a' && status[0] <= 'z') {
+	if len(status) == 0 || (status[0] >= 'a' && status[0] <= 'z') || status[0] == 'S' {
 		return fmt.Errorf("git target is assume-unchanged and cannot be staged")
 	}
 	return nil
@@ -380,10 +402,31 @@ func (v Verifier) requireTracked(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("inspect Git target index state: %v", err)
 	}
-	if len(status) == 0 || (status[0] >= 'a' && status[0] <= 'z') {
+	if len(status) == 0 || (status[0] >= 'a' && status[0] <= 'z') || status[0] == 'S' {
 		return fmt.Errorf("git target is assume-unchanged and cannot be staged")
 	}
 	return nil
+}
+
+func gitFilteredBlobHash(ctx context.Context, target Target, content string) (string, error) {
+	tmp, err := os.CreateTemp("", "ackos-git-filter-*")
+	if err != nil {
+		return "", fmt.Errorf("create temporary Git filter input: %w", err)
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err := tmp.WriteString(content); err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("write temporary Git filter input: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("close temporary Git filter input: %w", err)
+	}
+	hash, err := runGit(ctx, target.Repository, "hash-object", "--path="+target.Path, name)
+	if err != nil {
+		return "", fmt.Errorf("hash Git-filtered content: %w", err)
+	}
+	return strings.TrimSpace(hash), nil
 }
 
 func exactNULPathList(output, expected string) bool {
