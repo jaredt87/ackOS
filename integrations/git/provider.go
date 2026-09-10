@@ -367,7 +367,7 @@ func (e Executor) requireTracked(ctx context.Context) error {
 	if len(stageable) < 2 || (stageable[0] >= 'a' && stageable[0] <= 'z') {
 		return fmt.Errorf("git target is assume-unchanged and cannot be staged")
 	}
-	stagePath := strings.TrimSuffix(stageable[1:], "\x00")
+	stagePath := parseIndexPath(stageable)
 	if stagePath != e.Target.Path {
 		return fmt.Errorf("git target index path mismatch")
 	}
@@ -390,11 +390,19 @@ func (v Verifier) requireTracked(ctx context.Context) error {
 	if len(stageable) < 2 || (stageable[0] >= 'a' && stageable[0] <= 'z') {
 		return fmt.Errorf("git target is assume-unchanged and cannot be staged")
 	}
-	stagePath := strings.TrimSuffix(stageable[1:], "\x00")
+	stagePath := parseIndexPath(stageable)
 	if stagePath != v.Target.Path {
 		return fmt.Errorf("git target index path mismatch")
 	}
 	return nil
+}
+
+func parseIndexPath(output string) string {
+	entry := strings.TrimSuffix(output, "\x00")
+	if len(entry) < 2 || entry[1] != ' ' {
+		return ""
+	}
+	return entry[2:]
 }
 
 func exactNULPathList(output, expected string) bool {
