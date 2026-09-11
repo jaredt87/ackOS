@@ -11,10 +11,12 @@ jobs:
           ref: feat/phase2-git-provider
           fetch-depth: 0
       - name: Patch provider
+        id: patch
+        continue-on-error: true
         run: |
-          if git log -1 --format=%s | grep -q '^fix: close remaining Git provider review gaps$'; then exit 0; fi
-          set -euxo pipefail
-          python3 - <<'PY'
+          set -o pipefail
+          {
+            python3 - <<'PY'
           from pathlib import Path
           p = Path('integrations/git/provider.go')
           s = p.read_text()
@@ -37,8 +39,19 @@ jobs:
           s = s.replace('if len(args) > 0 && args[0] == "show" {', 'for _, arg := range args {\n\t\tif arg == "-z" {\n\t\t\treturn output, nil\n\t\t}\n\t}\n\tif len(args) > 0 && args[0] == "show" {', 1)
           p.write_text(s)
           PY
-          gofmt -w integrations/git/provider.go
-          git diff --check
+            gofmt -w integrations/git/provider.go
+            git diff --check
+            git status --short
+            git diff -- integrations/git/provider.go | head -n 200
+          } 2>&1 | tee patch.log
+      - name: Upload patch diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr10-patch-diagnostics
+          path: patch.log
+      - name: Commit provider fix
+        if: steps.patch.outcome == 'success'
+        run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add integrations/git/provider.go
