@@ -55,7 +55,7 @@ For real use, embed the integration and provide an executor that performs the ac
 
 `integrations/git` is the first real external-resource provider. Git-specific concepts stay inside this package; the kernel continues to depend only on its generic executor, verifier, and recovery-observer contracts.
 
-The provider targets one configured repository-relative text file. Its executor re-reads the file immediately before mutation, requires the configured opaque subject identity, writes the exact requested post-state, and records the authorized execution ID in the resulting Git commit. The independent verifier reads the file again and checks the resulting commit marker before producing fresh evidence.
+The provider targets one configured repository-relative text file. Its executor re-reads the file immediately before mutation, requires the configured opaque subject identity, writes the exact requested post-state, and records the authorized execution ID in the resulting Git commit. The independent verifier reads the file again and checks the resulting commit marker before producing fresh evidence. Commit verification and Git filter normalization use the active operation context so a bounded verification cannot outlive the caller's execution deadline.
 
 The provider therefore exercises the real control boundary against Git without making the ackOS kernel Git-aware. Tests cover successful execution, resource substitution, stale/TOCTOU state, false executor success, post-execution mutation, and path traversal.
 
