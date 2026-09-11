@@ -11,12 +11,8 @@ jobs:
           ref: feat/phase2-git-provider
           fetch-depth: 0
       - name: Patch provider
-        id: patch
-        continue-on-error: true
         run: |
-          set -o pipefail
-          {
-            python3 - <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
           p = Path('integrations/git/provider.go')
           s = p.read_text()
@@ -29,8 +25,9 @@ jobs:
           s = s.replace('gitFilteredBlobHash(context.Background(), target, t.After)', 'gitFilteredBlobHash(ctx, target, t.After)')
           s = s.replace('e.git(ctx, "ls-files", "-v", "--error-unmatch", "--", e.Target.Path)', 'e.git(ctx, "ls-files", "-v", "-z", "--error-unmatch", "--", e.Target.Path)')
           s = s.replace('v.git(ctx, "ls-files", "-v", "--error-unmatch", "--", v.Target.Path)', 'v.git(ctx, "ls-files", "-v", "-z", "--error-unmatch", "--", v.Target.Path)')
-          s = s.replace("if len(status) == 0 || (status[0] >= 'a' && status[0] <= 'z') || status[0] == 'S' {\n\t\treturn fmt.Errorf(\"git target is assume-unchanged and cannot be staged\")\n\t}", "if !validIndexPathStatus(status, e.Target.Path) {\n\t\treturn fmt.Errorf(\"git target index state is not stageable\")\n\t}", 1)
-          s = s.replace("if len(status) == 0 || (status[0] >= 'a' && status[0] <= 'z') || status[0] == 'S' {\n\t\treturn fmt.Errorf(\"git target is assume-unchanged and cannot be staged\")\n\t}", "if !validIndexPathStatus(status, v.Target.Path) {\n\t\treturn fmt.Errorf(\"git target index state is not stageable\")\n\t}", 1)
+          old = "if len(status) == 0 || (status[0] >= 'a' && status[0] <= 'z') || status[0] == 'S' {\n\t\treturn fmt.Errorf(\"git target is assume-unchanged and cannot be staged\")\n\t}"
+          s = s.replace(old, "if !validIndexPathStatus(status, e.Target.Path) {\n\t\treturn fmt.Errorf(\"git target index state is not stageable\")\n\t}", 1)
+          s = s.replace(old, "if !validIndexPathStatus(status, v.Target.Path) {\n\t\treturn fmt.Errorf(\"git target index state is not stageable\")\n\t}", 1)
           if 'func validIndexPathStatus' not in s:
               s = s.replace('func exactNULPathList(output, expected string) bool {', "func validIndexPathStatus(output, expected string) bool {\n\toutput = strings.TrimSuffix(output, \"\\x00\")\n\trecords := strings.Split(output, \"\\x00\")\n\tif len(records) != 1 || len(records[0]) < 3 || records[0][1] != ' ' || records[0][2:] != expected {\n\t\treturn false\n\t}\n\tstatus := records[0][0]\n\treturn status != 'S' && !(status >= 'a' && status <= 'z')\n}\n\nfunc exactNULPathList(output, expected string) bool {", 1)
           if 'git target changed after commit verification' not in s:
@@ -39,21 +36,11 @@ jobs:
           s = s.replace('if len(args) > 0 && args[0] == "show" {', 'for _, arg := range args {\n\t\tif arg == "-z" {\n\t\t\treturn output, nil\n\t\t}\n\t}\n\tif len(args) > 0 && args[0] == "show" {', 1)
           p.write_text(s)
           PY
-            gofmt -w integrations/git/provider.go
-            git diff --check
-            git status --short
-            git diff -- integrations/git/provider.go | head -n 200
-          } 2>&1 | tee patch.log
-      - name: Upload patch diagnostics
-        uses: actions/upload-artifact@v4
-        with:
-          name: pr10-patch-diagnostics
-          path: patch.log
-      - name: Commit provider fix
-        if: steps.patch.outcome == 'success'
-        run: |
+          gofmt -w integrations/git/provider.go
+          git diff --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add integrations/git/provider.go
+          if git diff --cached --quiet; then exit 0; fi
           git commit -m 'fix: close remaining Git provider review gaps'
           git push origin HEAD:feat/phase2-git-provider
