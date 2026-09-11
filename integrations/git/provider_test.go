@@ -196,7 +196,7 @@ func TestExecutorRejectsPendingGitMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 	gitTest(t, target.Repository, "checkout", "-b", "merge-test")
-	gitTest(t, target.Repository, "checkout", "main")
+	gitTest(t, target.Repository, "checkout", "-")
 	gitTest(t, target.Repository, "merge", "--no-commit", "merge-test")
 	transition := kernel.Transition{Subject: target.Subject, Before: observation.State, After: "updated"}
 	result := executor.Execute(context.Background(), transition, kernel.Authority{ExecutionID: "attempt-pending-merge"})
