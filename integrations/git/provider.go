@@ -44,7 +44,7 @@ func NewTarget(repository, path, subject string) (Target, error) {
 		return Target{}, fmt.Errorf("path must be repository-relative")
 	}
 	target := Target{Repository: absRepo, Path: cleanPath, Subject: subject}
-	if err := requireWorktreeRoot(target); err != nil {
+	if err := requireWorktreeRoot(context.Background(), target); err != nil {
 		return Target{}, err
 	}
 	if err := validateNoSymlinks(target); err != nil {
@@ -81,7 +81,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err := ctx.Err(); err != nil {
 		return kernel.ExecutionResult{Message: err.Error()}
 	}
-	if err := requireWorktreeRoot(e.Target); err != nil {
+	if err := requireWorktreeRoot(ctx, e.Target); err != nil {
 		return kernel.ExecutionResult{Message: err.Error()}
 	}
 	if err := validateNoSymlinks(e.Target); err != nil {
@@ -111,7 +111,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err != nil {
 		return kernel.ExecutionResult{Message: fmt.Sprintf("read git HEAD: %v", err)}
 	}
-	if err := requireWorktreeRoot(e.Target); err != nil {
+	if err := requireWorktreeRoot(ctx, e.Target); err != nil {
 		return kernel.ExecutionResult{Message: err.Error()}
 	}
 	if err := validateNoSymlinks(e.Target); err != nil {
@@ -169,11 +169,18 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return kernel.ExecutionResult{Message: "staged Git target does not match authorized state"}
 	}
 	message := "ackOS: execute " + authority.ExecutionID
-	if _, err := e.git(ctx, "commit", "--no-verify", "-m", message); err != nil {
+	if _, err := e.git(ctx, "-c", "core.hooksPath=/dev/null", "commit", "--no-verify", "-m", message); err != nil {
 		return kernel.ExecutionResult{Message: fmt.Sprintf("git commit: %v", err)}
 	}
 	if err := verifyCommit(e, ctx, head, t, authority.ExecutionID); err != nil {
 		return kernel.ExecutionResult{Message: err.Error()}
+	}
+	finalContent, err := e.read(ctx)
+	if err != nil {
+		return kernel.ExecutionResult{Message: fmt.Sprintf("re-read Git target after verification: %v", err)}
+	}
+	if finalContent != t.After {
+		return kernel.ExecutionResult{Message: "git target changed after commit verification"}
 	}
 	return kernel.ExecutionResult{Success: true, Message: "git file transitioned and committed"}
 }
@@ -190,7 +197,7 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	if err := ctx.Err(); err != nil {
 		return kernel.Observation{}, err
 	}
-	if err := requireWorktreeRoot(v.Target); err != nil {
+	if err := requireWorktreeRoot(ctx, v.Target); err != nil {
 		return kernel.Observation{}, err
 	}
 	if err := validateNoSymlinks(v.Target); err != nil {
@@ -339,8 +346,8 @@ func requireNoInProgressGitOperation(ctx context.Context, target Target) error {
 	return nil
 }
 
-func requireWorktreeRoot(target Target) error {
-	root, err := runGit(context.Background(), target.Repository, "rev-parse", "--show-toplevel")
+func requireWorktreeRoot(ctx context.Context, target Target) error {
+	root, err := runGit(ctx, target.Repository, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return fmt.Errorf("resolve Git worktree root: %w", err)
 	}
@@ -399,7 +406,7 @@ func verifyCommitAt(target Target, git func(...string) (string, error), expected
 	if err != nil {
 		return fmt.Errorf("read committed Git parent state: %w", err)
 	}
-	expectedBeforeHash, err := gitFilteredBlobHash(context.Background(), target, t.Before)
+	expectedBeforeHash, err := gitFilteredBlobHash(ctx, target, t.Before)
 	if err != nil {
 		return fmt.Errorf("normalize authorized Git parent state: %w", err)
 	}
@@ -410,7 +417,7 @@ func verifyCommitAt(target Target, git func(...string) (string, error), expected
 	if err != nil {
 		return fmt.Errorf("read committed Git target state: %w", err)
 	}
-	expectedAfterHash, err := gitFilteredBlobHash(context.Background(), target, t.After)
+	expectedAfterHash, err := gitFilteredBlobHash(ctx, target, t.After)
 	if err != nil {
 		return fmt.Errorf("normalize authorized Git target state: %w", err)
 	}
@@ -428,12 +435,12 @@ func (e Executor) requireTracked(ctx context.Context) error {
 	if !exactNULPathList(tracked, e.Target.Path) {
 		return fmt.Errorf("git target is not tracked")
 	}
-	status, err := e.git(ctx, "ls-files", "-v", "--error-unmatch", "--", e.Target.Path)
+	status, err := e.git(ctx, "ls-files", "-v", "-z", "--error-unmatch", "--", e.Target.Path)
 	if err != nil {
 		return fmt.Errorf("inspect Git target index state: %v", err)
 	}
-	if len(status) == 0 || (status[0] >= 'a' && status[0] <= 'z') || status[0] == 'S' {
-		return fmt.Errorf("git target is assume-unchanged and cannot be staged")
+	if !validIndexPathStatus(status, e.Target.Path) {
+		return fmt.Errorf("git target index state is not stageable")
 	}
 	return nil
 }
@@ -445,12 +452,12 @@ func (v Verifier) requireTracked(ctx context.Context) error {
 	if !exactNULPathList(tracked, v.Target.Path) {
 		return fmt.Errorf("git target is not tracked")
 	}
-	status, err := v.git(ctx, "ls-files", "-v", "--error-unmatch", "--", v.Target.Path)
+	status, err := v.git(ctx, "ls-files", "-v", "-z", "--error-unmatch", "--", v.Target.Path)
 	if err != nil {
 		return fmt.Errorf("inspect Git target index state: %v", err)
 	}
-	if len(status) == 0 || (status[0] >= 'a' && status[0] <= 'z') || status[0] == 'S' {
-		return fmt.Errorf("git target is assume-unchanged and cannot be staged")
+	if !validIndexPathStatus(status, v.Target.Path) {
+		return fmt.Errorf("git target index state is not stageable")
 	}
 	return nil
 }
@@ -474,6 +481,16 @@ func gitFilteredBlobHash(ctx context.Context, target Target, content string) (st
 		return "", fmt.Errorf("hash Git-filtered content: %w", err)
 	}
 	return strings.TrimSpace(hash), nil
+}
+
+func validIndexPathStatus(output, expected string) bool {
+	output = strings.TrimSuffix(output, "\x00")
+	records := strings.Split(output, "\x00")
+	if len(records) != 1 || len(records[0]) < 3 || records[0][1] != ' ' || records[0][2:] != expected {
+		return false
+	}
+	status := records[0][0]
+	return status != 'S' && !(status >= 'a' && status <= 'z')
 }
 
 func exactNULPathList(output, expected string) bool {
@@ -500,6 +517,11 @@ func runGit(ctx context.Context, repository string, args ...string) (string, err
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 	output := stdout.String()
+	for _, arg := range args {
+		if arg == "-z" {
+			return output, nil
+		}
+	}
 	if len(args) > 0 && args[0] == "show" {
 		return output, nil
 	}
