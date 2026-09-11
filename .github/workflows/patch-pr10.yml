@@ -1,6 +1,7 @@
 name: Patch PR10
 on:
-  workflow_dispatch:
+  push:
+    branches: [feat/phase2-git-provider]
 permissions:
   contents: write
 jobs:
@@ -73,7 +74,7 @@ jobs:
 }
 
 func sanitizedGitEnv() []string {
-\tenv := os.Environ()[:0]
+\tenv := make([]string, 0, len(os.Environ()))
 \tfor _, entry := range os.Environ() {
 \t\tif strings.HasPrefix(entry, "GIT_") {
 \t\t\tcontinue
