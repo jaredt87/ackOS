@@ -1,0 +1,25 @@
+name: PR10 vet debug
+on:
+  push:
+    branches: [feat/phase2-git-provider]
+permissions:
+  contents: read
+jobs:
+  vet:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/phase2-git-provider
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: Run vet diagnostics
+        run: |
+          set +e
+          go vet ./... >vet.log 2>&1
+          echo "exit=$?" >> vet.log
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pr10-vet-debug
+          path: vet.log
