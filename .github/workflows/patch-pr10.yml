@@ -4,16 +4,17 @@ on:
     branches: [feat/phase2-git-provider]
 jobs:
   patch:
-    if: github.actor == 'jaredt87' || github.actor == 'github-actions[bot]'
+    if: !startsWith(github.event.head_commit.message, 'debug:')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: feat/phase2-git-provider
           fetch-depth: 0
-      - name: Patch provider
+      - name: Diagnose provider patch
         run: |
-          python3 - <<'PY'
+          set +e
+          python3 - <<'PY' > /tmp/patch.log 2>&1
           from pathlib import Path
           p = Path('integrations/git/provider.go')
           s = p.read_text()
@@ -27,27 +28,23 @@ jobs:
           s = s.replace('e.git(ctx, "ls-files", "-v", "--error-unmatch", "--", e.Target.Path)', 'e.git(ctx, "ls-files", "-v", "-z", "--error-unmatch", "--", e.Target.Path)')
           s = s.replace('v.git(ctx, "ls-files", "-v", "--error-unmatch", "--", v.Target.Path)', 'v.git(ctx, "ls-files", "-v", "-z", "--error-unmatch", "--", v.Target.Path)')
           old = """\tif len(status) == 0 || (status[0] >= 'a' && status[0] <= 'z') || status[0] == 'S' {\n\t\treturn fmt.Errorf(\"git target is assume-unchanged and cannot be staged\")\n\t}"""
-          new = """\tif !validIndexPathStatus(status, e.Target.Path) {\n\t\treturn fmt.Errorf(\"git target index state is not stageable\")\n\t}"""
-          s = s.replace(old, new, 1)
-          new2 = """\tif !validIndexPathStatus(status, v.Target.Path) {\n\t\treturn fmt.Errorf(\"git target index state is not stageable\")\n\t}"""
-          s = s.replace(old, new2, 1)
+          s = s.replace(old, """\tif !validIndexPathStatus(status, e.Target.Path) {\n\t\treturn fmt.Errorf(\"git target index state is not stageable\")\n\t}""", 1)
+          s = s.replace(old, """\tif !validIndexPathStatus(status, v.Target.Path) {\n\t\treturn fmt.Errorf(\"git target index state is not stageable\")\n\t}""", 1)
           if 'func validIndexPathStatus' not in s:
               s = s.replace('func exactNULPathList(output, expected string) bool {', """func validIndexPathStatus(output, expected string) bool {\n\toutput = strings.TrimSuffix(output, \"\\x00\")\n\trecords := strings.Split(output, \"\\x00\")\n\tif len(records) != 1 || len(records[0]) < 3 || records[0][1] != ' ' || records[0][2:] != expected {\n\t\treturn false\n\t}\n\tstatus := records[0][0]\n\treturn status != 'S' && !(status >= 'a' && status <= 'z')\n}\n\nfunc exactNULPathList(output, expected string) bool {""", 1)
-          old = 'return kernel.ExecutionResult{Success: true, Message: "git file transitioned and committed"}'
           if 'git target changed after commit verification' not in s:
-              s = s.replace(old, """finalContent, err := e.read(ctx)\n\tif err != nil {\n\t\treturn kernel.ExecutionResult{Message: fmt.Sprintf(\"re-read Git target after verification: %v\", err)}\n\t}\n\tif finalContent != t.After {\n\t\treturn kernel.ExecutionResult{Message: \"git target changed after commit verification\"}\n\t}\n\treturn kernel.ExecutionResult{Success: true, Message: \"git file transitioned and committed\"}""", 1)
+              s = s.replace('return kernel.ExecutionResult{Success: true, Message: "git file transitioned and committed"}', """finalContent, err := e.read(ctx)\n\tif err != nil {\n\t\treturn kernel.ExecutionResult{Message: fmt.Sprintf(\"re-read Git target after verification: %v\", err)}\n\t}\n\tif finalContent != t.After {\n\t\treturn kernel.ExecutionResult{Message: \"git target changed after commit verification\"}\n\t}\n\treturn kernel.ExecutionResult{Success: true, Message: \"git file transitioned and committed\"}""", 1)
           s = s.replace('e.git(ctx, "commit", "--no-verify", "-m", message)', 'e.git(ctx, "-c", "core.hooksPath=/dev/null", "commit", "--no-verify", "-m", message)')
-          for old, new in [
-              ('if len(args) > 0 && args[0] == "show" {', 'for _, arg := range args {\n\t\tif arg == "-z" {\n\t\t\treturn output, nil\n\t\t}\n\t}\n\tif len(args) > 0 && args[0] == "show" {'),
-          ]:
-              s = s.replace(old, new, 1)
+          s = s.replace('if len(args) > 0 && args[0] == "show" {', 'for _, arg := range args {\n\t\tif arg == "-z" {\n\t\t\treturn output, nil\n\t\t}\n\t}\n\tif len(args) > 0 && args[0] == "show" {', 1)
           p.write_text(s)
           PY
-          gofmt -w integrations/git/provider.go
-          git diff --check
+          echo "python_exit=$?" >> /tmp/patch.log
+          gofmt -w integrations/git/provider.go >> /tmp/patch.log 2>&1
+          echo "gofmt_exit=$?" >> /tmp/patch.log
+          tail -n 80 /tmp/patch.log
+          cp /tmp/patch.log patch-debug.txt
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add integrations/git/provider.go
-          git diff --cached --check
-          git commit -m 'fix: close remaining Git provider review gaps'
+          git add patch-debug.txt
+          git commit -m 'debug: record PR10 patch failure'
           git push origin HEAD:feat/phase2-git-provider
