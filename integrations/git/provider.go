@@ -366,13 +366,13 @@ func requireWorktreeRoot(ctx context.Context, target Target) error {
 }
 
 func verifyCommit(e Executor, ctx context.Context, parent string, t kernel.Transition, executionID string) error {
-	return verifyCommitAt(e.Target, func(args ...string) (string, error) { return e.git(ctx, args...) }, parent, t, executionID)
+	return verifyCommitAt(ctx, e.Target, func(args ...string) (string, error) { return e.git(ctx, args...) }, parent, t, executionID)
 }
 func verifyLatestCommit(v Verifier, ctx context.Context, t kernel.Transition, executionID string) error {
-	return verifyCommitAt(v.Target, func(args ...string) (string, error) { return v.git(ctx, args...) }, "", t, executionID)
+	return verifyCommitAt(ctx, v.Target, func(args ...string) (string, error) { return v.git(ctx, args...) }, "", t, executionID)
 }
 
-func verifyCommitAt(target Target, git func(...string) (string, error), expectedParent string, t kernel.Transition, executionID string) error {
+func verifyCommitAt(ctx context.Context, target Target, git func(...string) (string, error), expectedParent string, t kernel.Transition, executionID string) error {
 	head, err := git("rev-parse", "HEAD")
 	if err != nil {
 		return fmt.Errorf("read committed Git HEAD: %w", err)
