@@ -33,7 +33,13 @@ func main() {
 
 	if *httpAddr != "" {
 		log.Printf("ackOS MCP server listening at %s", *httpAddr)
-		log.Fatal(http.ListenAndServe(*httpAddr, server.StreamableHTTPHandler()))
+		httpHandler := mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server {
+			return server.MCPServer()
+		}, &mcpsdk.StreamableHTTPOptions{
+			JSONResponse:               true,
+			DisableLocalhostProtection: true,
+		})
+		log.Fatal(http.ListenAndServe(*httpAddr, httpHandler))
 	}
 
 	mcpServer := server.MCPServer()
