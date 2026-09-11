@@ -189,6 +189,26 @@ func TestExecutorRejectsUntrackedTarget(t *testing.T) {
 	}
 }
 
+func TestExecutorRejectsPendingGitMerge(t *testing.T) {
+	target, observer, executor, _, _ := newTestProvider(t, "initial")
+	observation, err := observer.Observe(context.Background(), target.Subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, target.Repository, "checkout", "-b", "merge-test")
+	gitTest(t, target.Repository, "checkout", "main")
+	gitTest(t, target.Repository, "merge", "--no-commit", "merge-test")
+	transition := kernel.Transition{Subject: target.Subject, Before: observation.State, After: "updated"}
+	result := executor.Execute(context.Background(), transition, kernel.Authority{ExecutionID: "attempt-pending-merge"})
+	if result.Success || !strings.Contains(result.Message, "MERGE_HEAD") {
+		t.Fatalf("result = %+v, want pending-merge rejection", result)
+	}
+	if got := readTestFile(t, target); got != "initial" {
+		t.Fatalf("target changed during pending merge rejection: %q", got)
+	}
+	gitTest(t, target.Repository, "merge", "--abort")
+}
+
 func TestNewTargetRejectsPathTraversal(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := NewTarget(dir, "../outside.txt", "repo:file"); err == nil {

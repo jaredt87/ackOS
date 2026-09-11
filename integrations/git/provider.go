@@ -4,6 +4,7 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -96,6 +97,9 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if before != t.Before {
 		return kernel.ExecutionResult{Message: "git file changed before execution"}
 	}
+	if err := requireNoInProgressGitOperation(ctx, e.Target); err != nil {
+		return kernel.ExecutionResult{Message: err.Error()}
+	}
 	status, err := e.git(ctx, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 		return kernel.ExecutionResult{Message: fmt.Sprintf("read git status: %v", err)}
@@ -122,6 +126,9 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	}
 	if current != t.Before {
 		return kernel.ExecutionResult{Message: "git file changed at mutation boundary"}
+	}
+	if err := requireNoInProgressGitOperation(ctx, e.Target); err != nil {
+		return kernel.ExecutionResult{Message: err.Error()}
 	}
 	if filepath.Base(e.Target.Path) == ".gitattributes" {
 		return kernel.ExecutionResult{Message: "git .gitattributes targets are not supported because the target can change its own filter environment"}
@@ -298,6 +305,32 @@ func validateNoSymlinks(target Target) error {
 	return nil
 }
 
+func requireNoInProgressGitOperation(ctx context.Context, target Target) error {
+	for _, marker := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD"} {
+		path, err := runGit(ctx, target.Repository, "rev-parse", "--git-path", marker)
+		if err != nil {
+			return fmt.Errorf("inspect Git operation state: %w", err)
+		}
+		if _, err := os.Stat(strings.TrimSpace(path)); err == nil {
+			return fmt.Errorf("Git operation is already in progress: %s", marker)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("inspect Git operation state %s: %w", marker, err)
+		}
+	}
+	for _, marker := range []string{"sequencer", "rebase-merge", "rebase-apply"} {
+		path, err := runGit(ctx, target.Repository, "rev-parse", "--git-path", marker)
+		if err != nil {
+			return fmt.Errorf("inspect Git operation state: %w", err)
+		}
+		if info, err := os.Stat(strings.TrimSpace(path)); err == nil && info.IsDir() {
+			return fmt.Errorf("Git operation is already in progress: %s", marker)
+		} else if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("inspect Git operation state %s: %w", marker, err)
+		}
+	}
+	return nil
+}
+
 func requireWorktreeRoot(target Target) error {
 	root, err := runGit(context.Background(), target.Repository, "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -452,12 +485,15 @@ func (v Verifier) git(ctx context.Context, args ...string) (string, error) {
 func runGit(ctx context.Context, repository string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = repository
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(string(output)))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 	}
+	output := stdout.String()
 	if len(args) > 0 && args[0] == "show" {
-		return string(output), nil
+		return output, nil
 	}
-	return strings.TrimSpace(string(output)), nil
+	return strings.TrimSpace(output), nil
 }
