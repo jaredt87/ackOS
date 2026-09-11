@@ -51,6 +51,16 @@ The standalone `cmd/ackos-mcp` binary uses in-memory demonstration executor, ver
 
 For real use, embed the integration and provide an executor that performs the actual side effect, an independent verifier that obtains fresh evidence from the target system, and an independent recovery observer that obtains provider-captured post-failure evidence.
 
+## Phase 2: Git provider
+
+`integrations/git` is the first real external-resource provider. Git-specific concepts stay inside this package; the kernel continues to depend only on its generic executor, verifier, and recovery-observer contracts.
+
+The provider targets one configured repository-relative text file. Its executor re-reads the file immediately before mutation, requires the configured opaque subject identity, writes the exact requested post-state, and records the authorized execution ID in the resulting Git commit. The independent verifier reads the file again and checks the resulting commit marker before producing fresh evidence. Commit verification and Git filter normalization use the active operation context so a bounded verification cannot outlive the caller's execution deadline.
+
+The provider therefore exercises the real control boundary against Git without making the ackOS kernel Git-aware. Tests cover successful execution, resource substitution, stale/TOCTOU state, false executor success, post-execution mutation, and path traversal.
+
+GitHub hosting is not part of the kernel contract. A future GitHub adapter can live alongside this local Git provider if remote repository operations require it.
+
 ## Security boundary
 
 The MCP protocol is transport, not authority. The kernel remains authoritative for governance, single-use authority, execution, independent verification, recovery, and CAS commitment.
