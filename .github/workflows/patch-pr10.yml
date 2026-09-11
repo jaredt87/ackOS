@@ -1,8 +1,10 @@
 name: PR10 patch
 on:
-  workflow_dispatch:
+  push:
+    branches: [feat/phase2-git-provider]
 jobs:
   patch:
+    if: github.actor == 'jaredt87' || github.actor == 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,7 +41,7 @@ jobs:
           s = s.replace(old,new)
           old = '''\tif len(args) > 0 && args[0] == "show" {\n\t\treturn output, nil\n\t}\n\treturn strings.TrimSpace(output), nil'''
           new = '''\tfor _, arg := range args {\n\t\tif arg == "-z" {\n\t\t\treturn output, nil\n\t\t}\n\t}\n\tif len(args) > 0 && args[0] == "show" {\n\t\treturn output, nil\n\t}\n\treturn strings.TrimSpace(output), nil'''
-          if s.count(old) != 1: raise SystemExit('runGit block not found')
+          if s.count(old)!=1: raise SystemExit('runGit block not found')
           s = s.replace(old,new)
           p.write_text(s)
           PY
