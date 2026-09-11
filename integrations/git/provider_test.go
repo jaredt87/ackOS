@@ -196,19 +196,9 @@ func TestExecutorRejectsPendingGitMerge(t *testing.T) {
 		t.Fatal(err)
 	}
 	gitTest(t, target.Repository, "checkout", "-b", "merge-test")
-	mergePath := filepath.Join(target.Repository, "docs", "merge-marker.md")
-	if err := os.WriteFile(mergePath, []byte("merge-side"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	gitTest(t, target.Repository, "add", "--", "docs/merge-marker.md")
-	gitTest(t, target.Repository, "commit", "-m", "merge side")
+	gitTest(t, target.Repository, "commit", "--allow-empty", "-m", "merge side")
 	gitTest(t, target.Repository, "checkout", "-")
-	localPath := filepath.Join(target.Repository, "docs", "local-marker.md")
-	if err := os.WriteFile(localPath, []byte("local-side"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	gitTest(t, target.Repository, "add", "--", "docs/local-marker.md")
-	gitTest(t, target.Repository, "commit", "-m", "local side")
+	gitTest(t, target.Repository, "commit", "--allow-empty", "-m", "local side")
 	gitTest(t, target.Repository, "merge", "--no-commit", "merge-test")
 	transition := kernel.Transition{Subject: target.Subject, Before: observation.State, After: "updated"}
 	result := executor.Execute(context.Background(), transition, kernel.Authority{ExecutionID: "attempt-pending-merge"})
