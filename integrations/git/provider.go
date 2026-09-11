@@ -508,13 +508,27 @@ func (v Verifier) git(ctx context.Context, args ...string) (string, error) {
 	return runGit(ctx, v.Target.Repository, args...)
 }
 func runGit(ctx context.Context, repository string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd := exec.Command("git", args...)
 	cmd.Dir = repository
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Env = sanitizedGitEnv()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("start git: %w", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case runErr := <-done:
+		if runErr != nil {
+			return "", fmt.Errorf("%w: %s", runErr, strings.TrimSpace(stderr.String()))
+		}
+	case <-ctx.Done():
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		<-done
+		return "", ctx.Err()
 	}
 	output := stdout.String()
 	for _, arg := range args {
@@ -526,4 +540,15 @@ func runGit(ctx context.Context, repository string, args ...string) (string, err
 		return output, nil
 	}
 	return strings.TrimSpace(output), nil
+}
+
+func sanitizedGitEnv() []string {
+	env := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "GIT_") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return env
 }
