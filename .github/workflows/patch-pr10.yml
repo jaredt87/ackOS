@@ -1,0 +1,100 @@
+name: Patch PR10
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/phase2-git-provider
+      - name: Patch provider
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('integrations/git/provider.go')
+          s = p.read_text()
+          old = '''func runGit(ctx context.Context, repository string, args ...string) (string, error) {
+\tcmd := exec.CommandContext(ctx, "git", args...)
+\tcmd.Dir = repository
+\tvar stdout, stderr bytes.Buffer
+\tcmd.Stdout = &stdout
+\tcmd.Stderr = &stderr
+\tif err := cmd.Run(); err != nil {
+\t\treturn "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+\t}
+\toutput := stdout.String()
+\tfor _, arg := range args {
+\t\tif arg == "-z" {
+\t\t\treturn output, nil
+\t\t}
+\t}
+\tif len(args) > 0 && args[0] == "show" {
+\t\treturn output, nil
+\t}
+\treturn strings.TrimSpace(output), nil
+}'''
+          new = '''func runGit(ctx context.Context, repository string, args ...string) (string, error) {
+\tcmd := exec.Command("git", args...)
+\tcmd.Dir = repository
+\tcmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+\tcmd.Env = sanitizedGitEnv()
+\tvar stdout, stderr bytes.Buffer
+\tcmd.Stdout = &stdout
+\tcmd.Stderr = &stderr
+\tif err := cmd.Start(); err != nil {
+\t\treturn "", fmt.Errorf("start git: %w", err)
+\t}
+\tdone := make(chan error, 1)
+\tgo func() { done <- cmd.Wait() }()
+\tvar runErr error
+\tselect {
+\tcase runErr = <-done:
+\tcase <-ctx.Done():
+\t\t_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+\t\trunErr = <-done
+\t\treturn "", ctx.Err()
+\t}
+\tif runErr != nil {
+\t\treturn "", fmt.Errorf("%w: %s", runErr, strings.TrimSpace(stderr.String()))
+\t}
+\toutput := stdout.String()
+\tfor _, arg := range args {
+\t\tif arg == "-z" {
+\t\t\treturn output, nil
+\t\t}
+\t}
+\tif len(args) > 0 && args[0] == "show" {
+\t\treturn output, nil
+\t}
+\treturn strings.TrimSpace(output), nil
+}
+
+func sanitizedGitEnv() []string {
+\tenv := os.Environ()[:0]
+\tfor _, entry := range os.Environ() {
+\t\tif strings.HasPrefix(entry, "GIT_") {
+\t\t\tcontinue
+\t\t}
+\t\tenv = append(env, entry)
+\t}
+\treturn env
+}'''
+          if old not in s:
+              raise SystemExit('runGit block not found')
+          p.write_text(s.replace(old, new))
+          PY
+          gofmt -w integrations/git/provider.go
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add integrations/git/provider.go
+          git commit -m "fix: isolate Git routing and terminate filter descendants"
+          git push origin HEAD:feat/phase2-git-provider
+      - name: Remove patch workflow
+        run: |
+          git rm .github/workflows/patch-pr10.yml
+          git commit -m "chore: remove temporary patch workflow"
+          git push origin HEAD:feat/phase2-git-provider
