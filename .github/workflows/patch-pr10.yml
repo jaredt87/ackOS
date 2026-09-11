@@ -1,7 +1,7 @@
 name: Patch PR10
 on:
-  push:
-    branches: [feat/phase2-git-provider]
+  pull_request:
+    types: [synchronize]
 permissions:
   contents: write
 jobs:
@@ -50,16 +50,15 @@ jobs:
 \t}
 \tdone := make(chan error, 1)
 \tgo func() { done <- cmd.Wait() }()
-\tvar runErr error
 \tselect {
-\tcase runErr = <-done:
+\tcase runErr := <-done:
+\t\tif runErr != nil {
+\t\t\treturn "", fmt.Errorf("%w: %s", runErr, strings.TrimSpace(stderr.String()))
+\t\t}
 \tcase <-ctx.Done():
 \t\t_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-\t\trunErr = <-done
+\t\t<-done
 \t\treturn "", ctx.Err()
-\t}
-\tif runErr != nil {
-\t\treturn "", fmt.Errorf("%w: %s", runErr, strings.TrimSpace(stderr.String()))
 \t}
 \toutput := stdout.String()
 \tfor _, arg := range args {
