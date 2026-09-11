@@ -311,7 +311,11 @@ func requireNoInProgressGitOperation(ctx context.Context, target Target) error {
 		if err != nil {
 			return fmt.Errorf("inspect Git operation state: %w", err)
 		}
-		if _, err := os.Stat(strings.TrimSpace(path)); err == nil {
+		path = strings.TrimSpace(path)
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(target.Repository, path)
+		}
+		if _, err := os.Stat(path); err == nil {
 			return fmt.Errorf("Git operation is already in progress: %s", marker)
 		} else if !os.IsNotExist(err) {
 			return fmt.Errorf("inspect Git operation state %s: %w", marker, err)
@@ -322,7 +326,11 @@ func requireNoInProgressGitOperation(ctx context.Context, target Target) error {
 		if err != nil {
 			return fmt.Errorf("inspect Git operation state: %w", err)
 		}
-		if info, err := os.Stat(strings.TrimSpace(path)); err == nil && info.IsDir() {
+		path = strings.TrimSpace(path)
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(target.Repository, path)
+		}
+		if info, err := os.Stat(path); err == nil && info.IsDir() {
 			return fmt.Errorf("Git operation is already in progress: %s", marker)
 		} else if err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("inspect Git operation state %s: %w", marker, err)
