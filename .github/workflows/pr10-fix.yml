@@ -1,0 +1,56 @@
+name: PR10 fix
+
+on:
+  push:
+    branches:
+      - feat/phase2-git-provider
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply latest PR10 fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('integrations/git/provider.go')
+          s = p.read_text()
+          old = '''\tif filepath.Base(e.Target.Path) == ".gitattributes" {\n\t\treturn kernel.ExecutionResult{Message: "git .gitattributes targets are not supported because the target can change its own filter environment"}\n\t}'''
+          new = '''\tif strings.EqualFold(filepath.Base(e.Target.Path), ".gitattributes") {\n\t\treturn kernel.ExecutionResult{Message: "git .gitattributes targets are not supported because the target can change its own filter environment"}\n\t}'''
+          assert old in s
+          s = s.replace(old, new, 1)
+          old = '''\tmessage := "ackOS: execute " + authority.ExecutionID\n\tif _, err := e.git(ctx, "-c", "core.hooksPath=/dev/null", "commit", "--no-verify", "-m", message); err != nil {\n\t\treturn kernel.ExecutionResult{Message: fmt.Sprintf("git commit: %v", err)}\n\t}'''
+          new = '''\tmessage := "ackOS: execute " + authority.ExecutionID\n\ttree, err := e.git(ctx, "write-tree")\n\tif err != nil {\n\t\treturn kernel.ExecutionResult{Message: fmt.Sprintf("write Git tree: %v", err)}\n\t}\n\tcommit, err := e.git(ctx, "commit-tree", tree, "-p", head, "-m", message)\n\tif err != nil {\n\t\treturn kernel.ExecutionResult{Message: fmt.Sprintf("create Git commit: %v", err)}\n\t}\n\tcommit = strings.TrimSpace(commit)\n\tif commit == "" {\n\t\treturn kernel.ExecutionResult{Message: "create Git commit: empty commit ID"}\n\t}\n\tif _, err := e.git(ctx, "update-ref", "HEAD", commit, head); err != nil {\n\t\treturn kernel.ExecutionResult{Message: fmt.Sprintf("install Git commit: %v", err)}\n\t}'''
+          assert old in s
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          t = Path('integrations/git/provider_test.go')
+          s = t.read_text()
+          marker = 'func TestProviderLifecyclePreservesBlobWhitespace(t *testing.T) {'
+          test = r'''func TestNewTargetRejectsCaseAliasOfGitAttributes(t *testing.T) {
+          dir := t.TempDir()
+          gitTest(t, dir, "init")
+          path := filepath.Join(dir, ".GITATTRIBUTES")
+          if err := os.WriteFile(path, []byte("*.txt text"), 0o644); err != nil { t.Fatal(err) }
+          if _, err := NewTarget(dir, ".GITATTRIBUTES", "repo:.GITATTRIBUTES"); err == nil { t.Fatal("accepted case alias of .gitattributes") }
+        }
+
+        '''
+          assert marker in s
+          s = s.replace(marker, test + marker, 1)
+          t.write_text(s)
+          PY
+          gofmt -w integrations/git/provider.go integrations/git/provider_test.go
+          git diff --check
+          if git diff --quiet; then exit 0; fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add integrations/git/provider.go integrations/git/provider_test.go
+          git commit -m 'fix: bind Git commit to captured HEAD'
+          git push origin HEAD:feat/phase2-git-provider
