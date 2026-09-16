@@ -130,8 +130,11 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err := requireNoInProgressGitOperation(ctx, e.Target); err != nil {
 		return kernel.ExecutionResult{Message: err.Error()}
 	}
-	if filepath.Base(e.Target.Path) == ".gitattributes" {
+	if strings.EqualFold(filepath.Base(e.Target.Path), ".gitattributes") {
 		return kernel.ExecutionResult{Message: "git .gitattributes targets are not supported because the target can change its own filter environment"}
+	}
+	if err := requireCommitIdentity(ctx, e.Target); err != nil {
+		return kernel.ExecutionResult{Message: err.Error()}
 	}
 	if err := os.WriteFile(filepath.Join(e.Target.Repository, e.Target.Path), []byte(t.After), 0o644); err != nil {
 		return kernel.ExecutionResult{Message: fmt.Sprintf("write git file: %v", err)}
@@ -308,6 +311,15 @@ func validateNoSymlinks(target Target) error {
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("git target is not a regular file")
+	}
+	return nil
+}
+
+func requireCommitIdentity(ctx context.Context, target Target) error {
+	for _, identity := range []string{"GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"} {
+		if _, err := runGit(ctx, target.Repository, "var", identity); err != nil {
+			return fmt.Errorf("Git commit identity is not configured: %s: %w", identity, err)
+		}
 	}
 	return nil
 }
