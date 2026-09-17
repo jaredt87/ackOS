@@ -71,7 +71,7 @@ func TestRejectAttributesTargetResolvesGitPathname(t *testing.T) {
 
 func TestRejectConfiguredNormalizationRejectsIdent(t *testing.T) {
 	target, _, _, _, _ := newTestProvider(t, "initial")
-	if err := os.WriteFile(filepath.Join(target.Repository, ".gitattributes"), []byte("target.txt ident\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(target.Repository, ".gitattributes"), []byte(target.Path+" ident\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitTest(t, target.Repository, "add", "--", ".gitattributes")
@@ -85,7 +85,7 @@ func TestRejectConfiguredNormalizationRejectsIdent(t *testing.T) {
 
 func TestRejectConfiguredNormalizationRejectsWorkingTreeEncoding(t *testing.T) {
 	target, _, _, _, _ := newTestProvider(t, "initial")
-	if err := os.WriteFile(filepath.Join(target.Repository, ".gitattributes"), []byte("target.txt working-tree-encoding=UTF-8\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(target.Repository, ".gitattributes"), []byte(target.Path+" working-tree-encoding=UTF-8\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitTest(t, target.Repository, "add", "--", ".gitattributes")
