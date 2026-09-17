@@ -80,8 +80,12 @@ func TestRejectGitConfigTargetRejectsActiveGitConfigInclude(t *testing.T) {
 	gitTest(t, target.Repository, "add", "--", "tracked-config.inc")
 	gitTest(t, target.Repository, "commit", "-m", "add tracked config include")
 	gitTest(t, target.Repository, "config", "include.path", "../tracked-config.inc")
+	configTarget, err := NewTarget(target.Repository, "tracked-config.inc", "test-repo:tracked-config.inc")
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	err := rejectGitConfigTarget(context.Background(), target)
+	err = rejectGitConfigTarget(context.Background(), configTarget)
 	if err == nil || !strings.Contains(err.Error(), "configuration source") {
 		t.Fatalf("error = %v, want active Git configuration source rejection", err)
 	}
