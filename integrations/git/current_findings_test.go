@@ -20,7 +20,7 @@ func TestRejectConfiguredNormalizationRejectsAutocrlf(t *testing.T) {
 
 func TestRejectConfiguredNormalizationRejectsEOLAttribute(t *testing.T) {
 	target, _, _, _, _ := newTestProvider(t, "initial")
-	if err := os.WriteFile(filepath.Join(target.Repository, ".gitattributes"), []byte(target.Path+" text eol=crlf\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(target.Repository, ".gitattributes"), []byte("*.md text eol=crlf\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitTest(t, target.Repository, "add", "--", ".gitattributes")
