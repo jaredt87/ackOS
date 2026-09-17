@@ -9,7 +9,6 @@ permissions:
 
 jobs:
   fix:
-    if: github.actor == 'jaredt87'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,51 +18,12 @@ jobs:
           from pathlib import Path
           p = Path('integrations/git/provider.go')
           s = p.read_text()
-          old = '''\tif err := rejectAttributesTarget(ctx, e.Target); err != nil {\n\t\treturn fail(err)\n\t}\n\tif err := rejectGrafts(ctx, e.Target); err != nil {'''
-          new = '''\tif err := rejectAttributesTarget(ctx, e.Target); err != nil {\n\t\treturn fail(err)\n\t}\n\tif err := rejectGitConfigTarget(ctx, e.Target); err != nil {\n\t\treturn fail(err)\n\t}\n\tif err := rejectGrafts(ctx, e.Target); err != nil {'''
-          if old not in s:
-              raise SystemExit('executor insertion point not found')
-          s = s.replace(old, new, 1)
-          old = '''\tif err := rejectGrafts(ctx, v.Target); err != nil {\n\t\treturn kernel.Observation{}, err\n\t}\n\tcontent, err := v.read(ctx)'''
-          new = '''\tif err := rejectGitConfigTarget(ctx, v.Target); err != nil {\n\t\treturn kernel.Observation{}, err\n\t}\n\tif err := rejectGrafts(ctx, v.Target); err != nil {\n\t\treturn kernel.Observation{}, err\n\t}\n\tcontent, err := v.read(ctx)'''
-          if old not in s:
-              raise SystemExit('verifier insertion point not found')
-          s = s.replace(old, new, 1)
-          marker = '''func rejectGrafts(ctx context.Context, target Target) error {'''
-          fn = r'''func rejectGitConfigTarget(ctx context.Context, target Target) error {
-\toutput, err := runGit(ctx, target.Repository, "config", "--includes", "--show-origin", "--list")
-\tif err != nil {
-\t\treturn fmt.Errorf("inspect Git configuration sources: %w", err)
-\t}
-\tconfigured, err := filepath.Abs(filepath.Join(target.Repository, target.Path))
-\tif err != nil {
-\t\treturn fmt.Errorf("resolve configured Git target path: %w", err)
-\t}
-\tfor _, line := range strings.Split(output, "\\n") {
-\t\tline = strings.TrimSpace(line)
-\t\tif line == "" {
-\t\t\tcontinue
-\t\t}
-\t\torigin, _, ok := strings.Cut(line, "\\t")
-\t\tif !ok || !strings.HasPrefix(origin, "file:") {
-\t\t\tcontinue
-\t\t}
-\t\tpath := strings.TrimPrefix(origin, "file:")
-\t\tif path == "" || strings.HasPrefix(path, "command line:") || strings.HasPrefix(path, "standard input:") {
-\t\t\tcontinue
-\t\t}
-\t\tactual, err := filepath.Abs(path)
-\t\tif err != nil {
-\t\t\treturn fmt.Errorf("resolve Git configuration source: %w", err)
-\t\t}
-\t\tif actual == configured {
-\t\t\treturn fmt.Errorf("git target is an active Git configuration source")
-\t\t}
-\t}
-\treturn nil
-}
-
-'''
+          if 'func rejectGitConfigTarget' in s:
+              raise SystemExit(0)
+          s = s.replace('''\tif err := rejectAttributesTarget(ctx, e.Target); err != nil {\n\t\treturn fail(err)\n\t}\n\tif err := rejectGrafts(ctx, e.Target); err != nil {''', '''\tif err := rejectAttributesTarget(ctx, e.Target); err != nil {\n\t\treturn fail(err)\n\t}\n\tif err := rejectGitConfigTarget(ctx, e.Target); err != nil {\n\t\treturn fail(err)\n\t}\n\tif err := rejectGrafts(ctx, e.Target); err != nil {''', 1)
+          s = s.replace('''\tif err := rejectGrafts(ctx, v.Target); err != nil {\n\t\treturn kernel.Observation{}, err\n\t}\n\tcontent, err := v.read(ctx)''', '''\tif err := rejectGitConfigTarget(ctx, v.Target); err != nil {\n\t\treturn kernel.Observation{}, err\n\t}\n\tif err := rejectGrafts(ctx, v.Target); err != nil {\n\t\treturn kernel.Observation{}, err\n\t}\n\tcontent, err := v.read(ctx)''', 1)
+          marker = 'func rejectGrafts(ctx context.Context, target Target) error {'
+          fn = '''func rejectGitConfigTarget(ctx context.Context, target Target) error {\n\toutput, err := runGit(ctx, target.Repository, "config", "--includes", "--show-origin", "--list")\n\tif err != nil {\n\t\treturn fmt.Errorf("inspect Git configuration sources: %w", err)\n\t}\n\tconfigured, err := filepath.Abs(filepath.Join(target.Repository, target.Path))\n\tif err != nil {\n\t\treturn fmt.Errorf("resolve configured Git target path: %w", err)\n\t}\n\tfor _, line := range strings.Split(output, "\\n") {\n\t\tline = strings.TrimSpace(line)\n\t\tif line == "" {\n\t\t\tcontinue\n\t\t}\n\t\torigin, _, ok := strings.Cut(line, "\\t")\n\t\tif !ok || !strings.HasPrefix(origin, "file:") {\n\t\t\tcontinue\n\t\t}\n\t\tpath := strings.TrimPrefix(origin, "file:")\n\t\tif path == "" {\n\t\t\tcontinue\n\t\t}\n\t\tactual, err := filepath.Abs(path)\n\t\tif err != nil {\n\t\t\treturn fmt.Errorf("resolve Git configuration source: %w", err)\n\t\t}\n\t\tif actual == configured {\n\t\t\treturn fmt.Errorf("git target is an active Git configuration source")\n\t\t}\n\t}\n\treturn nil\n}\n\n'''
           if marker not in s:
               raise SystemExit('function insertion point not found')
           s = s.replace(marker, fn + marker, 1)
@@ -73,5 +33,6 @@ jobs:
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add integrations/git/provider.go
+          git diff --cached --quiet && exit 0
           git commit -m 'fix: reject active Git config sources'
           git push
