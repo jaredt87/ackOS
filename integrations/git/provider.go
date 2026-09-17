@@ -99,13 +99,6 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err := requireNoInProgressGitOperation(ctx, e.Target); err != nil {
 		return fail(err)
 	}
-	status, err := e.git(ctx, "status", "--porcelain", "--untracked-files=all")
-	if err != nil {
-		return fail(fmt.Errorf("read git status: %w", err))
-	}
-	if status != "" {
-		return fail(fmt.Errorf("git worktree is not clean"))
-	}
 	if err := rejectConfiguredFilters(ctx, e.Target); err != nil {
 		return fail(err)
 	}
@@ -114,6 +107,16 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	}
 	if err := rejectAttributesTarget(ctx, e.Target); err != nil {
 		return fail(err)
+	}
+	if err := rejectGrafts(ctx, e.Target); err != nil {
+		return fail(err)
+	}
+	status, err := e.git(ctx, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		return fail(fmt.Errorf("read git status: %w", err))
+	}
+	if status != "" {
+		return fail(fmt.Errorf("git worktree is not clean"))
 	}
 	if err := requireCommitIdentity(ctx, e.Target); err != nil {
 		return fail(err)
@@ -222,6 +225,9 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, err
 	}
 	if err := rejectConfiguredNormalization(ctx, v.Target); err != nil {
+		return kernel.Observation{}, err
+	}
+	if err := rejectGrafts(ctx, v.Target); err != nil {
 		return kernel.Observation{}, err
 	}
 	content, err := v.read(ctx)
@@ -369,7 +375,7 @@ func atomicWriteTarget(target Target, content []byte) error {
 	dir := filepath.Dir(path)
 	mode := os.FileMode(0o644)
 	if info, err := os.Stat(path); err == nil {
-		mode = info.Mode().Perm()
+		mode = info.Mode()
 	}
 	tmp, err := os.CreateTemp(dir, ".ackos-write-*")
 	if err != nil {
@@ -481,6 +487,46 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 	return nil
 }
 
+func rejectGrafts(ctx context.Context, target Target) error {
+	path, err := runGit(ctx, target.Repository, "rev-parse", "--git-path", "info/grafts")
+	if err != nil {
+		return fmt.Errorf("inspect Git graft file: %w", err)
+	}
+	path = strings.TrimSpace(path)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(target.Repository, path)
+	}
+	if _, err := os.Stat(path); err == nil {
+		return fmt.Errorf("Git graft file is not supported")
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("inspect Git graft file: %w", err)
+	}
+	return nil
+}
+
+func rejectConfiguredFilters(ctx context.Context, target Target) error {
+	attrs, err := targetGitAttr(ctx, target)
+	if err != nil {
+		return err
+	}
+	if attrs != "unspecified" && attrs != "unset" {
+		return fmt.Errorf("git target uses a configured clean filter; filtered targets are not supported")
+	}
+	return nil
+}
+
+func targetGitAttr(ctx context.Context, target Target) (string, error) {
+	output, err := runGit(ctx, target.Repository, "check-attr", "-z", "filter", "--", target.Path)
+	if err != nil {
+		return "", fmt.Errorf("inspect Git clean filter: %w", err)
+	}
+	parts := strings.Split(strings.TrimSuffix(output, "\x00"), "\x00")
+	if len(parts) != 3 || parts[0] != target.Path || parts[1] != "filter" {
+		return "", fmt.Errorf("unexpected Git clean filter metadata")
+	}
+	return parts[2], nil
+}
+
 func rejectConfiguredNormalization(ctx context.Context, target Target) error {
 	autocrlf, err := runGit(ctx, target.Repository, "config", "--get", "core.autocrlf")
 	if err == nil {
@@ -489,19 +535,31 @@ func rejectConfiguredNormalization(ctx context.Context, target Target) error {
 			return fmt.Errorf("git target uses core.autocrlf normalization; normalized targets are not supported")
 		}
 	}
-	output, err := runGit(ctx, target.Repository, "check-attr", "-z", "text", "eol", "--", literalPathspec(target.Path))
+	output, err := runGit(ctx, target.Repository, "check-attr", "-z", "text", "eol", "ident", "working-tree-encoding", "--", target.Path)
 	if err != nil {
 		return fmt.Errorf("inspect Git text normalization: %w", err)
 	}
-	parts := strings.Split(strings.Trim(output, "\x00"), "\x00")
-	if len(parts) != 6 || parts[1] != "text" || parts[4] != "eol" {
+	parts := strings.Split(strings.TrimSuffix(output, "\x00"), "\x00")
+	if len(parts) != 12 || parts[0] != target.Path {
 		return fmt.Errorf("unexpected Git text normalization metadata")
 	}
-	if parts[2] != "unspecified" && parts[2] != "unset" {
+	values := map[string]string{
+		parts[1]: parts[2],
+		parts[4]: parts[5],
+		parts[7]: parts[8],
+		parts[10]: parts[11],
+	}
+	if values["text"] != "unspecified" && values["text"] != "unset" {
 		return fmt.Errorf("git target uses a configured text normalization attribute; normalized targets are not supported")
 	}
-	if parts[5] != "unspecified" && parts[5] != "unset" {
+	if values["eol"] != "unspecified" && values["eol"] != "unset" {
 		return fmt.Errorf("git target uses a configured eol attribute; normalized targets are not supported")
+	}
+	if values["ident"] != "unspecified" && values["ident"] != "unset" {
+		return fmt.Errorf("git target uses a configured ident attribute; normalized targets are not supported")
+	}
+	if values["working-tree-encoding"] != "unspecified" && values["working-tree-encoding"] != "unset" {
+		return fmt.Errorf("git target uses working-tree-encoding; encoded targets are not supported")
 	}
 	return nil
 }
@@ -606,29 +664,6 @@ func (v Verifier) requireTracked(ctx context.Context) error {
 	return nil
 }
 
-func rejectConfiguredFilters(ctx context.Context, target Target) error {
-	attrs, err := targetGitAttr(ctx, target)
-	if err != nil {
-		return err
-	}
-	if attrs != "unspecified" && attrs != "unset" {
-		return fmt.Errorf("git target uses a configured clean filter; filtered targets are not supported")
-	}
-	return nil
-}
-
-func targetGitAttr(ctx context.Context, target Target) (string, error) {
-	output, err := runGit(ctx, target.Repository, "check-attr", "-z", "filter", "--", literalPathspec(target.Path))
-	if err != nil {
-		return "", fmt.Errorf("inspect Git clean filter: %w", err)
-	}
-	parts := strings.Split(strings.Trim(output, "\x00"), "\x00")
-	if len(parts) < 3 || parts[len(parts)-2] != "filter" {
-		return "", fmt.Errorf("unexpected Git clean filter metadata")
-	}
-	return parts[len(parts)-1], nil
-}
-
 func gitBlobHash(ctx context.Context, target Target, content string) (string, error) {
 	tmp, err := os.CreateTemp("", "ackos-git-blob-*")
 	if err != nil {
@@ -679,7 +714,7 @@ func (v Verifier) git(ctx context.Context, args ...string) (string, error) {
 }
 
 func runGit(ctx context.Context, repository string, args ...string) (string, error) {
-	gitArgs := append([]string{"-c", "core.fsmonitor=false"}, args...)
+	gitArgs := append([]string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"}, args...)
 	cmd := exec.Command("git", gitArgs...)
 	cmd.Dir = repository
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -719,10 +754,24 @@ func runGit(ctx context.Context, repository string, args ...string) (string, err
 }
 
 func sanitizedGitEnv() []string {
+	blocked := map[string]struct{}{
+		"GIT_DIR": {},
+		"GIT_WORK_TREE": {},
+		"GIT_INDEX_FILE": {},
+		"GIT_OBJECT_DIRECTORY": {},
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES": {},
+		"GIT_COMMON_DIR": {},
+		"GIT_NAMESPACE": {},
+		"GIT_CEILING_DIRECTORIES": {},
+		"GIT_DISCOVERY_ACROSS_FILESYSTEM": {},
+		"GIT_GRAFT_FILE": {},
+	}
 	env := make([]string, 0, len(os.Environ()))
 	for _, entry := range os.Environ() {
-		if strings.HasPrefix(entry, "GIT_") {
-			continue
+		if key, _, ok := strings.Cut(entry, "="); ok {
+			if _, blocked := blocked[key]; blocked {
+				continue
+			}
 		}
 		env = append(env, entry)
 	}
