@@ -83,11 +83,9 @@ func TestRejectGitConfigTargetRejectsActiveGitConfigInclude(t *testing.T) {
 
 	debugConfig, debugErr := runGit(context.Background(), target.Repository, "config", "--local", "--get-regexp", "^include")
 	t.Logf("local include config: %q err=%v", debugConfig, debugErr)
-	debugConfig, debugErr := runGit(context.Background(), target.Repository, "config", "--local", "--get-regexp", "^include")
-	t.Logf("local include config: %q err=%v", debugConfig, debugErr)
 	err := rejectGitConfigTarget(context.Background(), target)
 	if err == nil || !strings.Contains(err.Error(), "configuration source") {
-		t.Fatalf("error = %v, local include config = %q, debug err = %v, want active Git configuration source rejection", err, debugConfig, debugErr)
+		t.Fatalf("error = %v, want active Git configuration source rejection", err)
 	}
 }
 
