@@ -17,281 +17,63 @@ jobs:
         with:
           ref: feat/phase2-git-provider
           fetch-depth: 0
-      - name: Apply hardening
+      - name: Apply metadata hardening
         run: |
           python3 - <<'PY'
           from pathlib import Path
-
           p = Path('integrations/git/provider.go')
           s = p.read_text()
-
-          old = '''func rejectConfiguredFilters(ctx context.Context, target Target) error {
-\tattrs, err := targetGitAttr(ctx, target)
-\tif err != nil {
-\t\treturn err
+          if 'func rejectUnpreservableMetadata(' in s:
+              raise SystemExit(0)
+          old = '''func atomicWriteTarget(target Target, content []byte) error {
+\tpath := filepath.Join(target.Repository, target.Path)
+\tdir := filepath.Dir(path)
+\tmode := os.FileMode(0o644)
+\tif info, err := os.Stat(path); err == nil {
+\t\tmode = info.Mode()
 \t}
-\tif attrs != "unspecified" && attrs != "unset" {
-\t\treturn fmt.Errorf("git target uses a configured clean filter; filtered targets are not supported")
-\t}
-\treturn nil
-}
 '''
-          new = '''func rejectConfiguredFilters(ctx context.Context, target Target) error {
-\tpaths, err := runGit(ctx, target.Repository, "ls-files", "-z", "--cached")
-\tif err != nil {
-\t\treturn fmt.Errorf("inspect tracked Git paths: %w", err)
-\t}
-\tif strings.TrimSuffix(paths, "\\x00") == "" {
-\t\treturn nil
-\t}
-\tattrs, err := runGitInput(ctx, target.Repository, []byte(paths), "check-attr", "-z", "--stdin", "filter")
-\tif err != nil {
-\t\treturn fmt.Errorf("inspect Git clean filters: %w", err)
-\t}
-\tparts := strings.Split(strings.TrimSuffix(attrs, "\\x00"), "\\x00")
-\tif len(parts)%3 != 0 {
-\t\treturn fmt.Errorf("unexpected Git clean filter metadata")
-\t}
-\tfor i := 0; i < len(parts); i += 3 {
-\t\tif parts[i+1] != "filter" {
-\t\t\treturn fmt.Errorf("unexpected Git clean filter metadata")
+          new = '''func atomicWriteTarget(target Target, content []byte) error {
+\tpath := filepath.Join(target.Repository, target.Path)
+\tdir := filepath.Dir(path)
+\tmode := os.FileMode(0o644)
+\tif info, err := os.Stat(path); err == nil {
+\t\tif err := rejectUnpreservableMetadata(path, info); err != nil {
+\t\t\treturn err
 \t\t}
-\t\tif parts[i+2] != "unspecified" && parts[i+2] != "unset" {
-\t\t\treturn fmt.Errorf("git target repository uses a configured clean filter; filtered repositories are not supported")
-\t\t}
+\t\tmode = info.Mode()
 \t}
-\treturn nil
-}
 '''
-          if old not in s:
-              raise SystemExit('rejectConfiguredFilters block not found')
+          if old not in s: raise SystemExit('atomic write block not found')
           s = s.replace(old, new, 1)
-
-          old = '''func verifyLatestCommit(v Verifier, ctx context.Context, t kernel.Transition, executionID string) error {
-\treturn verifyCommitAt(ctx, v.Target, func(args ...string) (string, error) { return v.git(ctx, args...) }, "", t, executionID)
-}
-'''
-          new = '''func verifyLatestCommit(v Verifier, ctx context.Context, t kernel.Transition, executionID string) error {
-\treturn verifyCommitAt(ctx, v.Target, func(args ...string) (string, error) { return v.git(ctx, args...) }, "", t, executionID)
-}
-'''
-          if old not in s:
-              raise SystemExit('verifyLatestCommit block not found')
-
-          old = '''\tif err := verifyLatestCommit(v, ctx, t, authority.ExecutionID); err != nil {
-\t\treturn kernel.Observation{}, err
-\t}
-\tfinalContent, err := v.read(ctx)
-\tif err != nil {
-\t\treturn kernel.Observation{}, err
-\t}
-\tif finalContent != t.After {
-\t\treturn kernel.Observation{}, fmt.Errorf("git file changed during verification")
-\t}
-\treturn kernel.NewObservation(v.Target.Subject, finalContent, 0, time.Now().UTC())
-'''
-          new = '''\tif err := verifyLatestCommit(v, ctx, t, authority.ExecutionID); err != nil {
-\t\treturn kernel.Observation{}, err
-\t}
-\tverifiedHead, err := v.git(ctx, "rev-parse", "HEAD")
-\tif err != nil {
-\t\treturn kernel.Observation{}, fmt.Errorf("re-read verified Git HEAD: %w", err)
-\t}
-\tfinalContent, err := v.read(ctx)
-\tif err != nil {
-\t\treturn kernel.Observation{}, err
-\t}
-\tif finalContent != t.After {
-\t\treturn kernel.Observation{}, fmt.Errorf("git file changed during verification")
-\t}
-\tfinalHead, err := v.git(ctx, "rev-parse", "HEAD")
-\tif err != nil {
-\t\treturn kernel.Observation{}, fmt.Errorf("re-read Git HEAD at verification return boundary: %w", err)
-\t}
-\tif finalHead != verifiedHead {
-\t\treturn kernel.Observation{}, fmt.Errorf("Git HEAD changed during verification")
-\t}
-\treturn kernel.NewObservation(v.Target.Subject, finalContent, 0, time.Now().UTC())
-'''
-          if old not in s:
-              raise SystemExit('Verify final boundary block not found')
-          s = s.replace(old, new, 1)
-
-          old = '''func runGit(ctx context.Context, repository string, args ...string) (string, error) {
-\tgitArgs := append([]string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"}, args...)
-\tcmd := exec.Command("git", gitArgs...)
-\tcmd.Dir = repository
-\tcmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-\tcmd.WaitDelay = 2 * time.Second
-\tcmd.Env = sanitizedGitEnv()
-\tvar stdout, stderr bytes.Buffer
-\tcmd.Stdout = &stdout
-\tcmd.Stderr = &stderr
-\tif err := cmd.Start(); err != nil {
-\t\treturn "", fmt.Errorf("start git: %w", err)
-\t}
-\tdone := make(chan error, 1)
-\tgo func() { done <- cmd.Wait() }()
-\tselect {
-\tcase runErr := <-done:
-\t\tif runErr != nil {
-\t\t\treturn "", fmt.Errorf("%w: %s", runErr, strings.TrimSpace(stderr.String()))
-\t\t}
-\tcase <-ctx.Done():
-\t\t_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-\t\tselect {
-\t\tcase <-done:
-\t\tcase <-time.After(cmd.WaitDelay):
-\t\t}
-\t\treturn "", ctx.Err()
-\t}
-\toutput := stdout.String()
-\tfor _, arg := range args {
-\t\tif arg == "-z" {
-\t\t\treturn output, nil
+          marker = 'func requireCommitIdentity(ctx context.Context, target Target) error {'
+          helper = '''func rejectUnpreservableMetadata(path string, info os.FileInfo) error {
+\tif stat, ok := info.Sys().(*syscall.Stat_t); ok {
+\t\tif uint32(os.Geteuid()) != stat.Uid || uint32(os.Getegid()) != stat.Gid {
+\t\t\treturn fmt.Errorf("git target ownership cannot be preserved by atomic replacement")
 \t\t}
 \t}
-\tif len(args) > 0 && args[0] == "show" {
-\t\treturn output, nil
-\t}
-\treturn strings.TrimSpace(output), nil
-}
-'''
-          new = '''func runGit(ctx context.Context, repository string, args ...string) (string, error) {
-\treturn runGitWithInput(ctx, repository, nil, nil, args...)
-}
-
-func runGitInput(ctx context.Context, repository string, input []byte, args ...string) (string, error) {
-\treturn runGitWithInput(ctx, repository, input, nil, args...)
-}
-
-func runGitWithEnv(ctx context.Context, repository string, env map[string]string, args ...string) (string, error) {
-\treturn runGitWithInput(ctx, repository, nil, env, args...)
-}
-
-func runGitWithInput(ctx context.Context, repository string, input []byte, overrides map[string]string, args ...string) (string, error) {
-\tgitArgs := append([]string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"}, args...)
-\tcmd := exec.Command("git", gitArgs...)
-\tcmd.Dir = repository
-\tcmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-\tcmd.WaitDelay = 2 * time.Second
-\tcmd.Env = sanitizedGitEnv()
-\tfor key, value := range overrides {
-\t\tcmd.Env = append(cmd.Env, key+"="+value)
-\t}
-\tif input != nil {
-\t\tcmd.Stdin = bytes.NewReader(input)
-\t}
-\tvar stdout, stderr bytes.Buffer
-\tcmd.Stdout = &stdout
-\tcmd.Stderr = &stderr
-\tif err := cmd.Start(); err != nil {
-\t\treturn "", fmt.Errorf("start git: %w", err)
-\t}
-\tdone := make(chan error, 1)
-\tgo func() { done <- cmd.Wait() }()
-\tselect {
-\tcase runErr := <-done:
-\t\tif runErr != nil {
-\t\t\treturn "", fmt.Errorf("%w: %s", runErr, strings.TrimSpace(stderr.String()))
+\tfor size := 256; ; size *= 2 {
+\t\tbuf := make([]byte, size)
+\t\tn, err := syscall.Listxattr(path, buf)
+\t\tif err == syscall.ENOTSUP || err == syscall.EOPNOTSUPP {
+\t\t\treturn nil
 \t\t}
-\tcase <-ctx.Done():
-\t\t_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-\t\tselect {
-\t\tcase <-done:
-\t\tcase <-time.After(cmd.WaitDelay):
+\t\tif err != nil {
+\t\t\treturn fmt.Errorf("inspect git target extended attributes: %w", err)
 \t\t}
-\t\treturn "", ctx.Err()
-\t}
-\toutput := stdout.String()
-\tfor _, arg := range args {
-\t\tif arg == "-z" {
-\t\t\treturn output, nil
+\t\tif n == 0 {
+\t\t\treturn nil
+\t\t}
+\t\tif n < len(buf) {
+\t\t\treturn fmt.Errorf("git target has extended attributes or ACLs that cannot be preserved by atomic replacement")
 \t\t}
 \t}
-\tif len(args) > 0 && args[0] == "show" {
-\t\treturn output, nil
-\t}
-\treturn strings.TrimSpace(output), nil
-}
-'''
-          if old not in s:
-              raise SystemExit('runGit block not found')
-          s = s.replace(old, new, 1)
-
-          old = '''\tif _, err := e.git(ctx, "-c", "core.hooksPath=/dev/null", "commit", "--no-verify", "--no-gpg-sign", "--only", "-m", message, "--", literalPathspec(e.Target.Path)); err != nil {
-\t\treturn fail(fmt.Errorf("git commit: %w", err))
-\t}
-'''
-          new = '''\tif err := commitVerifiedTree(ctx, e.Target, head, afterHash, message); err != nil {
-\t\treturn fail(err)
-\t}
-'''
-          if old not in s:
-              raise SystemExit('commit block not found')
-          s = s.replace(old, new, 1)
-
-          marker = '''func verifyCommit(e Executor, ctx context.Context, parent string, t kernel.Transition, executionID string) error {
-'''
-          helper = r'''func commitVerifiedTree(ctx context.Context, target Target, parent, afterHash, message string) error {
-	blob, err := runGitInput(ctx, target.Repository, []byte{}, "hash-object", "-w", "--stdin")
-	if err != nil {
-		return fmt.Errorf("store authorized Git blob: %w", err)
-	}
-	if strings.TrimSpace(blob) != afterHash {
-		return fmt.Errorf("authorized Git blob hash changed before commit")
-	}
-	modeOutput, err := runGit(ctx, target.Repository, "ls-files", "--format=%(objectmode)", "--", literalPathspec(target.Path))
-	if err != nil {
-		return fmt.Errorf("read target Git mode: %w", err)
-	}
-	mode := strings.TrimSpace(modeOutput)
-	if mode == "" {
-		return fmt.Errorf("target Git mode is missing")
-	}
-	indexFile, err := os.CreateTemp(target.Repository, ".ackos-index-*")
-	if err != nil {
-		return fmt.Errorf("create temporary Git index: %w", err)
-	}
-	indexPath := indexFile.Name()
-	if err := indexFile.Close(); err != nil {
-		_ = os.Remove(indexPath)
-		return fmt.Errorf("close temporary Git index: %w", err)
-	}
-	defer os.Remove(indexPath)
-	env := map[string]string{"GIT_INDEX_FILE": indexPath}
-	if _, err := runGitWithEnv(ctx, target.Repository, env, "read-tree", parent); err != nil {
-		return fmt.Errorf("capture Git parent index: %w", err)
-	}
-	if _, err := runGitWithEnv(ctx, target.Repository, env, "update-index", "--add", "--cacheinfo", mode, strings.TrimSpace(blob), target.Path); err != nil {
-		return fmt.Errorf("install authorized target in temporary Git index: %w", err)
-	}
-	tree, err := runGitWithEnv(ctx, target.Repository, env, "write-tree")
-	if err != nil {
-		return fmt.Errorf("write authorized Git tree: %w", err)
-	}
-	commit, err := runGit(ctx, target.Repository, "commit-tree", strings.TrimSpace(tree), "-p", parent, "-m", message, "--no-gpg-sign")
-	if err != nil {
-		return fmt.Errorf("create authorized Git commit: %w", err)
-	}
-	commit = strings.TrimSpace(commit)
-	if commit == "" {
-		return fmt.Errorf("Git commit object is missing")
-	}
-	if _, err := runGit(ctx, target.Repository, "update-ref", "HEAD", commit, parent); err != nil {
-		return fmt.Errorf("atomically install authorized Git commit: %w", err)
-	}
-	if _, err := runGit(ctx, target.Repository, "add", "--", literalPathspec(target.Path)); err != nil {
-		return fmt.Errorf("synchronize Git index after commit: %w", err)
-	}
-	return nil
 }
 
 '''
-          if marker not in s:
-              raise SystemExit('verifyCommit marker not found')
+          if marker not in s: raise SystemExit('metadata marker not found')
           s = s.replace(marker, helper + marker, 1)
-
           p.write_text(s)
           PY
           gofmt -w integrations/git/provider.go
@@ -299,6 +81,7 @@ func runGitWithInput(ctx context.Context, repository string, input []byte, overr
           go test -race ./...
           git config user.name 'ackOS automation'
           git config user.email 'ackos-automation@example.invalid'
-          git add integrations/git/provider.go .github/workflows/pr10-hardening.yml
-          git commit -m 'fix: harden Git provider commit and filter boundaries' || exit 0
+          git rm .github/workflows/pr10-hardening.yml .github/workflows/ackos-pr10-fix.yml
+          git add integrations/git/provider.go
+          git commit -m 'fix: preserve unsupported file metadata safely'
           git push origin HEAD:feat/phase2-git-provider
