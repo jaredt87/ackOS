@@ -18,6 +18,18 @@ func TestRejectConfiguredNormalizationRejectsAutocrlf(t *testing.T) {
 	}
 }
 
+func TestRejectConfiguredNormalizationRejectsEOLAttribute(t *testing.T) {
+	target, _, _, _, _ := newTestProvider(t, "initial")
+	if err := os.WriteFile(filepath.Join(target.Repository, ".gitattributes"), []byte("docs/example.md text eol=crlf\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := rejectConfiguredNormalization(context.Background(), target)
+	if err == nil || !strings.Contains(err.Error(), "eol attribute") {
+		t.Fatalf("error = %v, want eol normalization rejection", err)
+	}
+}
+
 func TestRejectAttributesTargetResolvesGitPathname(t *testing.T) {
 	home := os.Getenv("HOME")
 	if home == "" {
