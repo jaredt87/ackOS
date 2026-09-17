@@ -257,6 +257,24 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	if finalContent != t.After {
 		return kernel.Observation{}, fmt.Errorf("git file changed during verification")
 	}
+	expectedMode, err := gitTreeMode(ctx, v.Target, verifiedHead)
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("read verified Git target mode: %w", err)
+	}
+	liveMode, err := liveTargetMode(v.Target)
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("read live Git target mode: %w", err)
+	}
+	if liveMode != expectedMode {
+		return kernel.Observation{}, fmt.Errorf("Git target mode changed during verification")
+	}
+	indexMode, err := gitIndexMode(ctx, v.Target)
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("read live Git index target mode: %w", err)
+	}
+	if indexMode != expectedMode {
+		return kernel.Observation{}, fmt.Errorf("Git index target mode changed during verification")
+	}
 	finalHead, err := v.git(ctx, "rev-parse", "HEAD")
 	if err != nil {
 		return kernel.Observation{}, fmt.Errorf("re-read Git HEAD at verification return boundary: %w", err)
@@ -943,6 +961,60 @@ func (v Verifier) requireTracked(ctx context.Context) error {
 		return fmt.Errorf("git target index state is not stageable")
 	}
 	return nil
+}
+
+func liveTargetMode(target Target) (string, error) {
+	parentFD, err := openParentDirNoSymlink(target)
+	if err != nil {
+		return "", err
+	}
+	defer syscall.Close(parentFD)
+	fd, err := syscall.Openat(parentFD, filepath.Base(filepath.Clean(target.Path)), syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return "", fmt.Errorf("open Git target for mode check: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), filepath.Join(target.Repository, target.Path))
+	if file == nil {
+		_ = syscall.Close(fd)
+		return "", fmt.Errorf("open Git target for mode check: invalid file descriptor")
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return "", fmt.Errorf("stat Git target for mode check: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("Git target is not a regular file")
+	}
+	switch info.Mode().Perm() {
+	case 0o644:
+		return "100644", nil
+	case 0o755:
+		return "100755", nil
+	default:
+		return "", fmt.Errorf("Git target has unsupported mode %o", info.Mode().Perm())
+	}
+}
+
+func gitIndexMode(ctx context.Context, target Target) (string, error) {
+	output, err := runGit(ctx, target.Repository, "ls-files", "--stage", "-z", "--", literalPathspec(target.Path))
+	if err != nil {
+		return "", err
+	}
+	output = strings.TrimSuffix(output, "\x00")
+	records := strings.Split(output, "\x00")
+	if len(records) != 1 {
+		return "", fmt.Errorf("unexpected Git index metadata")
+	}
+	meta, path, ok := strings.Cut(records[0], "\t")
+	if !ok || path != target.Path {
+		return "", fmt.Errorf("unexpected Git index target metadata")
+	}
+	fields := strings.Fields(meta)
+	if len(fields) != 3 || fields[2] != "0" || (fields[0] != "100644" && fields[0] != "100755") {
+		return "", fmt.Errorf("target Git index entry is not a regular file")
+	}
+	return fields[0], nil
 }
 
 func gitTreeMode(ctx context.Context, target Target, tree string) (string, error) {

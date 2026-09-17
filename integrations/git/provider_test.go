@@ -57,6 +57,42 @@ func TestProviderLifecycleCommitsExactTransition(t *testing.T) {
 	_ = recovery
 }
 
+func TestVerifierRejectsLiveTargetModeMutation(t *testing.T) {
+	target, observer, executor, verifier, _ := newTestProvider(t, "initial")
+	observation, err := observer.Observe(context.Background(), target.Subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition := kernel.Transition{Subject: target.Subject, Before: observation.State, After: "updated"}
+	authority := kernel.Authority{ExecutionID: "attempt-live-mode"}
+	if result := executor.Execute(context.Background(), transition, authority); !result.Success {
+		t.Fatal(result.Message)
+	}
+	if err := os.Chmod(filepath.Join(target.Repository, target.Path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil || !strings.Contains(err.Error(), "target mode changed") {
+		t.Fatalf("verifier error = %v, want live target mode rejection", err)
+	}
+}
+
+func TestVerifierRejectsLiveIndexTargetModeMutation(t *testing.T) {
+	target, observer, executor, verifier, _ := newTestProvider(t, "initial")
+	observation, err := observer.Observe(context.Background(), target.Subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition := kernel.Transition{Subject: target.Subject, Before: observation.State, After: "updated"}
+	authority := kernel.Authority{ExecutionID: "attempt-index-mode"}
+	if result := executor.Execute(context.Background(), transition, authority); !result.Success {
+		t.Fatal(result.Message)
+	}
+	gitTest(t, target.Repository, "update-index", "--chmod=+x", "--", target.Path)
+	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil || !strings.Contains(err.Error(), "index target mode changed") {
+		t.Fatalf("verifier error = %v, want live index mode rejection", err)
+	}
+}
+
 func TestAtomicWriteTargetRejectsSymlinkedParent(t *testing.T) {
 	target, _, _, _, _ := newTestProvider(t, "initial")
 	externalDir := t.TempDir()
