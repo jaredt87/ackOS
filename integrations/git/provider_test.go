@@ -57,6 +57,42 @@ func TestProviderLifecycleCommitsExactTransition(t *testing.T) {
 	_ = recovery
 }
 
+func TestVerifierAcceptsOrdinaryUnixModes(t *testing.T) {
+	target, observer, executor, verifier, _ := newTestProvider(t, "initial")
+	if err := os.Chmod(filepath.Join(target.Repository, target.Path), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	observation, err := observer.Observe(context.Background(), target.Subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition := kernel.Transition{Subject: target.Subject, Before: observation.State, After: "updated"}
+	result := executor.Execute(context.Background(), transition, kernel.Authority{ExecutionID: "attempt-mode"})
+	if !result.Success {
+		t.Fatal(result.Message)
+	}
+	if _, err := verifier.Verify(context.Background(), transition, kernel.Authority{ExecutionID: "attempt-mode"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestVerifierRejectsLiveIndexTargetBlobMutation(t *testing.T) {
+	target, observer, executor, verifier, _ := newTestProvider(t, "initial")
+	observation, err := observer.Observe(context.Background(), target.Subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition := kernel.Transition{Subject: target.Subject, Before: observation.State, After: "updated"}
+	authority := kernel.Authority{ExecutionID: "attempt-index-blob"}
+	if result := executor.Execute(context.Background(), transition, authority); !result.Success {
+		t.Fatal(result.Message)
+	}
+	gitTest(t, target.Repository, "update-index", "--cacheinfo", "100644", "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391", target.Path)
+	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil || !strings.Contains(err.Error(), "index target blob") {
+		t.Fatalf("verifier error = %v, want live index blob rejection", err)
+	}
+}
+
 func TestVerifierRejectsLiveTargetModeMutation(t *testing.T) {
 	target, observer, executor, verifier, _ := newTestProvider(t, "initial")
 	observation, err := observer.Observe(context.Background(), target.Subject)
