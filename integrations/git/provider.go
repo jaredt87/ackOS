@@ -562,6 +562,9 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 		if path == "" {
 			continue
 		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(target.Repository, path)
+		}
 		actual, err := filepath.Abs(path)
 		if err != nil {
 			return fmt.Errorf("resolve Git configuration source: %w", err)
@@ -638,12 +641,12 @@ func rejectConfiguredNormalization(ctx context.Context, target Target) error {
 			return fmt.Errorf("git target uses core.autocrlf normalization; normalized targets are not supported")
 		}
 	}
-	output, err := runGit(ctx, target.Repository, "check-attr", "-z", "text", "eol", "ident", "working-tree-encoding", "--", target.Path)
+	output, err := runGit(ctx, target.Repository, "check-attr", "-z", "text", "eol", "crlf", "ident", "working-tree-encoding", "--", target.Path)
 	if err != nil {
 		return fmt.Errorf("inspect Git text normalization: %w", err)
 	}
 	parts := strings.Split(strings.TrimSuffix(output, "\x00"), "\x00")
-	if len(parts) != 12 || parts[0] != target.Path {
+	if len(parts) != 15 || parts[0] != target.Path {
 		return fmt.Errorf("unexpected Git text normalization metadata")
 	}
 	values := map[string]string{
@@ -651,12 +654,16 @@ func rejectConfiguredNormalization(ctx context.Context, target Target) error {
 		parts[4]:  parts[5],
 		parts[7]:  parts[8],
 		parts[10]: parts[11],
+		parts[13]: parts[14],
 	}
 	if values["text"] != "unspecified" && values["text"] != "unset" {
 		return fmt.Errorf("git target uses a configured text normalization attribute; normalized targets are not supported")
 	}
 	if values["eol"] != "unspecified" && values["eol"] != "unset" {
 		return fmt.Errorf("git target uses a configured eol attribute; normalized targets are not supported")
+	}
+	if values["crlf"] != "unspecified" && values["crlf"] != "unset" {
+		return fmt.Errorf("git target uses a configured crlf attribute; normalized targets are not supported")
 	}
 	if values["ident"] != "unspecified" && values["ident"] != "unset" {
 		return fmt.Errorf("git target uses a configured ident attribute; normalized targets are not supported")
