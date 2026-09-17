@@ -106,6 +106,9 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if status != "" {
 		return fail(fmt.Errorf("git worktree is not clean"))
 	}
+	if err := rejectConfiguredFilters(ctx, e.Target); err != nil {
+		return fail(err)
+	}
 	if err := rejectAttributesTarget(ctx, e.Target); err != nil {
 		return fail(err)
 	}
@@ -122,11 +125,11 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err != nil {
 		return fail(fmt.Errorf("read git HEAD: %w", err))
 	}
-	beforeHash, err := gitFilteredBlobHash(ctx, e.Target, t.Before)
+	beforeHash, err := gitBlobHash(ctx, e.Target, t.Before)
 	if err != nil {
 		return fail(fmt.Errorf("normalize authorized Git parent state: %w", err))
 	}
-	afterHash, err := gitFilteredBlobHash(ctx, e.Target, t.After)
+	afterHash, err := gitBlobHash(ctx, e.Target, t.After)
 	if err != nil {
 		return fail(fmt.Errorf("normalize authorized Git target state: %w", err))
 	}
@@ -212,6 +215,9 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	if err := v.requireTracked(ctx); err != nil {
 		return kernel.Observation{}, err
 	}
+	if err := rejectConfiguredFilters(ctx, v.Target); err != nil {
+		return kernel.Observation{}, err
+	}
 	content, err := v.read(ctx)
 	if err != nil {
 		return kernel.Observation{}, err
@@ -270,9 +276,21 @@ func readFile(ctx context.Context, target Target) (string, error) {
 	if stat, ok := info.Sys().(*syscall.Stat_t); ok && stat.Nlink > 1 {
 		return "", fmt.Errorf("git target has multiple hard links")
 	}
-	content, err := io.ReadAll(file)
-	if err != nil {
-		return "", fmt.Errorf("read git file: %w", err)
+	readDone := make(chan struct{})
+	var content []byte
+	var readErr error
+	go func() {
+		content, readErr = io.ReadAll(file)
+		close(readDone)
+	}()
+	select {
+	case <-readDone:
+		if readErr != nil {
+			return "", fmt.Errorf("read git file: %w", readErr)
+		}
+	case <-ctx.Done():
+		_ = file.Close()
+		return "", ctx.Err()
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -503,7 +521,7 @@ func verifyCommitAt(ctx context.Context, target Target, git func(...string) (str
 	if err != nil {
 		return fmt.Errorf("read committed Git parent state: %w", err)
 	}
-	expectedBeforeHash, err := gitFilteredBlobHash(ctx, target, t.Before)
+	expectedBeforeHash, err := gitBlobHash(ctx, target, t.Before)
 	if err != nil {
 		return fmt.Errorf("normalize authorized Git parent state: %w", err)
 	}
@@ -514,7 +532,7 @@ func verifyCommitAt(ctx context.Context, target Target, git func(...string) (str
 	if err != nil {
 		return fmt.Errorf("read committed Git target state: %w", err)
 	}
-	expectedAfterHash, err := gitFilteredBlobHash(ctx, target, t.After)
+	expectedAfterHash, err := gitBlobHash(ctx, target, t.After)
 	if err != nil {
 		return fmt.Errorf("normalize authorized Git target state: %w", err)
 	}
@@ -560,23 +578,46 @@ func (v Verifier) requireTracked(ctx context.Context) error {
 	return nil
 }
 
-func gitFilteredBlobHash(ctx context.Context, target Target, content string) (string, error) {
-	tmp, err := os.CreateTemp("", "ackos-git-filter-*")
+func rejectConfiguredFilters(ctx context.Context, target Target) error {
+	attrs, err := targetGitAttr(ctx, target)
 	if err != nil {
-		return "", fmt.Errorf("create temporary Git filter input: %w", err)
+		return err
+	}
+	if attrs != "unspecified" && attrs != "unset" {
+		return fmt.Errorf("git target uses a configured clean filter; filtered targets are not supported")
+	}
+	return nil
+}
+
+func targetGitAttr(ctx context.Context, target Target) (string, error) {
+	output, err := runGit(ctx, target.Repository, "check-attr", "-z", "filter", "--", literalPathspec(target.Path))
+	if err != nil {
+		return "", fmt.Errorf("inspect Git clean filter: %w", err)
+	}
+	parts := strings.Split(strings.TrimSuffix(output, "\x00"), "\x00")
+	if len(parts) != 3 || parts[0] != target.Path || parts[1] != "filter" {
+		return "", fmt.Errorf("unexpected Git clean filter metadata")
+	}
+	return parts[2], nil
+}
+
+func gitBlobHash(ctx context.Context, target Target, content string) (string, error) {
+	tmp, err := os.CreateTemp("", "ackos-git-blob-*")
+	if err != nil {
+		return "", fmt.Errorf("create temporary Git blob input: %w", err)
 	}
 	name := tmp.Name()
 	defer os.Remove(name)
 	if _, err := tmp.WriteString(content); err != nil {
 		_ = tmp.Close()
-		return "", fmt.Errorf("write temporary Git filter input: %w", err)
+		return "", fmt.Errorf("write temporary Git blob input: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
-		return "", fmt.Errorf("close temporary Git filter input: %w", err)
+		return "", fmt.Errorf("close temporary Git blob input: %w", err)
 	}
-	hash, err := runGit(ctx, target.Repository, "hash-object", "--path="+target.Path, name)
+	hash, err := runGit(ctx, target.Repository, "hash-object", "--no-filters", name)
 	if err != nil {
-		return "", fmt.Errorf("hash Git-filtered content: %w", err)
+		return "", fmt.Errorf("hash Git blob content: %w", err)
 	}
 	return strings.TrimSpace(hash), nil
 }
@@ -610,7 +651,8 @@ func (v Verifier) git(ctx context.Context, args ...string) (string, error) {
 }
 
 func runGit(ctx context.Context, repository string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+	gitArgs := append([]string{"-c", "core.fsmonitor=false"}, args...)
+	cmd := exec.Command("git", gitArgs...)
 	cmd.Dir = repository
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = 2 * time.Second
