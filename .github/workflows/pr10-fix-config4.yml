@@ -1,0 +1,38 @@
+name: PR10 Fix Config4
+
+on:
+  push:
+    branches: [feat/phase2-git-provider]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Place config include guard correctly
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('integrations/git/provider.go')
+          s = p.read_text()
+          start = s.index('func rejectGitConfigTarget(ctx context.Context, target Target) error {')
+          end = s.index('func rejectGrafts(ctx context.Context, target Target) error {', start)
+          body = s[start:end]
+          if 'config", "--includes", "--get-regexp"' not in body:
+              marker = '\treturn nil\n}\n'
+              extra = '''\tincludes, includeErr := runGit(ctx, target.Repository, "config", "--includes", "--get-regexp", "^include")\n\tif includeErr == nil {\n\t\tfor _, line := range strings.Split(includes, "\\n") {\n\t\t\tfields := strings.SplitN(strings.TrimSpace(line), " ", 2)\n\t\t\tif len(fields) != 2 {\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\tinclude := strings.TrimSpace(fields[1])\n\t\t\tif !filepath.IsAbs(include) {\n\t\t\t\tinclude = filepath.Join(target.Repository, ".git", include)\n\t\t\t}\n\t\t\tinclude, resolveErr := filepath.Abs(include)\n\t\t\tif resolveErr != nil {\n\t\t\t\treturn fmt.Errorf("resolve Git include: %w", resolveErr)\n\t\t\t}\n\t\t\tif include == configured {\n\t\t\t\treturn fmt.Errorf("git target is an active Git configuration source")\n\t\t\t}\n\t\t}\n\t}\n\treturn nil\n}\n'''
+              if marker not in body:
+                  raise SystemExit('target function return marker not found')
+              body = body.replace(marker, extra, 1)
+              s = s[:start] + body + s[end:]
+              p.write_text(s)
+          PY
+          gofmt -w integrations/git/provider.go
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add integrations/git/provider.go
+          git commit -m 'fix: enforce active Git config includes'
+          git push
