@@ -157,7 +157,7 @@ func TestSanitizedGitEnvPreservesCommitIdentity(t *testing.T) {
 	t.Setenv("GIT_COMMITTER_EMAIL", "committer@example.invalid")
 	t.Setenv("GIT_DIR", "/outside/repository")
 	t.Setenv("GIT_WORK_TREE", "/outside/worktree")
-	 t.Setenv("GIT_INDEX_FILE", "/outside/index")
+	t.Setenv("GIT_INDEX_FILE", "/outside/index")
 
 	env := sanitizedGitEnv()
 	joined := strings.Join(env, "\x00")
