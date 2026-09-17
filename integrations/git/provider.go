@@ -386,6 +386,9 @@ func atomicWriteTarget(target Target, content []byte) error {
 	dir := filepath.Dir(path)
 	mode := os.FileMode(0o644)
 	if info, err := os.Stat(path); err == nil {
+		if err := rejectUnpreservableMetadata(path, info); err != nil {
+			return err
+		}
 		mode = info.Mode()
 	}
 	tmp, err := os.CreateTemp(dir, ".ackos-write-*")
@@ -410,6 +413,30 @@ func atomicWriteTarget(target Target, content []byte) error {
 		return err
 	}
 	return os.Rename(name, path)
+}
+
+func rejectUnpreservableMetadata(path string, info os.FileInfo) error {
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		if uint32(os.Geteuid()) != stat.Uid || uint32(os.Getegid()) != stat.Gid {
+			return fmt.Errorf("git target ownership cannot be preserved by atomic replacement")
+		}
+	}
+	for size := 256; ; size *= 2 {
+		buf := make([]byte, size)
+		n, err := syscall.Listxattr(path, buf)
+		if err == syscall.ENOTSUP || err == syscall.EOPNOTSUPP {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("inspect git target extended attributes: %w", err)
+		}
+		if n == 0 {
+			return nil
+		}
+		if n < len(buf) {
+			return fmt.Errorf("git target has extended attributes or ACLs that cannot be preserved by atomic replacement")
+		}
+	}
 }
 
 func requireCommitIdentity(ctx context.Context, target Target) error {
