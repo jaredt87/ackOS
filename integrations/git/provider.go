@@ -573,7 +573,7 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 			return fmt.Errorf("git target is an active Git configuration source")
 		}
 	}
-	includes, includeErr := runGit(ctx, target.Repository, "config", "--includes", "--get-regexp", "^include")
+	includes, includeErr := runGit(ctx, target.Repository, "config", "--local", "--get-regexp", "^include")
 	if includeErr == nil {
 		for _, line := range strings.Split(includes, "\n") {
 			fields := strings.SplitN(strings.TrimSpace(line), " ", 2)
