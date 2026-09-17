@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jaredt87/ackOS/kernel"
 )
 
 // Current findings regression coverage is kept separate from the provider's integration tests.
@@ -179,5 +181,48 @@ func TestSanitizedGitEnvPreservesCommitIdentity(t *testing.T) {
 		if strings.Contains(joined, blocked) {
 			t.Fatalf("sanitized environment retained %q", blocked)
 		}
+	}
+}
+
+func TestVerifyCommitRejectsTargetModeChange(t *testing.T) {
+	target, _, _, _, _ := newTestProvider(t, "initial")
+	blob := strings.TrimSpace(gitTest(t, target.Repository, "hash-object", "-w", "--stdin"))
+	gitTest(t, target.Repository, "update-index", "--add", "--cacheinfo", "120000,"+blob+","+target.Path)
+	tree := strings.TrimSpace(gitTest(t, target.Repository, "write-tree"))
+	parent := strings.TrimSpace(gitTest(t, target.Repository, "rev-parse", "HEAD"))
+	commit := strings.TrimSpace(gitTest(t, target.Repository, "commit-tree", tree, "-p", parent, "-m", "ackOS: execute mode-test"))
+	gitTest(t, target.Repository, "update-ref", "HEAD", commit)
+
+	transition := kernel.Transition{Subject: target.Subject, Before: "initial", After: "initial"}
+	err := verifyCommitAt(context.Background(), target, func(args ...string) (string, error) {
+		return runGit(context.Background(), target.Repository, args...)
+	}, parent, transition, "mode-test")
+	if err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("error = %v, want non-regular target mode rejection", err)
+	}
+}
+
+func TestVerifyCommitReadsMarkerFromCapturedCommit(t *testing.T) {
+	target, _, _, _, _ := newTestProvider(t, "initial")
+	parent := strings.TrimSpace(gitTest(t, target.Repository, "rev-parse", "HEAD"))
+	afterHash, err := gitBlobHash(context.Background(), target, "updated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := commitVerifiedTree(context.Background(), target, parent, afterHash, []byte("updated"), "ackOS: execute marker-test"); err != nil {
+		t.Fatal(err)
+	}
+
+	transition := kernel.Transition{Subject: target.Subject, Before: "initial", After: "updated"}
+	git := func(args ...string) (string, error) {
+		if len(args) >= 3 && args[0] == "log" && args[1] == "-1" {
+			return "ackOS: execute wrong-marker", nil
+		}
+		return runGit(context.Background(), target.Repository, args...)
+	}
+	err = verifyCommitAt(context.Background(), target, parent, transition, "marker-test")
+	_ = git
+	if err == nil || !strings.Contains(err.Error(), "marker") {
+		t.Fatalf("error = %v, want captured-commit marker verification failure", err)
 	}
 }
