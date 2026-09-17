@@ -23,64 +23,77 @@ jobs:
           from pathlib import Path
           p = Path('integrations/git/provider.go')
           s = p.read_text()
-
           old = '''\tif err := rejectAttributesTarget(ctx, e.Target); err != nil {\n\t\treturn fail(err)\n\t}\n\tif err := rejectGrafts(ctx, e.Target); err != nil {'''
           new = '''\tif err := rejectAttributesTarget(ctx, e.Target); err != nil {\n\t\treturn fail(err)\n\t}\n\tif err := rejectGitConfigTarget(ctx, e.Target); err != nil {\n\t\treturn fail(err)\n\t}\n\tif err := rejectGrafts(ctx, e.Target); err != nil {'''
-          if old not in s:
-              raise SystemExit('executor insertion point not found')
+          if old not in s: raise SystemExit('executor insertion point not found')
           s = s.replace(old, new, 1)
-
           old = '''\tif err := rejectGrafts(ctx, v.Target); err != nil {\n\t\treturn kernel.Observation{}, err\n\t}\n\tcontent, err := v.read(ctx)'''
           new = '''\tif err := rejectGitConfigTarget(ctx, v.Target); err != nil {\n\t\treturn kernel.Observation{}, err\n\t}\n\tif err := rejectGrafts(ctx, v.Target); err != nil {\n\t\treturn kernel.Observation{}, err\n\t}\n\tcontent, err := v.read(ctx)'''
-          if old not in s:
-              raise SystemExit('verifier insertion point not found')
+          if old not in s: raise SystemExit('verifier insertion point not found')
           s = s.replace(old, new, 1)
-
           old = '''func rejectGrafts(ctx context.Context, target Target) error {'''
-          new = '''func rejectGitConfigTarget(ctx context.Context, target Target) error {\n\toutput, err := runGit(ctx, target.Repository, "config", "--show-origin", "--includes", "--list")\n\tif err != nil {\n\t\treturn fmt.Errorf("inspect Git config origins: %w", err)\n\t}\n\tconfigured, err := filepath.Abs(filepath.Join(target.Repository, target.Path))\n\tif err != nil {\n\t\treturn fmt.Errorf("resolve configured target path: %w", err)\n\t}\n\tfor _, line := range strings.Split(output, "\\n") {\n\t\tline = strings.TrimSpace(line)\n\t\tif !strings.HasPrefix(line, "file:") {\n\t\t\tcontinue\n\t\t}\n\t\torigin := line[len("file:"): ]\n\t\tif i := strings.IndexAny(origin, " \\t"); i >= 0 {\n\t\t\torigin = origin[:i]\n\t\t}\n\t\tif origin == "" {\n\t\t\tcontinue\n\t\t}\n\t\tactual, err := filepath.Abs(origin)\n\t\tif err != nil {\n\t\t\treturn fmt.Errorf("resolve Git config origin: %w", err)\n\t\t}\n\t\tif configured == actual {\n\t\t\treturn fmt.Errorf("git target is an active Git configuration source")\n\t\t}\n\t}\n\treturn nil\n}\n\nfunc rejectGrafts(ctx context.Context, target Target) error {'''
-          if old not in s:
-              raise SystemExit('config function insertion point not found')
+          new = '''func rejectGitConfigTarget(ctx context.Context, target Target) error {\n\toutput, err := runGit(ctx, target.Repository, "config", "--show-origin", "--includes", "--list")\n\tif err != nil {\n\t\treturn fmt.Errorf("inspect Git config origins: %w", err)\n\t}\n\tconfigured, err := filepath.Abs(filepath.Join(target.Repository, target.Path))\n\tif err != nil {\n\t\treturn fmt.Errorf("resolve configured target path: %w", err)\n\t}\n\tfor _, line := range strings.Split(output, "\\n") {\n\t\tif !strings.HasPrefix(line, "file:") {\n\t\t\tcontinue\n\t\t}\n\t\torigin := line[len("file:"):]\n\t\tif i := strings.IndexAny(origin, " \\t"); i >= 0 {\n\t\t\torigin = origin[:i]\n\t\t}\n\t\tif origin == "" {\n\t\t\tcontinue\n\t\t}\n\t\tactual, err := filepath.Abs(origin)\n\t\tif err != nil {\n\t\t\treturn fmt.Errorf("resolve Git config origin: %w", err)\n\t\t}\n\t\tif configured == actual {\n\t\t\treturn fmt.Errorf("git target is an active Git configuration source")\n\t\t}\n\t}\n\treturn nil\n}\n\nfunc rejectGrafts(ctx context.Context, target Target) error {'''
+          if old not in s: raise SystemExit('config function insertion point not found')
           s = s.replace(old, new, 1)
-
           old = '''\toutput, err := runGit(ctx, target.Repository, "check-attr", "-z", "text", "eol", "ident", "working-tree-encoding", "--", target.Path)\n'''
           new = '''\toutput, err := runGit(ctx, target.Repository, "check-attr", "-z", "text", "eol", "ident", "working-tree-encoding", "crlf", "--", target.Path)\n'''
-          if old not in s:
-              raise SystemExit('normalization query not found')
+          if old not in s: raise SystemExit('normalization query not found')
           s = s.replace(old, new, 1)
-
           old = '''\tif len(parts) != 12 || parts[0] != target.Path {'''
           new = '''\tif len(parts) != 15 || parts[0] != target.Path {'''
-          if old not in s:
-              raise SystemExit('normalization arity check not found')
+          if old not in s: raise SystemExit('normalization arity check not found')
           s = s.replace(old, new, 1)
-
           old = '''\t\tparts[10]: parts[11],\n\t}'''
           new = '''\t\tparts[10]: parts[11],\n\t\tparts[13]: parts[14],\n\t}'''
-          if old not in s:
-              raise SystemExit('normalization map not found')
+          if old not in s: raise SystemExit('normalization map not found')
           s = s.replace(old, new, 1)
-
           old = '''\tif values["working-tree-encoding"] != "unspecified" && values["working-tree-encoding"] != "unset" {\n\t\treturn fmt.Errorf("git target uses working-tree-encoding; encoded targets are not supported")\n\t}\n\treturn nil\n}'''
           new = '''\tif values["working-tree-encoding"] != "unspecified" && values["working-tree-encoding"] != "unset" {\n\t\treturn fmt.Errorf("git target uses working-tree-encoding; encoded targets are not supported")\n\t}\n\tif values["crlf"] != "unspecified" && values["crlf"] != "unset" {\n\t\treturn fmt.Errorf("git target uses the legacy crlf attribute; normalized targets are not supported")\n\t}\n\treturn nil\n}'''
-          if old not in s:
-              raise SystemExit('normalization return block not found')
+          if old not in s: raise SystemExit('normalization return block not found')
           s = s.replace(old, new, 1)
-
           p.write_text(s)
 
           tp = Path('integrations/git/current_findings_test.go')
           t = tp.read_text()
+          addition = '''
+func TestRejectGitConfigTargetRejectsActiveGitConfigInclude(t *testing.T) {
+\ttarget, _, _, _, _ := newTestProvider(t, "initial")
+\tconfigPath := filepath.Join(target.Repository, "tracked-config.inc")
+\tif err := os.WriteFile(configPath, []byte("[core]\\n\\tattributesFile = /tmp/unused\\n"), 0o644); err != nil {
+\t\tt.Fatal(err)
+\t}
+\tgitTest(t, target.Repository, "add", "--", "tracked-config.inc")
+\tgitTest(t, target.Repository, "commit", "-m", "add tracked config include")
+\tgitTest(t, target.Repository, "config", "include.path", "tracked-config.inc")
 
-          addition = r'''\nfunc TestRejectAttributesTargetRejectsActiveGitConfigInclude(t *testing.T) {\n\ttarget, _, _, _, _ := newTestProvider(t, "initial")\n\tconfigPath := filepath.Join(target.Repository, "tracked-config.inc")\n\tif err := os.WriteFile(configPath, []byte("[core]\\n\\tattributesFile = /tmp/unused\\n"), 0o644); err != nil {\n\t\tt.Fatal(err)\n\t}\n\tgitTest(t, target.Repository, "add", "--", "tracked-config.inc")\n\tgitTest(t, target.Repository, "commit", "-m", "add tracked config include")\n\tgitTest(t, target.Repository, "config", "include.path", "tracked-config.inc")\n\n\terr := rejectGitConfigTarget(context.Background(), target)\n\tif err == nil || !strings.Contains(err.Error(), "configuration source") {\n\t\tt.Fatalf("error = %v, want active Git configuration source rejection", err)\n\t}\n}\n\nfunc TestRejectConfiguredNormalizationRejectsLegacyCRLF(t *testing.T) {\n\ttarget, _, _, _, _ := newTestProvider(t, "initial")\n\tif err := os.WriteFile(filepath.Join(target.Repository, ".gitattributes"), []byte(target.Path+" crlf\\n"), 0o644); err != nil {\n\t\tt.Fatal(err)\n\t}\n\tgitTest(t, target.Repository, "add", "--", ".gitattributes")\n\tgitTest(t, target.Repository, "commit", "-m", "configure legacy crlf normalization")\n\n\terr := rejectConfiguredNormalization(context.Background(), target)\n\tif err == nil || !strings.Contains(err.Error(), "crlf") {\n\t\tt.Fatalf("error = %v, want legacy crlf rejection", err)\n\t}\n}\n'''
+\terr := rejectGitConfigTarget(context.Background(), target)
+\tif err == nil || !strings.Contains(err.Error(), "configuration source") {
+\t\tt.Fatalf("error = %v, want active Git configuration source rejection", err)
+\t}
+}
+
+func TestRejectConfiguredNormalizationRejectsLegacyCRLF(t *testing.T) {
+\ttarget, _, _, _, _ := newTestProvider(t, "initial")
+\tif err := os.WriteFile(filepath.Join(target.Repository, ".gitattributes"), []byte(target.Path+" crlf\\n"), 0o644); err != nil {
+\t\tt.Fatal(err)
+\t}
+\tgitTest(t, target.Repository, "add", "--", ".gitattributes")
+\tgitTest(t, target.Repository, "commit", "-m", "configure legacy crlf normalization")
+
+\terr := rejectConfiguredNormalization(context.Background(), target)
+\tif err == nil || !strings.Contains(err.Error(), "crlf") {
+\t\tt.Fatalf("error = %v, want legacy crlf rejection", err)
+\t}
+}
+'''
           marker = '\nfunc TestRejectConfiguredNormalizationRejectsIdent'
-          if marker not in t:
-              raise SystemExit('test insertion marker not found')
-          t = t.replace(marker, addition + marker, 1)
+          if marker not in t: raise SystemExit('test insertion marker not found')
+          if 'TestRejectGitConfigTargetRejectsActiveGitConfigInclude' not in t:
+              t = t.replace(marker, addition + marker, 1)
           tp.write_text(t)
           PY
           gofmt -w integrations/git/provider.go integrations/git/current_findings_test.go
           git diff --check
-          git status --short
           git add integrations/git/provider.go integrations/git/current_findings_test.go
           git commit -m 'fix: reject config sources and legacy crlf targets' || true
           git push origin feat/phase2-git-provider
