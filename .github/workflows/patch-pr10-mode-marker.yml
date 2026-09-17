@@ -1,13 +1,12 @@
 name: Patch PR10 review findings
 on:
-  pull_request:
-    types: [synchronize]
-    branches: [main]
+  issue_comment:
+    types: [created]
 permissions:
   contents: write
 jobs:
   patch:
-    if: github.actor == 'jaredt87'
+    if: github.event.issue.pull_request != null && github.event.comment.body == 'PR10_PATCH' && github.event.issue.number == 10 && github.event.comment.user.login == 'jaredt87'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,20 +21,16 @@ jobs:
           s = p.read_text()
           old = '''\tmodeOutput, err := runGit(ctx, target.Repository, "ls-files", "--format=%(objectmode)", "--", literalPathspec(target.Path))\n\tif err != nil {\n\t\treturn fmt.Errorf("read target Git mode: %w", err)\n\t}\n\tmode := strings.TrimSpace(modeOutput)\n\tif mode == "" {\n\t\treturn fmt.Errorf("target Git mode is missing")\n\t}\n'''
           new = '''\tmode, err := gitTreeMode(ctx, target, parent)\n\tif err != nil {\n\t\treturn fmt.Errorf("read parent target Git mode: %w", err)\n\t}\n'''
-          if old not in s: raise SystemExit('commit mode block not found')
-          s = s.replace(old, new, 1)
+          if old in s: s = s.replace(old, new, 1)
           old = '''\tmessage, err := safeGit("log", "-1", "--format=%B")\n'''
           new = '''\tmessage, err := safeGit("log", "-1", "--format=%B", head)\n'''
-          if old not in s: raise SystemExit('message lookup not found')
-          s = s.replace(old, new, 1)
+          if old in s: s = s.replace(old, new, 1)
           old = '''\tif !exactNULPathList(paths, target.Path) {\n\t\treturn fmt.Errorf("committed Git diff contains an unauthorized path")\n\t}\n\tbeforeHash, err := safeGit("rev-parse", head+"^:./"+target.Path)\n'''
           new = '''\tif !exactNULPathList(paths, target.Path) {\n\t\treturn fmt.Errorf("committed Git diff contains an unauthorized path")\n\t}\n\tparentMode, err := gitTreeMode(ctx, target, head+"^")\n\tif err != nil {\n\t\treturn fmt.Errorf("read committed Git parent mode: %w", err)\n\t}\n\ttargetMode, err := gitTreeMode(ctx, target, head)\n\tif err != nil {\n\t\treturn fmt.Errorf("read committed Git target mode: %w", err)\n\t}\n\tif parentMode != targetMode {\n\t\treturn fmt.Errorf("committed Git target mode changed unexpectedly")\n\t}\n\tbeforeHash, err := safeGit("rev-parse", head+"^:./"+target.Path)\n'''
-          if old not in s: raise SystemExit('verify mode insertion point not found')
-          s = s.replace(old, new, 1)
+          if old in s: s = s.replace(old, new, 1)
           marker = '''func gitBlobHash(ctx context.Context, target Target, content string) (string, error) {\n'''
           helper = '''func gitTreeMode(ctx context.Context, target Target, tree string) (string, error) {\n\toutput, err := runGit(ctx, target.Repository, "--no-replace-objects", "ls-tree", "--format=%(objectmode)", tree, "--", literalPathspec(target.Path))\n\tif err != nil {\n\t\treturn "", err\n\t}\n\tlines := strings.Fields(output)\n\tif len(lines) != 1 || (lines[0] != "100644" && lines[0] != "100755") {\n\t\treturn "", fmt.Errorf("target Git tree entry is not a regular file")\n\t}\n\treturn lines[0], nil\n}\n\n'''
-          if marker not in s: raise SystemExit('blob hash marker not found')
-          if 'func gitTreeMode(' not in s: s = s.replace(marker, helper + marker, 1)
+          if 'func gitTreeMode(' not in s and marker in s: s = s.replace(marker, helper + marker, 1)
           p.write_text(s)
           PY
           gofmt -w integrations/git/provider.go
