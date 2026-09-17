@@ -108,6 +108,9 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err := rejectAttributesTarget(ctx, e.Target); err != nil {
 		return fail(err)
 	}
+	if err := rejectGitConfigTarget(ctx, e.Target); err != nil {
+		return fail(err)
+	}
 	if err := rejectGrafts(ctx, e.Target); err != nil {
 		return fail(err)
 	}
@@ -225,6 +228,9 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, err
 	}
 	if err := rejectConfiguredNormalization(ctx, v.Target); err != nil {
+		return kernel.Observation{}, err
+	}
+	if err := rejectGitConfigTarget(ctx, v.Target); err != nil {
 		return kernel.Observation{}, err
 	}
 	if err := rejectGrafts(ctx, v.Target); err != nil {
@@ -530,6 +536,39 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 	}
 	if configured == actual {
 		return fmt.Errorf("git target is configured as the active attributes file")
+	}
+	return nil
+}
+
+func rejectGitConfigTarget(ctx context.Context, target Target) error {
+	output, err := runGit(ctx, target.Repository, "config", "--includes", "--show-origin", "--list")
+	if err != nil {
+		return fmt.Errorf("inspect Git configuration sources: %w", err)
+	}
+	configured, err := filepath.Abs(filepath.Join(target.Repository, target.Path))
+	if err != nil {
+		return fmt.Errorf("resolve configured Git target path: %w", err)
+	}
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		origin, _, ok := strings.Cut(line, "\t")
+		if !ok || !strings.HasPrefix(origin, "file:") {
+			continue
+		}
+		path := strings.TrimPrefix(origin, "file:")
+		if path == "" {
+			continue
+		}
+		actual, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("resolve Git configuration source: %w", err)
+		}
+		if actual == configured {
+			return fmt.Errorf("git target is an active Git configuration source")
+		}
 	}
 	return nil
 }
