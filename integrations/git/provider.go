@@ -109,6 +109,9 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err := rejectConfiguredFilters(ctx, e.Target); err != nil {
 		return fail(err)
 	}
+	if err := rejectConfiguredNormalization(ctx, e.Target); err != nil {
+		return fail(err)
+	}
 	if err := rejectAttributesTarget(ctx, e.Target); err != nil {
 		return fail(err)
 	}
@@ -216,6 +219,9 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, err
 	}
 	if err := rejectConfiguredFilters(ctx, v.Target); err != nil {
+		return kernel.Observation{}, err
+	}
+	if err := rejectConfiguredNormalization(ctx, v.Target); err != nil {
 		return kernel.Observation{}, err
 	}
 	content, err := v.read(ctx)
@@ -459,7 +465,7 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 	if strings.EqualFold(filepath.Base(target.Path), ".gitattributes") {
 		return fmt.Errorf("git .gitattributes targets are not supported because the target can change its own filter environment")
 	}
-	attrs, err := runGit(ctx, target.Repository, "config", "--get", "core.attributesFile")
+	attrs, err := runGit(ctx, target.Repository, "config", "--path", "--get", "core.attributesFile")
 	if err != nil {
 		return nil
 	}
@@ -467,13 +473,35 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 	if attrs == "" {
 		return nil
 	}
-	if !filepath.IsAbs(attrs) {
-		attrs = filepath.Join(target.Repository, attrs)
-	}
 	configured, _ := filepath.Abs(filepath.Join(target.Repository, target.Path))
 	actual, _ := filepath.Abs(attrs)
 	if configured == actual {
 		return fmt.Errorf("git target is configured as the active attributes file")
+	}
+	return nil
+}
+
+func rejectConfiguredNormalization(ctx context.Context, target Target) error {
+	autocrlf, err := runGit(ctx, target.Repository, "config", "--get", "core.autocrlf")
+	if err == nil {
+		switch strings.ToLower(strings.TrimSpace(autocrlf)) {
+		case "true", "input", "auto":
+			return fmt.Errorf("git target uses core.autocrlf normalization; normalized targets are not supported")
+		}
+	}
+	output, err := runGit(ctx, target.Repository, "check-attr", "-z", "text", "eol", "--", literalPathspec(target.Path))
+	if err != nil {
+		return fmt.Errorf("inspect Git text normalization: %w", err)
+	}
+	parts := strings.Split(strings.Trim(output, "\x00"), "\x00")
+	if len(parts) != 5 || parts[0] != target.Path || parts[1] != "text" || parts[3] != "eol" {
+		return fmt.Errorf("unexpected Git text normalization metadata")
+	}
+	if parts[2] != "unspecified" && parts[2] != "unset" {
+		return fmt.Errorf("git target uses a configured text normalization attribute; normalized targets are not supported")
+	}
+	if parts[4] != "unspecified" && parts[4] != "unset" {
+		return fmt.Errorf("git target uses a configured eol attribute; normalized targets are not supported")
 	}
 	return nil
 }
