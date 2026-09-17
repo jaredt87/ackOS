@@ -6,40 +6,13 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref || github.ref }}
-      - name: Apply pending PR10 config guard
-        if: github.event_name == 'pull_request'
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          p = Path('integrations/git/provider.go')
-          s = p.read_text()
-          if 'func rejectGitConfigTarget' in s:
-              raise SystemExit(0)
-          s = s.replace('''\tif err := rejectAttributesTarget(ctx, e.Target); err != nil {\n\t\treturn fail(err)\n\t}\n\tif err := rejectGrafts(ctx, e.Target); err != nil {''', '''\tif err := rejectAttributesTarget(ctx, e.Target); err != nil {\n\t\treturn fail(err)\n\t}\n\tif err := rejectGitConfigTarget(ctx, e.Target); err != nil {\n\t\treturn fail(err)\n\t}\n\tif err := rejectGrafts(ctx, e.Target); err != nil {''', 1)
-          s = s.replace('''\tif err := rejectGrafts(ctx, v.Target); err != nil {\n\t\treturn kernel.Observation{}, err\n\t}\n\tcontent, err := v.read(ctx)''', '''\tif err := rejectGitConfigTarget(ctx, v.Target); err != nil {\n\t\treturn kernel.Observation{}, err\n\t}\n\tif err := rejectGrafts(ctx, v.Target); err != nil {\n\t\treturn kernel.Observation{}, err\n\t}\n\tcontent, err := v.read(ctx)''', 1)
-          marker = 'func rejectGrafts(ctx context.Context, target Target) error {'
-          fn = '''func rejectGitConfigTarget(ctx context.Context, target Target) error {\n\toutput, err := runGit(ctx, target.Repository, "config", "--includes", "--show-origin", "--list")\n\tif err != nil {\n\t\treturn fmt.Errorf("inspect Git configuration sources: %w", err)\n\t}\n\tconfigured, err := filepath.Abs(filepath.Join(target.Repository, target.Path))\n\tif err != nil {\n\t\treturn fmt.Errorf("resolve configured Git target path: %w", err)\n\t}\n\tfor _, line := range strings.Split(output, "\\n") {\n\t\tline = strings.TrimSpace(line)\n\t\tif line == "" {\n\t\t\tcontinue\n\t\t}\n\t\torigin, _, ok := strings.Cut(line, "\\t")\n\t\tif !ok || !strings.HasPrefix(origin, "file:") {\n\t\t\tcontinue\n\t\t}\n\t\tpath := strings.TrimPrefix(origin, "file:")\n\t\tif path == "" {\n\t\t\tcontinue\n\t\t}\n\t\tactual, err := filepath.Abs(path)\n\t\tif err != nil {\n\t\t\treturn fmt.Errorf("resolve Git configuration source: %w", err)\n\t\t}\n\t\tif actual == configured {\n\t\t\treturn fmt.Errorf("git target is an active Git configuration source")\n\t\t}\n\t}\n\treturn nil\n}\n\n'''
-          if marker not in s:
-              raise SystemExit('function insertion point not found')
-          s = s.replace(marker, fn + marker, 1)
-          p.write_text(s)
-          PY
-          gofmt -w integrations/git/provider.go
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add integrations/git/provider.go
-          git diff --cached --quiet && exit 0
-          git commit -m 'fix: reject active Git config sources'
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
       - name: Validate agent integrations
         run: |
           test -f .claude-plugin/plugin.json
