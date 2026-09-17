@@ -544,9 +544,9 @@ func rejectConfiguredNormalization(ctx context.Context, target Target) error {
 		return fmt.Errorf("unexpected Git text normalization metadata")
 	}
 	values := map[string]string{
-		parts[1]: parts[2],
-		parts[4]: parts[5],
-		parts[7]: parts[8],
+		parts[1]:  parts[2],
+		parts[4]:  parts[5],
+		parts[7]:  parts[8],
 		parts[10]: parts[11],
 	}
 	if values["text"] != "unspecified" && values["text"] != "unset" {
@@ -755,16 +755,16 @@ func runGit(ctx context.Context, repository string, args ...string) (string, err
 
 func sanitizedGitEnv() []string {
 	blocked := map[string]struct{}{
-		"GIT_DIR": {},
-		"GIT_WORK_TREE": {},
-		"GIT_INDEX_FILE": {},
-		"GIT_OBJECT_DIRECTORY": {},
+		"GIT_DIR":                          {},
+		"GIT_WORK_TREE":                    {},
+		"GIT_INDEX_FILE":                   {},
+		"GIT_OBJECT_DIRECTORY":             {},
 		"GIT_ALTERNATE_OBJECT_DIRECTORIES": {},
-		"GIT_COMMON_DIR": {},
-		"GIT_NAMESPACE": {},
-		"GIT_CEILING_DIRECTORIES": {},
-		"GIT_DISCOVERY_ACROSS_FILESYSTEM": {},
-		"GIT_GRAFT_FILE": {},
+		"GIT_COMMON_DIR":                   {},
+		"GIT_NAMESPACE":                    {},
+		"GIT_CEILING_DIRECTORIES":          {},
+		"GIT_DISCOVERY_ACROSS_FILESYSTEM":  {},
+		"GIT_GRAFT_FILE":                   {},
 	}
 	env := make([]string, 0, len(os.Environ()))
 	for _, entry := range os.Environ() {
