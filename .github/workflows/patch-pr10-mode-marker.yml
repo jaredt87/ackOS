@@ -1,12 +1,13 @@
 name: Patch PR10 review findings
 on:
-  issue_comment:
-    types: [created]
+  pull_request:
+    types: [synchronize]
+    branches: [main]
 permissions:
   contents: write
 jobs:
   patch:
-    if: github.event.issue.pull_request != null && github.event.comment.body == 'PR10_PATCH' && github.event.issue.number == 10 && github.event.comment.user.login == 'jaredt87'
+    if: github.actor == 'jaredt87'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
