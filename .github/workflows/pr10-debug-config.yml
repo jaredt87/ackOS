@@ -1,0 +1,32 @@
+name: PR10 Debug Config
+
+on:
+  push:
+    branches: [feat/phase2-git-provider]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add temporary config diagnostics
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('integrations/git/current_findings_test.go')
+          s = p.read_text()
+          old = '''\terr := rejectGitConfigTarget(context.Background(), target)\n'''
+          new = '''\tdebugConfig, debugErr := runGit(context.Background(), target.Repository, "config", "--local", "--get-regexp", "^include")\n\tt.Logf("local include config: %q err=%v", debugConfig, debugErr)\n\terr := rejectGitConfigTarget(context.Background(), target)\n'''
+          if old not in s:
+              raise SystemExit('debug insertion point not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          gofmt -w integrations/git/current_findings_test.go
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add integrations/git/current_findings_test.go
+          git commit -m 'test: temporarily diagnose Git config include'
+          git push
