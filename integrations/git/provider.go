@@ -753,13 +753,9 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, afterHash st
 	if blob != afterHash {
 		return fmt.Errorf("authorized Git blob hash changed before commit")
 	}
-	modeOutput, err := runGit(ctx, target.Repository, "ls-files", "--format=%(objectmode)", "--", literalPathspec(target.Path))
+	mode, err := gitTreeMode(ctx, target, parent)
 	if err != nil {
-		return fmt.Errorf("read target Git mode: %w", err)
-	}
-	mode := strings.TrimSpace(modeOutput)
-	if mode == "" {
-		return fmt.Errorf("target Git mode is missing")
+		return fmt.Errorf("read parent target Git mode: %w", err)
 	}
 	indexFile, err := os.CreateTemp(target.Repository, ".ackos-index-*")
 	if err != nil {
@@ -824,7 +820,7 @@ func verifyCommitAt(ctx context.Context, target Target, git func(...string) (str
 	if expectedParent != "" && fields[1] != expectedParent {
 		return fmt.Errorf("authorized Git execution parent changed unexpectedly")
 	}
-	message, err := safeGit("log", "-1", "--format=%B")
+	message, err := safeGit("log", "-1", "--format=%B", head)
 	if err != nil {
 		return fmt.Errorf("read Git commit message: %w", err)
 	}
@@ -837,6 +833,17 @@ func verifyCommitAt(ctx context.Context, target Target, git func(...string) (str
 	}
 	if !exactNULPathList(paths, target.Path) {
 		return fmt.Errorf("committed Git diff contains an unauthorized path")
+	}
+	parentMode, err := gitTreeMode(ctx, target, head+"^")
+	if err != nil {
+		return fmt.Errorf("read committed Git parent mode: %w", err)
+	}
+	targetMode, err := gitTreeMode(ctx, target, head)
+	if err != nil {
+		return fmt.Errorf("read committed Git target mode: %w", err)
+	}
+	if parentMode != targetMode {
+		return fmt.Errorf("committed Git target mode changed unexpectedly")
 	}
 	beforeHash, err := safeGit("rev-parse", head+"^:./"+target.Path)
 	if err != nil {
@@ -897,6 +904,18 @@ func (v Verifier) requireTracked(ctx context.Context) error {
 		return fmt.Errorf("git target index state is not stageable")
 	}
 	return nil
+}
+
+func gitTreeMode(ctx context.Context, target Target, tree string) (string, error) {
+	output, err := runGit(ctx, target.Repository, "--no-replace-objects", "ls-tree", "--format=%(objectmode)", tree, "--", literalPathspec(target.Path))
+	if err != nil {
+		return "", err
+	}
+	lines := strings.Fields(output)
+	if len(lines) != 1 || (lines[0] != "100644" && lines[0] != "100755") {
+		return "", fmt.Errorf("target Git tree entry is not a regular file")
+	}
+	return lines[0], nil
 }
 
 func gitBlobHash(ctx context.Context, target Target, content string) (string, error) {
