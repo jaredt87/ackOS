@@ -1,0 +1,49 @@
+name: Fix PR10 anchored rename
+
+on:
+  push:
+    branches: [feat/phase2-git-provider]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: ${{ !contains(github.event.head_commit.message, 'fix: anchor atomic target replacement') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch anchored atomic replacement
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('integrations/git/provider.go')
+          s = p.read_text()
+          old_import = '''import (\n\t"bytes"\n\t"context"'''
+          new_import = '''import (\n\t"bytes"\n\t"context"'''
+          assert old_import in s
+
+          old = '''func atomicWriteTarget(target Target, content []byte) error {\n\tpath := filepath.Join(target.Repository, target.Path)\n\tdir := filepath.Dir(path)\n\tmode := os.FileMode(0o644)\n\tif info, err := os.Stat(path); err == nil {\n\t\tif err := rejectUnpreservableMetadata(path, info); err != nil {\n\t\t\treturn err\n\t\t}\n\t\tmode = info.Mode()\n\t}\n\ttmp, err := os.CreateTemp(dir, ".ackos-write-*")\n\tif err != nil {\n\t\treturn err\n\t}\n\tname := tmp.Name()\n\tdefer os.Remove(name)\n\tif err := tmp.Chmod(mode); err != nil {\n\t\t_ = tmp.Close()\n\t\treturn err\n\t}\n\tif _, err := tmp.Write(content); err != nil {\n\t\t_ = tmp.Close()\n\t\treturn err\n\t}\n\tif err := tmp.Sync(); err != nil {\n\t\t_ = tmp.Close()\n\t\treturn err\n\t}\n\tif err := tmp.Close(); err != nil {\n\t\treturn err\n\t}\n\treturn os.Rename(name, path)\n}\n'''
+          new = '''func openParentDirNoSymlink(target Target) (int, error) {\n\tcleanPath := filepath.Clean(target.Path)\n\tif filepath.IsAbs(cleanPath) || cleanPath == "." || cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) {\n\t\treturn -1, fmt.Errorf("git target path escapes repository")\n\t}\n\tfd, err := syscall.Open(target.Repository, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)\n\tif err != nil {\n\t\treturn -1, fmt.Errorf("open git repository directory: %w", err)\n\t}\n\tfor _, part := range strings.Split(filepath.Dir(cleanPath), string(filepath.Separator)) {\n\t\tif part == "." || part == "" {\n\t\t\tcontinue\n\t\t}\n\t\tnext, err := syscall.Openat(fd, part, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)\n\t\tif err != nil {\n\t\t\t_ = syscall.Close(fd)\n\t\t\treturn -1, fmt.Errorf("open git target parent directory: %w", err)\n\t\t}\n\t\t_ = syscall.Close(fd)\n\t\tfd = next\n\t}\n\treturn fd, nil\n}\n\nfunc atomicWriteTarget(target Target, content []byte) error {\n\tpath := filepath.Join(target.Repository, target.Path)\n\tparentFD, err := openParentDirNoSymlink(target)\n\tif err != nil {\n\t\treturn err\n\t}\n\tdefer syscall.Close(parentFD)\n\n\tmode := os.FileMode(0o644)\n\tif info, err := os.Stat(path); err == nil {\n\t\tif err := rejectUnpreservableMetadata(path, info); err != nil {\n\t\t\treturn err\n\t\t}\n\t\tmode = info.Mode()\n\t}\n\n\ttmpName := fmt.Sprintf(".ackos-write-%d-%d", os.Getpid(), time.Now().UnixNano())\n\ttmpFD, err := syscall.Openat(parentFD, tmpName, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW, uint32(mode.Perm()))\n\tif err != nil {\n\t\treturn fmt.Errorf("create temporary git target: %w", err)\n\t}\n\ttmp := os.NewFile(uintptr(tmpFD), filepath.Join(target.Repository, filepath.Dir(target.Path), tmpName))\n\tif tmp == nil {\n\t\t_ = syscall.Close(tmpFD)\n\t\t_ = syscall.Unlinkat(parentFD, tmpName, 0)\n\t\treturn fmt.Errorf("create temporary git target: invalid file descriptor")\n\t}\n\ttmpPath := tmp.Name()\n\tdefer func() {\n\t\t_ = tmp.Close()\n\t\t_ = syscall.Unlinkat(parentFD, tmpName, 0)\n\t}()\n\tif err := tmp.Chmod(mode); err != nil {\n\t\treturn err\n\t}\n\tif _, err := tmp.Write(content); err != nil {\n\t\treturn err\n\t}\n\tif err := tmp.Sync(); err != nil {\n\t\treturn err\n\t}\n\tif err := tmp.Close(); err != nil {\n\t\treturn err\n\t}\n\tif err := syscall.Renameat(parentFD, tmpName, parentFD, filepath.Base(path)); err != nil {\n\t\treturn fmt.Errorf("replace git target: %w", err)\n\t}\n\t_ = tmpPath\n\treturn nil\n}\n'''
+          assert old in s
+          p.write_text(s.replace(old, new))
+
+          t = Path('integrations/git/provider_test.go')
+          ts = t.read_text()
+          marker = '''func TestProviderLifecyclePreservesBlobWhitespace(t *testing.T) {'''
+          test = '''func TestAtomicWriteTargetRejectsSymlinkedParent(t *testing.T) {\n\ttarget, _, _, _, _ := newTestProvider(t, "initial")\n\texternalDir := t.TempDir()\n\texternalFile := filepath.Join(externalDir, "example.md")\n\tif err := os.WriteFile(externalFile, []byte("external"), 0o644); err != nil {\n\t\tt.Fatal(err)\n\t}\n\tdocs := filepath.Join(target.Repository, "docs")\n\tif err := os.Remove(docs); err != nil {\n\t\tt.Fatal(err)\n\t}\n\tif err := os.Symlink(externalDir, docs); err != nil {\n\t\tt.Fatal(err)\n\t}\n\terr := atomicWriteTarget(target, []byte("updated"))\n\tif err == nil || !strings.Contains(err.Error(), "parent directory") {\n\t\tt.Fatalf("atomicWriteTarget error = %v, want symlinked-parent rejection", err)\n\t}\n\tif got := readTestFileAtPath(t, externalFile); got != "external" {\n\t\tt.Fatalf("external file changed = %q", got)\n\t}\n}\n\nfunc readTestFileAtPath(t *testing.T, path string) string {\n\tt.Helper()\n\tcontent, err := os.ReadFile(path)\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\treturn string(content)\n}\n\n'''
+          assert marker in ts
+          t.write_text(ts.replace(marker, test + marker))
+      - name: Format and test
+        run: |
+          gofmt -w integrations/git/provider.go integrations/git/provider_test.go
+          go test ./integrations/git
+      - name: Commit and remove workflow
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add integrations/git/provider.go integrations/git/provider_test.go .github/workflows/fix-pr10-anchor-rename.yml
+          git rm .github/workflows/fix-pr10-anchor-rename.yml
+          git commit -m 'fix: anchor atomic target replacement'
+          git push origin HEAD:feat/phase2-git-provider
