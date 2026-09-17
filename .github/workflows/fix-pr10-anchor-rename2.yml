@@ -1,0 +1,12 @@
+name: Fix PR10 anchored rename v2
+on:
+  push:
+    branches: [feat/phase2-git-provider]
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo fix-pr10-anchor-rename-v2
