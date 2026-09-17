@@ -1,0 +1,53 @@
+name: PR10 Fix Normalization
+
+on:
+  push:
+    branches: [feat/phase2-git-provider]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply PR10 fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('integrations/git/provider.go')
+          s = p.read_text()
+          old = '''\t\tactual, err := filepath.Abs(path)\n\t\tif err != nil {\n\t\t\treturn fmt.Errorf("resolve Git configuration source: %w", err)\n\t\t}\n'''
+          new = '''\t\tif !filepath.IsAbs(path) {\n\t\t\tpath = filepath.Join(target.Repository, path)\n\t\t}\n\t\tactual, err := filepath.Abs(path)\n\t\tif err != nil {\n\t\t\treturn fmt.Errorf("resolve Git configuration source: %w", err)\n\t\t}\n'''
+          if old not in s:
+              raise SystemExit('config origin resolution insertion point not found')
+          s = s.replace(old, new, 1)
+          old = '''\toutput, err := runGit(ctx, target.Repository, "check-attr", "-z", "text", "eol", "ident", "working-tree-encoding", "--", target.Path)\n'''
+          new = '''\toutput, err := runGit(ctx, target.Repository, "check-attr", "-z", "text", "eol", "crlf", "ident", "working-tree-encoding", "--", target.Path)\n'''
+          if old not in s:
+              raise SystemExit('normalization attribute command not found')
+          s = s.replace(old, new, 1)
+          old = '''\tparts := strings.Split(strings.TrimSuffix(output, "\\x00"), "\\x00")\n\tif len(parts) != 12 || parts[0] != target.Path {\n'''
+          new = '''\tparts := strings.Split(strings.TrimSuffix(output, "\\x00"), "\\x00")\n\tif len(parts) != 15 || parts[0] != target.Path {\n'''
+          if old not in s:
+              raise SystemExit('normalization metadata shape not found')
+          s = s.replace(old, new, 1)
+          old = '''\tvalues := map[string]string{\n\t\tparts[1]:  parts[2],\n\t\tparts[4]:  parts[5],\n\t\tparts[7]:  parts[8],\n\t\tparts[10]: parts[11],\n\t}\n'''
+          new = '''\tvalues := map[string]string{\n\t\tparts[1]:  parts[2],\n\t\tparts[4]:  parts[5],\n\t\tparts[7]:  parts[8],\n\t\tparts[10]: parts[11],\n\t\tparts[13]: parts[14],\n\t}\n'''
+          if old not in s:
+              raise SystemExit('normalization metadata map not found')
+          s = s.replace(old, new, 1)
+          old = '''\tif values["eol"] != "unspecified" && values["eol"] != "unset" {\n\t\treturn fmt.Errorf("git target uses a configured eol attribute; normalized targets are not supported")\n\t}\n\tif values["ident"] != "unspecified" && values["ident"] != "unset" {\n'''
+          new = '''\tif values["eol"] != "unspecified" && values["eol"] != "unset" {\n\t\treturn fmt.Errorf("git target uses a configured eol attribute; normalized targets are not supported")\n\t}\n\tif values["crlf"] != "unspecified" && values["crlf"] != "unset" {\n\t\treturn fmt.Errorf("git target uses a configured crlf attribute; normalized targets are not supported")\n\t}\n\tif values["ident"] != "unspecified" && values["ident"] != "unset" {\n'''
+          if old not in s:
+              raise SystemExit('crlf rejection insertion point not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+          gofmt -w integrations/git/provider.go
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add integrations/git/provider.go
+          git commit -m 'fix: reject config includes and legacy crlf'
+          git push
