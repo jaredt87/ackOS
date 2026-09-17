@@ -35,24 +35,16 @@ jobs:
           marker = '''func gitBlobHash(ctx context.Context, target Target, content string) (string, error) {\n'''
           helper = '''func gitTreeMode(ctx context.Context, target Target, tree string) (string, error) {\n\toutput, err := runGit(ctx, target.Repository, "--no-replace-objects", "ls-tree", "--format=%(objectmode)", tree, "--", literalPathspec(target.Path))\n\tif err != nil {\n\t\treturn "", err\n\t}\n\tlines := strings.Fields(output)\n\tif len(lines) != 1 || (lines[0] != "100644" && lines[0] != "100755") {\n\t\treturn "", fmt.Errorf("target Git tree entry is not a regular file")\n\t}\n\treturn lines[0], nil\n}\n\n'''
           if marker not in s: raise SystemExit('blob hash marker not found')
-          s = s.replace(marker, helper + marker, 1)
+          if 'func gitTreeMode(' not in s: s = s.replace(marker, helper + marker, 1)
           p.write_text(s)
-
-          t = Path('integrations/git/current_findings_test.go')
-          ts = t.read_text()
-          if '"github.com/jaredt87/ackOS/kernel"' not in ts:
-              ts = ts.replace('"testing"\n', '"testing"\n\n\t"github.com/jaredt87/ackOS/kernel"\n')
-          if 'func TestVerifyCommitRejectsTargetModeChange' not in ts:
-              ts += r'''\nfunc TestVerifyCommitRejectsTargetModeChange(t *testing.T) {\n\ttarget, _, _, _, _ := newTestProvider(t, "initial")\n\tgitTest(t, target.Repository, "config", "user.email", "ackos-test@example.invalid")\n\tgitTest(t, target.Repository, "config", "user.name", "ackOS test")\n\n\tblob := strings.TrimSpace(gitTest(t, target.Repository, "hash-object", "-w", "--stdin"))\n\tgitTest(t, target.Repository, "update-index", "--add", "--cacheinfo", "120000,"+blob+","+target.Path)\n\ttree := strings.TrimSpace(gitTest(t, target.Repository, "write-tree"))\n\tparent := strings.TrimSpace(gitTest(t, target.Repository, "rev-parse", "HEAD"))\n\tcommit := strings.TrimSpace(gitTest(t, target.Repository, "commit-tree", tree, "-p", parent, "-m", "ackOS: execute mode-test"))\n\tgitTest(t, target.Repository, "update-ref", "HEAD", commit)\n\n\ttransition := kernel.Transition{Subject: target.Subject, Before: "initial", After: "initial"}\n\terr := verifyCommitAt(context.Background(), target, func(args ...string) (string, error) { return runGit(context.Background(), target.Repository, args...) }, parent, transition, "mode-test")\n\tif err == nil || !strings.Contains(err.Error(), "mode") {\n\t\tt.Fatalf("error = %v, want target mode rejection", err)\n\t}\n}\n\nfunc TestVerifyCommitReadsMarkerFromCapturedCommit(t *testing.T) {\n\ttarget, _, _, _, _ := newTestProvider(t, "initial")\n\tgitTest(t, target.Repository, "config", "user.email", "ackos-test@example.invalid")\n\tgitTest(t, target.Repository, "config", "user.name", "ackOS test")\n\n\twrongHead := strings.TrimSpace(gitTest(t, target.Repository, "rev-parse", "HEAD"))\n\tgitTest(t, target.Repository, "commit", "--allow-empty", "-m", "ackOS: execute marker-test")\n\n\ttransition := kernel.Transition{Subject: target.Subject, Before: "initial", After: "initial"}\n\terr := verifyCommitAt(context.Background(), target, func(args ...string) (string, error) { return runGit(context.Background(), target.Repository, args...) }, wrongHead, transition, "marker-test")\n\tif err == nil || !strings.Contains(err.Error(), "parent") {\n\t\tt.Fatalf("error = %v, want captured-commit verification failure", err)\n\t}\n}\n'''
-          t.write_text(ts)
           PY
-          gofmt -w integrations/git/provider.go integrations/git/current_findings_test.go
+          gofmt -w integrations/git/provider.go
           go test ./integrations/git
       - name: Commit fixes
         run: |
           git config user.name 'ackOS automation'
           git config user.email 'ackos-automation@example.invalid'
-          git add integrations/git/provider.go integrations/git/current_findings_test.go
+          git add integrations/git/provider.go
           git diff --cached --quiet && exit 0
           git commit -m 'fix: address PR10 mode and marker findings'
           git push origin HEAD:feat/phase2-git-provider
