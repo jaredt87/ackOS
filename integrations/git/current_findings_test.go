@@ -23,6 +23,8 @@ func TestRejectConfiguredNormalizationRejectsEOLAttribute(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(target.Repository, ".gitattributes"), []byte(target.Path+" text eol=crlf\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	gitTest(t, target.Repository, "add", "--", ".gitattributes")
+	gitTest(t, target.Repository, "commit", "-m", "configure eol normalization")
 
 	err := rejectConfiguredNormalization(context.Background(), target)
 	if err == nil || !strings.Contains(err.Error(), "eol attribute") {
