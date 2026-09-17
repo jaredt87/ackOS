@@ -275,6 +275,17 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	if indexMode != expectedMode {
 		return kernel.Observation{}, fmt.Errorf("Git index target mode changed during verification")
 	}
+	indexHash, err := gitIndexHash(ctx, v.Target)
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("read live Git index target blob: %w", err)
+	}
+	expectedHash, err := v.git(ctx, "--no-replace-objects", "rev-parse", verifiedHead+":./"+v.Target.Path)
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("read verified Git target blob: %w", err)
+	}
+	if indexHash != expectedHash {
+		return kernel.Observation{}, fmt.Errorf("Git index target blob changed during verification")
+	}
 	finalHead, err := v.git(ctx, "rev-parse", "HEAD")
 	if err != nil {
 		return kernel.Observation{}, fmt.Errorf("re-read Git HEAD at verification return boundary: %w", err)
@@ -986,14 +997,10 @@ func liveTargetMode(target Target) (string, error) {
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("Git target is not a regular file")
 	}
-	switch info.Mode().Perm() {
-	case 0o644:
-		return "100644", nil
-	case 0o755:
+	if info.Mode().Perm()&0o111 != 0 {
 		return "100755", nil
-	default:
-		return "", fmt.Errorf("Git target has unsupported mode %o", info.Mode().Perm())
 	}
+	return "100644", nil
 }
 
 func gitIndexMode(ctx context.Context, target Target) (string, error) {
@@ -1015,6 +1022,23 @@ func gitIndexMode(ctx context.Context, target Target) (string, error) {
 		return "", fmt.Errorf("target Git index entry is not a regular file")
 	}
 	return fields[0], nil
+}
+
+func gitIndexHash(ctx context.Context, target Target) (string, error) {
+	output, err := runGit(ctx, target.Repository, "ls-files", "--stage", "-z", "--", literalPathspec(target.Path))
+	if err != nil {
+		return "", err
+	}
+	output = strings.TrimSuffix(output, "\x00")
+	meta, path, ok := strings.Cut(output, "\t")
+	if !ok || path != target.Path {
+		return "", fmt.Errorf("unexpected Git index target metadata")
+	}
+	fields := strings.Fields(meta)
+	if len(fields) != 3 || fields[2] != "0" {
+		return "", fmt.Errorf("target Git index entry is not stage 0")
+	}
+	return fields[1], nil
 }
 
 func gitTreeMode(ctx context.Context, target Target, tree string) (string, error) {
