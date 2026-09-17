@@ -68,3 +68,80 @@ func TestRejectAttributesTargetResolvesGitPathname(t *testing.T) {
 		t.Fatalf("error = %v, want active attributes file rejection", err)
 	}
 }
+
+func TestRejectConfiguredNormalizationRejectsIdent(t *testing.T) {
+	target, _, _, _, _ := newTestProvider(t, "initial")
+	if err := os.WriteFile(filepath.Join(target.Repository, ".gitattributes"), []byte("target.txt ident\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, target.Repository, "add", "--", ".gitattributes")
+	gitTest(t, target.Repository, "commit", "-m", "configure ident normalization")
+
+	err := rejectConfiguredNormalization(context.Background(), target)
+	if err == nil || !strings.Contains(err.Error(), "ident") {
+		t.Fatalf("error = %v, want ident normalization rejection", err)
+	}
+}
+
+func TestRejectConfiguredNormalizationRejectsWorkingTreeEncoding(t *testing.T) {
+	target, _, _, _, _ := newTestProvider(t, "initial")
+	if err := os.WriteFile(filepath.Join(target.Repository, ".gitattributes"), []byte("target.txt working-tree-encoding=UTF-8\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, target.Repository, "add", "--", ".gitattributes")
+	gitTest(t, target.Repository, "commit", "-m", "configure working tree encoding")
+
+	err := rejectConfiguredNormalization(context.Background(), target)
+	if err == nil || !strings.Contains(err.Error(), "working-tree-encoding") {
+		t.Fatalf("error = %v, want working-tree-encoding rejection", err)
+	}
+}
+
+func TestRejectGrafts(t *testing.T) {
+	target, _, _, _, _ := newTestProvider(t, "initial")
+	grafts, err := runGit(context.Background(), target.Repository, "rev-parse", "--git-path", "info/grafts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	grafts = strings.TrimSpace(grafts)
+	if !filepath.IsAbs(grafts) {
+		grafts = filepath.Join(target.Repository, grafts)
+	}
+	if err := os.MkdirAll(filepath.Dir(grafts), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(grafts, []byte("deadbeefdeadbeefdeadbeefdeadbeefdeadbeef deadbeefdeadbeefdeadbeefdeadbeefdeadbeef\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := rejectGrafts(context.Background(), target); err == nil || !strings.Contains(err.Error(), "graft") {
+		t.Fatalf("error = %v, want graft rejection", err)
+	}
+}
+
+func TestSanitizedGitEnvPreservesCommitIdentity(t *testing.T) {
+	t.Setenv("GIT_AUTHOR_NAME", "ackOS Author")
+	t.Setenv("GIT_AUTHOR_EMAIL", "author@example.invalid")
+	t.Setenv("GIT_COMMITTER_NAME", "ackOS Committer")
+	t.Setenv("GIT_COMMITTER_EMAIL", "committer@example.invalid")
+	t.Setenv("GIT_DIR", "/outside/repository")
+	t.Setenv("GIT_WORK_TREE", "/outside/worktree")
+	t.Setenv("GIT_INDEX_FILE", "/outside/index")
+
+	env := sanitizedGitEnv()
+	joined := strings.Join(env, "\x00")
+	for _, want := range []string{
+		"GIT_AUTHOR_NAME=ackOS Author",
+		"GIT_AUTHOR_EMAIL=author@example.invalid",
+		"GIT_COMMITTER_NAME=ackOS Committer",
+		"GIT_COMMITTER_EMAIL=committer@example.invalid",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("sanitized environment missing %q", want)
+		}
+	}
+	for _, blocked := range []string{"GIT_DIR=", "GIT_WORK_TREE=", "GIT_INDEX_FILE="} {
+		if strings.Contains(joined, blocked) {
+			t.Fatalf("sanitized environment retained %q", blocked)
+		}
+	}
+}
