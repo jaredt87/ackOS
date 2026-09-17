@@ -173,8 +173,8 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(err)
 	}
 	message := "ackOS: execute " + authority.ExecutionID
-	if _, err := e.git(ctx, "-c", "core.hooksPath=/dev/null", "commit", "--no-verify", "--no-gpg-sign", "--only", "-m", message, "--", literalPathspec(e.Target.Path)); err != nil {
-		return fail(fmt.Errorf("git commit: %w", err))
+	if err := commitVerifiedTree(ctx, e.Target, head, afterHash, []byte(t.After), message); err != nil {
+		return fail(err)
 	}
 	if err := verifyCommit(e, ctx, head, t, authority.ExecutionID); err != nil {
 		return fail(err)
@@ -240,12 +240,23 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	if err := verifyLatestCommit(v, ctx, t, authority.ExecutionID); err != nil {
 		return kernel.Observation{}, err
 	}
+	verifiedHead, err := v.git(ctx, "rev-parse", "HEAD")
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("re-read verified Git HEAD: %w", err)
+	}
 	finalContent, err := v.read(ctx)
 	if err != nil {
 		return kernel.Observation{}, err
 	}
 	if finalContent != t.After {
 		return kernel.Observation{}, fmt.Errorf("git file changed during verification")
+	}
+	finalHead, err := v.git(ctx, "rev-parse", "HEAD")
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("re-read Git HEAD at verification return boundary: %w", err)
+	}
+	if finalHead != verifiedHead {
+		return kernel.Observation{}, fmt.Errorf("Git HEAD changed during verification")
 	}
 	return kernel.NewObservation(v.Target.Subject, finalContent, 0, time.Now().UTC())
 }
@@ -479,8 +490,17 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 	if attrs == "" {
 		return nil
 	}
-	configured, _ := filepath.Abs(filepath.Join(target.Repository, target.Path))
-	actual, _ := filepath.Abs(attrs)
+	configured, err := filepath.Abs(filepath.Join(target.Repository, target.Path))
+	if err != nil {
+		return fmt.Errorf("resolve configured target path: %w", err)
+	}
+	if !filepath.IsAbs(attrs) {
+		attrs = filepath.Join(target.Repository, attrs)
+	}
+	actual, err := filepath.Abs(attrs)
+	if err != nil {
+		return fmt.Errorf("resolve configured attributes file: %w", err)
+	}
 	if configured == actual {
 		return fmt.Errorf("git target is configured as the active attributes file")
 	}
@@ -505,12 +525,25 @@ func rejectGrafts(ctx context.Context, target Target) error {
 }
 
 func rejectConfiguredFilters(ctx context.Context, target Target) error {
-	attrs, err := targetGitAttr(ctx, target)
+	paths, err := runGit(ctx, target.Repository, "ls-files", "-z", "--cached")
 	if err != nil {
-		return err
+		return fmt.Errorf("inspect tracked Git paths: %w", err)
 	}
-	if attrs != "unspecified" && attrs != "unset" {
-		return fmt.Errorf("git target uses a configured clean filter; filtered targets are not supported")
+	if strings.TrimSuffix(paths, "\x00") == "" {
+		return nil
+	}
+	attrs, err := runGitInput(ctx, target.Repository, []byte(paths), "check-attr", "-z", "--stdin", "filter")
+	if err != nil {
+		return fmt.Errorf("inspect Git clean filters: %w", err)
+	}
+	parts := strings.Split(strings.TrimSuffix(attrs, "\x00"), "\x00")
+	if len(parts)%3 != 0 {
+		return fmt.Errorf("unexpected Git clean filter metadata")
+	}
+	for i := 0; i < len(parts); i += 3 {
+		if parts[i+1] != "filter" || (parts[i+2] != "unspecified" && parts[i+2] != "unset") {
+			return fmt.Errorf("git repository uses a configured clean filter; filtered repositories are not supported")
+		}
 	}
 	return nil
 }
@@ -530,8 +563,12 @@ func targetGitAttr(ctx context.Context, target Target) (string, error) {
 func rejectConfiguredNormalization(ctx context.Context, target Target) error {
 	autocrlf, err := runGit(ctx, target.Repository, "config", "--get", "core.autocrlf")
 	if err == nil {
-		switch strings.ToLower(strings.TrimSpace(autocrlf)) {
-		case "true", "input", "auto":
+		raw := strings.ToLower(strings.TrimSpace(autocrlf))
+		if raw == "input" {
+			return fmt.Errorf("git target uses core.autocrlf normalization; normalized targets are not supported")
+		}
+		parsed, boolErr := runGit(ctx, target.Repository, "config", "--bool", "--get", "core.autocrlf")
+		if boolErr == nil && strings.EqualFold(strings.TrimSpace(parsed), "true") {
 			return fmt.Errorf("git target uses core.autocrlf normalization; normalized targets are not supported")
 		}
 	}
@@ -560,6 +597,61 @@ func rejectConfiguredNormalization(ctx context.Context, target Target) error {
 	}
 	if values["working-tree-encoding"] != "unspecified" && values["working-tree-encoding"] != "unset" {
 		return fmt.Errorf("git target uses working-tree-encoding; encoded targets are not supported")
+	}
+	return nil
+}
+
+func commitVerifiedTree(ctx context.Context, target Target, parent, afterHash string, content []byte, message string) error {
+	blob, err := runGitInput(ctx, target.Repository, content, "hash-object", "-w", "--stdin")
+	if err != nil {
+		return fmt.Errorf("store authorized Git blob: %w", err)
+	}
+	blob = strings.TrimSpace(blob)
+	if blob != afterHash {
+		return fmt.Errorf("authorized Git blob hash changed before commit")
+	}
+	modeOutput, err := runGit(ctx, target.Repository, "ls-files", "--format=%(objectmode)", "--", literalPathspec(target.Path))
+	if err != nil {
+		return fmt.Errorf("read target Git mode: %w", err)
+	}
+	mode := strings.TrimSpace(modeOutput)
+	if mode == "" {
+		return fmt.Errorf("target Git mode is missing")
+	}
+	indexFile, err := os.CreateTemp(target.Repository, ".ackos-index-*")
+	if err != nil {
+		return fmt.Errorf("create temporary Git index: %w", err)
+	}
+	indexPath := indexFile.Name()
+	if err := indexFile.Close(); err != nil {
+		_ = os.Remove(indexPath)
+		return fmt.Errorf("close temporary Git index: %w", err)
+	}
+	defer os.Remove(indexPath)
+	env := map[string]string{"GIT_INDEX_FILE": indexPath}
+	if _, err := runGitWithEnv(ctx, target.Repository, env, "read-tree", parent); err != nil {
+		return fmt.Errorf("capture Git parent index: %w", err)
+	}
+	if _, err := runGitWithEnv(ctx, target.Repository, env, "update-index", "--add", "--cacheinfo", mode, blob, target.Path); err != nil {
+		return fmt.Errorf("install authorized target in temporary Git index: %w", err)
+	}
+	tree, err := runGitWithEnv(ctx, target.Repository, env, "write-tree")
+	if err != nil {
+		return fmt.Errorf("write authorized Git tree: %w", err)
+	}
+	commit, err := runGit(ctx, target.Repository, "commit-tree", strings.TrimSpace(tree), "-p", parent, "-m", message, "--no-gpg-sign")
+	if err != nil {
+		return fmt.Errorf("create authorized Git commit: %w", err)
+	}
+	commit = strings.TrimSpace(commit)
+	if commit == "" {
+		return fmt.Errorf("Git commit object is missing")
+	}
+	if _, err := runGit(ctx, target.Repository, "update-ref", "HEAD", commit, parent); err != nil {
+		return fmt.Errorf("atomically install authorized Git commit: %w", err)
+	}
+	if _, err := runGit(ctx, target.Repository, "add", "--", literalPathspec(target.Path)); err != nil {
+		return fmt.Errorf("synchronize Git index after commit: %w", err)
 	}
 	return nil
 }
@@ -714,12 +806,30 @@ func (v Verifier) git(ctx context.Context, args ...string) (string, error) {
 }
 
 func runGit(ctx context.Context, repository string, args ...string) (string, error) {
+	return runGitWithInput(ctx, repository, nil, nil, args...)
+}
+
+func runGitInput(ctx context.Context, repository string, input []byte, args ...string) (string, error) {
+	return runGitWithInput(ctx, repository, input, nil, args...)
+}
+
+func runGitWithEnv(ctx context.Context, repository string, env map[string]string, args ...string) (string, error) {
+	return runGitWithInput(ctx, repository, nil, env, args...)
+}
+
+func runGitWithInput(ctx context.Context, repository string, input []byte, overrides map[string]string, args ...string) (string, error) {
 	gitArgs := append([]string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"}, args...)
 	cmd := exec.Command("git", gitArgs...)
 	cmd.Dir = repository
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = 2 * time.Second
 	cmd.Env = sanitizedGitEnv()
+	for key, value := range overrides {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
+	if input != nil {
+		cmd.Stdin = bytes.NewReader(input)
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
