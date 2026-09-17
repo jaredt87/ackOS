@@ -594,11 +594,11 @@ func targetGitAttr(ctx context.Context, target Target) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("inspect Git clean filter: %w", err)
 	}
-	parts := strings.Split(strings.TrimSuffix(output, "\x00"), "\x00")
-	if len(parts) != 3 || parts[0] != target.Path || parts[1] != "filter" {
+	parts := strings.Split(strings.Trim(output, "\x00"), "\x00")
+	if len(parts) < 3 || parts[len(parts)-2] != "filter" {
 		return "", fmt.Errorf("unexpected Git clean filter metadata")
 	}
-	return parts[2], nil
+	return parts[len(parts)-1], nil
 }
 
 func gitBlobHash(ctx context.Context, target Target, content string) (string, error) {
