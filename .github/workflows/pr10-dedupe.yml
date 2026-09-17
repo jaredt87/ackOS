@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Deduplicate config guard
+      - name: Repair config guard
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -20,18 +20,97 @@ jobs:
           s = p.read_text()
           start = s.index('func rejectGitConfigTarget(ctx context.Context, target Target) error {')
           end = s.index('func rejectGrafts(ctx context.Context, target Target) error {', start)
-          body = s[start:end]
-          marker = '\tgitConfig, configErr := runGit(ctx, target.Repository, "rev-parse", "--git-path", "config")\n'
-          parts = body.split(marker)
-          if len(parts) > 2:
-              body = parts[0] + marker + parts[1]
-          p.write_text(s[:start] + body + s[end:])
+          fn = r'''func rejectGitConfigTarget(ctx context.Context, target Target) error {
+\tconfigured, err := filepath.Abs(filepath.Join(target.Repository, target.Path))
+\tif err != nil {
+\t\treturn fmt.Errorf("resolve configured Git target path: %w", err)
+\t}
+\toutput, err := runGit(ctx, target.Repository, "config", "--includes", "--show-origin", "--list")
+\tif err != nil {
+\t\treturn fmt.Errorf("inspect Git configuration sources: %w", err)
+\t}
+\tfor _, line := range strings.Split(output, "\\n") {
+\t\tline = strings.TrimSpace(line)
+\t\tif line == "" {
+\t\t\tcontinue
+\t\t}
+\t\torigin, _, ok := strings.Cut(line, "\\t")
+\t\tif !ok || !strings.HasPrefix(origin, "file:") {
+\t\t\tcontinue
+\t\t}
+\t\tpath := strings.TrimPrefix(origin, "file:")
+\t\tif path == "" {
+\t\t\tcontinue
+\t\t}
+\t\tif !filepath.IsAbs(path) {
+\t\t\tpath = filepath.Join(target.Repository, path)
+\t\t}
+\t\tactual, err := filepath.Abs(path)
+\t\tif err != nil {
+\t\t\treturn fmt.Errorf("resolve Git configuration source: %w", err)
+\t\t}
+\t\tif actual == configured {
+\t\t\treturn fmt.Errorf("git target is an active Git configuration source")
+\t\t}
+\t}
+\tgitConfig, configErr := runGit(ctx, target.Repository, "rev-parse", "--git-path", "config")
+\tif configErr == nil {
+\t\tconfigPath := strings.TrimSpace(gitConfig)
+\t\tif !filepath.IsAbs(configPath) {
+\t\t\tconfigPath = filepath.Join(target.Repository, configPath)
+\t\t}
+\t\tconfigPath, resolveErr := filepath.Abs(configPath)
+\t\tif resolveErr != nil {
+\t\t\treturn fmt.Errorf("resolve Git config path: %w", resolveErr)
+\t\t}
+\t\tdata, readErr := os.ReadFile(configPath)
+\t\tif readErr == nil {
+\t\t\tsection := ""
+\t\t\tfor _, raw := range strings.Split(string(data), "\\n") {
+\t\t\t\tline := strings.TrimSpace(raw)
+\t\t\t\tif strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+\t\t\t\t\tsection = strings.ToLower(strings.TrimSpace(line[1 : len(line)-1]))
+\t\t\t\t\tcontinue
+\t\t\t\t}
+\t\t\t\tif !strings.HasPrefix(section, "include") {
+\t\t\t\t\tcontinue
+\t\t\t\t}
+\t\t\t\tkey, value, ok := strings.Cut(line, "=")
+\t\t\t\tif !ok || strings.ToLower(strings.TrimSpace(key)) != "path" {
+\t\t\t\t\tcontinue
+\t\t\t\t}
+\t\t\t\tinclude := strings.TrimSpace(value)
+\t\t\t\tif !filepath.IsAbs(include) {
+\t\t\t\t\tinclude = filepath.Join(filepath.Dir(configPath), include)
+\t\t\t\t}
+\t\t\t\tinclude, resolveErr = filepath.Abs(include)
+\t\t\t\tif resolveErr != nil {
+\t\t\t\t\treturn fmt.Errorf("resolve Git include: %w", resolveErr)
+\t\t\t\t}
+\t\t\t\tif include == configured {
+\t\t\t\t\treturn fmt.Errorf("git target is an active Git configuration source")
+\t\t\t\t}
+\t\t\t\tif matches, globErr := filepath.Glob(include); globErr == nil {
+\t\t\t\t\tfor _, match := range matches {
+\t\t\t\t\t\tmatch, _ = filepath.Abs(match)
+\t\t\t\t\t\tif match == configured {
+\t\t\t\t\t\t\treturn fmt.Errorf("git target is an active Git configuration source")
+\t\t\t\t\t\t}
+\t\t\t\t\t}
+\t\t\t\t}
+\t\t\t}
+\t\t}
+\t}
+\treturn nil
+}
+'''
+          p.write_text(s[:start] + fn + s[end:])
           PY
           gofmt -w integrations/git/provider.go
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add integrations/git/provider.go
-          git commit -m 'fix: deduplicate Git config guard'
+          git commit -m 'fix: repair Git config guard'
           git fetch origin feat/phase2-git-provider
           git rebase origin/feat/phase2-git-provider
           git push origin HEAD:feat/phase2-git-provider
