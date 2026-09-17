@@ -641,6 +641,54 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 			}
 		}
 	}
+	gitConfig, configErr := runGit(ctx, target.Repository, "rev-parse", "--git-path", "config")
+	if configErr == nil {
+		configPath := strings.TrimSpace(gitConfig)
+		if !filepath.IsAbs(configPath) {
+			configPath = filepath.Join(target.Repository, configPath)
+		}
+		configPath, resolveErr := filepath.Abs(configPath)
+		if resolveErr != nil {
+			return fmt.Errorf("resolve Git config path: %w", resolveErr)
+		}
+		data, readErr := os.ReadFile(configPath)
+		if readErr == nil {
+			section := ""
+			for _, raw := range strings.Split(string(data), "\n") {
+				line := strings.TrimSpace(raw)
+				if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+					section = strings.ToLower(strings.TrimSpace(line[1 : len(line)-1]))
+					continue
+				}
+				if !strings.HasPrefix(section, "include") {
+					continue
+				}
+				key, value, ok := strings.Cut(line, "=")
+				if !ok || strings.ToLower(strings.TrimSpace(key)) != "path" {
+					continue
+				}
+				include := strings.TrimSpace(value)
+				if !filepath.IsAbs(include) {
+					include = filepath.Join(filepath.Dir(configPath), include)
+				}
+				include, resolveErr = filepath.Abs(include)
+				if resolveErr != nil {
+					return fmt.Errorf("resolve Git include: %w", resolveErr)
+				}
+				if include == configured {
+					return fmt.Errorf("git target is an active Git configuration source")
+				}
+				if matches, globErr := filepath.Glob(include); globErr == nil {
+					for _, match := range matches {
+						match, _ = filepath.Abs(match)
+						if match == configured {
+							return fmt.Errorf("git target is an active Git configuration source")
+						}
+					}
+				}
+			}
+		}
+	}
 	return nil
 }
 
