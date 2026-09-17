@@ -57,6 +57,33 @@ func TestProviderLifecycleCommitsExactTransition(t *testing.T) {
 	_ = recovery
 }
 
+func TestAtomicWriteTargetRejectsSymlinkedParent(t *testing.T) {
+	target, _, _, _, _ := newTestProvider(t, "initial")
+	externalDir := t.TempDir()
+	externalFile := filepath.Join(externalDir, "example.md")
+	if err := os.WriteFile(externalFile, []byte("external"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	docs := filepath.Join(target.Repository, "docs")
+	if err := os.RemoveAll(docs); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(externalDir, docs); err != nil {
+		t.Fatal(err)
+	}
+	err := atomicWriteTarget(target, []byte("updated"))
+	if err == nil || !strings.Contains(err.Error(), "parent directory") {
+		t.Fatalf("atomicWriteTarget error = %v, want symlinked-parent rejection", err)
+	}
+	content, err := os.ReadFile(externalFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "external" {
+		t.Fatalf("external file changed = %q", content)
+	}
+}
+
 func TestProviderLifecyclePreservesBlobWhitespace(t *testing.T) {
 	target, observer, executor, verifier, _ := newTestProvider(t, "initial\n")
 	observation, err := observer.Observe(context.Background(), target.Subject)

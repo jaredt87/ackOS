@@ -387,9 +387,38 @@ func validateMutationBoundary(ctx context.Context, target Target, expected strin
 	return nil
 }
 
+func openParentDirNoSymlink(target Target) (int, error) {
+	cleanPath := filepath.Clean(target.Path)
+	if filepath.IsAbs(cleanPath) || cleanPath == "." || cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) {
+		return -1, fmt.Errorf("git target path escapes repository")
+	}
+	fd, err := syscall.Open(target.Repository, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return -1, fmt.Errorf("open git repository directory: %w", err)
+	}
+	for _, part := range strings.Split(filepath.Dir(cleanPath), string(filepath.Separator)) {
+		if part == "." || part == "" {
+			continue
+		}
+		next, err := syscall.Openat(fd, part, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+		if err != nil {
+			_ = syscall.Close(fd)
+			return -1, fmt.Errorf("open git target parent directory: %w", err)
+		}
+		_ = syscall.Close(fd)
+		fd = next
+	}
+	return fd, nil
+}
+
 func atomicWriteTarget(target Target, content []byte) error {
 	path := filepath.Join(target.Repository, target.Path)
-	dir := filepath.Dir(path)
+	parentFD, err := openParentDirNoSymlink(target)
+	if err != nil {
+		return err
+	}
+	defer syscall.Close(parentFD)
+
 	mode := os.FileMode(0o644)
 	if info, err := os.Stat(path); err == nil {
 		if err := rejectUnpreservableMetadata(path, info); err != nil {
@@ -397,28 +426,38 @@ func atomicWriteTarget(target Target, content []byte) error {
 		}
 		mode = info.Mode()
 	}
-	tmp, err := os.CreateTemp(dir, ".ackos-write-*")
+
+	tmpName := fmt.Sprintf(".ackos-write-%d-%d", os.Getpid(), time.Now().UnixNano())
+	tmpFD, err := syscall.Openat(parentFD, tmpName, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW, uint32(mode.Perm()))
 	if err != nil {
-		return err
+		return fmt.Errorf("create temporary git target: %w", err)
 	}
-	name := tmp.Name()
-	defer os.Remove(name)
-	if err := tmp.Chmod(mode); err != nil {
+	tmp := os.NewFile(uintptr(tmpFD), filepath.Join(target.Repository, filepath.Dir(target.Path), tmpName))
+	if tmp == nil {
+		_ = syscall.Close(tmpFD)
+		_ = syscall.Unlinkat(parentFD, tmpName)
+		return fmt.Errorf("create temporary git target: invalid file descriptor")
+	}
+	defer func() {
 		_ = tmp.Close()
+		_ = syscall.Unlinkat(parentFD, tmpName)
+	}()
+	if err := tmp.Chmod(mode); err != nil {
 		return err
 	}
 	if _, err := tmp.Write(content); err != nil {
-		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(name, path)
+	if err := syscall.Renameat(parentFD, tmpName, parentFD, filepath.Base(path)); err != nil {
+		return fmt.Errorf("replace git target: %w", err)
+	}
+	return nil
 }
 
 func rejectUnpreservableMetadata(path string, info os.FileInfo) error {
