@@ -1,0 +1,85 @@
+name: Patch PR10 findings v2
+on:
+  pull_request:
+    types: [synchronize]
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor == 'jaredt87'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/phase2-git-provider
+          fetch-depth: 0
+      - name: Apply fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('integrations/git/provider.go')
+          s = p.read_text()
+
+          old = '''func rejectAttributesTarget(ctx context.Context, target Target) error {\n\tif strings.EqualFold(filepath.Base(target.Path), ".gitattributes") {\n\t\treturn fmt.Errorf("git .gitattributes targets are not supported because the target can change its own filter environment")\n\t}\n'''
+          new = '''func rejectActiveAttributesPath(ctx context.Context, target Target, gitPath string) error {\n\tpath, err := runGit(ctx, target.Repository, "rev-parse", "--git-path", gitPath)\n\tif err != nil {\n\t\treturn nil\n\t}\n\tpath = strings.TrimSpace(path)\n\tif path == "" {\n\t\treturn nil\n\t}\n\tif !filepath.IsAbs(path) {\n\t\tpath = filepath.Join(target.Repository, path)\n\t}\n\tconfigured, err := filepath.Abs(filepath.Join(target.Repository, target.Path))\n\tif err != nil {\n\t\treturn fmt.Errorf("resolve configured target path: %w", err)\n\t}\n\tactual, err := filepath.Abs(path)\n\tif err != nil {\n\t\treturn fmt.Errorf("resolve active attributes path: %w", err)\n\t}\n\tconfigured, err = filepath.EvalSymlinks(configured)\n\tif err != nil {\n\t\treturn fmt.Errorf("resolve configured target identity: %w", err)\n\t}\n\tactual, err = filepath.EvalSymlinks(actual)\n\tif os.IsNotExist(err) {\n\t\treturn nil\n\t}\n\tif err != nil {\n\t\treturn fmt.Errorf("resolve active attributes identity: %w", err)\n\t}\n\tconfigured, err = filepath.Abs(configured)\n\tif err != nil {\n\t\treturn fmt.Errorf("resolve configured target identity path: %w", err)\n\t}\n\tactual, err = filepath.Abs(actual)\n\tif err != nil {\n\t\treturn fmt.Errorf("resolve active attributes identity path: %w", err)\n\t}\n\tif configured == actual {\n\t\treturn fmt.Errorf("git target is an active Git attributes source")\n\t}\n\treturn nil\n}\n\nfunc rejectAttributesTarget(ctx context.Context, target Target) error {\n\tif strings.EqualFold(filepath.Base(target.Path), ".gitattributes") {\n\t\treturn fmt.Errorf("git .gitattributes targets are not supported because the target can change its own filter environment")\n\t}\n\tif err := rejectActiveAttributesPath(ctx, target, "info/attributes"); err != nil {\n\t\treturn err\n\t}\n'''
+          if old not in s: raise SystemExit('attributes guard anchor not found')
+          s = s.replace(old, new, 1)
+
+          old = '''\t\t\t_, include, ok := strings.Cut(line, "\\t")\n\t\t\tif !ok || include == "" {\n\t\t\t\tcontinue\n\t\t\t}\n'''
+          new = '''\t\t\tseparator := strings.IndexAny(line, " \\t")\n\t\t\tif separator < 0 {\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\tinclude := strings.TrimSpace(line[separator:])\n\t\t\tif include == "" {\n\t\t\t\tcontinue\n\t\t\t}\n'''
+          if old not in s: raise SystemExit('include parser anchor not found')
+          s = s.replace(old, new, 1)
+
+          old = '''func readFile(ctx context.Context, target Target) (string, error) {\n\tif err := ctx.Err(); err != nil {\n\t\treturn "", err\n\t}\n\tpath := filepath.Join(target.Repository, target.Path)\n\tfd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)\n\tif err != nil {\n\t\treturn "", fmt.Errorf("open git file: %w", err)\n\t}\n\tfile := os.NewFile(uintptr(fd), path)\n\tif file == nil {\n\t\t_ = syscall.Close(fd)\n\t\treturn "", fmt.Errorf("open git file: invalid file descriptor")\n\t}\n'''
+          new = '''func readFile(ctx context.Context, target Target) (string, error) {\n\tif err := ctx.Err(); err != nil {\n\t\treturn "", err\n\t}\n\tfile, err := openTargetNoSymlink(target)\n\tif err != nil {\n\t\treturn "", fmt.Errorf("open git file: %w", err)\n\t}\n'''
+          if old not in s: raise SystemExit('readFile anchor not found')
+          s = s.replace(old, new, 1)
+
+          marker = '''func validateNoSymlinks(target Target) error {\n'''
+          helper = '''func openTargetNoSymlink(target Target) (*os.File, error) {\n\trootFD, err := syscall.Open(target.Repository, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW|syscall.O_DIRECTORY, 0)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tfd := rootFD\n\tparts := strings.Split(filepath.Clean(target.Path), string(filepath.Separator))\n\tfor i, part := range parts {\n\t\tif part == "" || part == "." || part == ".." {\n\t\t\t_ = syscall.Close(fd)\n\t\t\treturn nil, fmt.Errorf("invalid target path component")\n\t\t}\n\t\tflags := syscall.O_RDONLY | syscall.O_NONBLOCK | syscall.O_NOFOLLOW\n\t\tif i < len(parts)-1 {\n\t\t\tflags |= syscall.O_DIRECTORY\n\t\t}\n\t\tnext, openErr := syscall.Openat(fd, part, flags, 0)\n\t\tif openErr != nil {\n\t\t\t_ = syscall.Close(fd)\n\t\t\treturn nil, openErr\n\t\t}\n\t\tif err := syscall.Close(fd); err != nil {\n\t\t\t_ = syscall.Close(next)\n\t\t\treturn nil, err\n\t\t}\n\t\tfd = next\n\t}\n\tfile := os.NewFile(uintptr(fd), filepath.Join(target.Repository, target.Path))\n\tif file == nil {\n\t\t_ = syscall.Close(fd)\n\t\treturn nil, fmt.Errorf("invalid file descriptor")\n\t}\n\treturn file, nil\n}\n\n'''
+          if 'func openTargetNoSymlink(' not in s: s = s.replace(marker, helper + marker, 1)
+
+          old = '''func verifyCommit(e Executor, ctx context.Context, parent string, t kernel.Transition, executionID string) error {\n\treturn verifyCommitAt(ctx, e.Target, func(args ...string) (string, error) { return e.git(ctx, args...) }, parent, t, executionID)\n}\n\nfunc verifyLatestCommit(v Verifier, ctx context.Context, t kernel.Transition, executionID string) error {\n\treturn verifyCommitAt(ctx, v.Target, func(args ...string) (string, error) { return v.git(ctx, args...) }, "", t, executionID)\n}\n'''
+          new = '''func verifyCommit(e Executor, ctx context.Context, parent string, t kernel.Transition, executionID string) error {\n\t_, err := verifyCommitAt(ctx, e.Target, func(args ...string) (string, error) { return e.git(ctx, args...) }, parent, t, executionID)\n\treturn err\n}\n\nfunc verifyLatestCommit(v Verifier, ctx context.Context, t kernel.Transition, executionID string) (string, error) {\n\treturn verifyCommitAt(ctx, v.Target, func(args ...string) (string, error) { return v.git(ctx, args...) }, "", t, executionID)\n}\n'''
+          if old not in s: raise SystemExit('verify wrappers anchor not found')
+          s = s.replace(old, new, 1)
+
+          old = '''func verifyCommitAt(ctx context.Context, target Target, git func(...string) (string, error), expectedParent string, t kernel.Transition, executionID string) error {\n'''
+          new = '''func verifyCommitAt(ctx context.Context, target Target, git func(...string) (string, error), expectedParent string, t kernel.Transition, executionID string) (string, error) {\n'''
+          if old not in s: raise SystemExit('verifyCommitAt signature anchor not found')
+          s = s.replace(old, new, 1)
+          errors = [
+              'read committed Git HEAD: %w', 'read committed Git parents: %w',
+              'authorized Git execution did not produce one parent commit',
+              'authorized Git execution parent changed unexpectedly',
+              'read Git commit message: %w', 'git execution marker mismatch',
+              'inspect committed Git diff: %w', 'committed Git diff contains an unauthorized path',
+              'read committed Git parent mode: %w', 'read committed Git target mode: %w',
+              'committed Git target mode changed unexpectedly', 'read committed Git parent state: %w',
+              'normalize authorized Git parent state: %w', 'committed Git parent does not match authorized state',
+              'read committed Git target state: %w', 'normalize authorized Git target state: %w',
+              'committed Git target does not match authorized state']
+          for msg in errors:
+              s = s.replace('return fmt.Errorf("'+msg+'")', 'return "", fmt.Errorf("'+msg+'")', 1)
+          old = 'if err := verifyLatestCommit(v, ctx, t, authority.ExecutionID); err != nil {'
+          new = 'if _, err := verifyLatestCommit(v, ctx, t, authority.ExecutionID); err != nil {'
+          if old not in s: raise SystemExit('verifier call anchor not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          t = Path('integrations/git/current_findings_test.go')
+          ts = t.read_text()
+          ts = ts.replace('err := verifyCommitAt(', '_, err := verifyCommitAt(')
+          t.write_text(ts)
+          PY
+          gofmt -w integrations/git/provider.go integrations/git/current_findings_test.go
+          go test ./integrations/git
+      - name: Commit fixes
+        run: |
+          git config user.name 'ackOS automation'
+          git config user.email 'ackos-automation@example.invalid'
+          git add integrations/git/provider.go integrations/git/current_findings_test.go
+          git diff --cached --quiet && exit 0
+          git commit -m 'fix: address latest PR10 review findings'
+          git push origin HEAD:feat/phase2-git-provider
