@@ -494,13 +494,13 @@ func rejectConfiguredNormalization(ctx context.Context, target Target) error {
 		return fmt.Errorf("inspect Git text normalization: %w", err)
 	}
 	parts := strings.Split(strings.Trim(output, "\x00"), "\x00")
-	if len(parts) != 5 || parts[0] != target.Path || parts[1] != "text" || parts[3] != "eol" {
+	if len(parts) != 6 || parts[0] != target.Path || parts[1] != "text" || parts[3] != target.Path || parts[4] != "eol" {
 		return fmt.Errorf("unexpected Git text normalization metadata")
 	}
 	if parts[2] != "unspecified" && parts[2] != "unset" {
 		return fmt.Errorf("git target uses a configured text normalization attribute; normalized targets are not supported")
 	}
-	if parts[4] != "unspecified" && parts[4] != "unset" {
+	if parts[5] != "unspecified" && parts[5] != "unset" {
 		return fmt.Errorf("git target uses a configured eol attribute; normalized targets are not supported")
 	}
 	return nil
