@@ -215,13 +215,12 @@ func TestVerifyCommitReadsMarkerFromCapturedCommit(t *testing.T) {
 
 	transition := kernel.Transition{Subject: target.Subject, Before: "initial", After: "updated"}
 	git := func(args ...string) (string, error) {
-		if len(args) >= 3 && args[0] == "log" && args[1] == "-1" {
+		if len(args) >= 2 && args[0] == "log" && args[1] == "-1" {
 			return "ackOS: execute wrong-marker", nil
 		}
 		return runGit(context.Background(), target.Repository, args...)
 	}
-	err = verifyCommitAt(context.Background(), target, parent, transition, "marker-test")
-	_ = git
+	err = verifyCommitAt(context.Background(), target, git, parent, transition, "marker-test")
 	if err == nil || !strings.Contains(err.Error(), "marker") {
 		t.Fatalf("error = %v, want captured-commit marker verification failure", err)
 	}
