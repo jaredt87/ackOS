@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+// Current findings regression coverage is kept separate from the provider's integration tests.
+
 func TestRejectConfiguredNormalizationRejectsAutocrlf(t *testing.T) {
 	target, _, _, _, _ := newTestProvider(t, "initial")
 	gitTest(t, target.Repository, "config", "core.autocrlf", "true")
@@ -69,6 +71,36 @@ func TestRejectAttributesTargetResolvesGitPathname(t *testing.T) {
 	}
 }
 
+func TestRejectGitConfigTargetRejectsActiveGitConfigInclude(t *testing.T) {
+	target, _, _, _, _ := newTestProvider(t, "initial")
+	configPath := filepath.Join(target.Repository, "tracked-config.inc")
+	if err := os.WriteFile(configPath, []byte("[core]\n\tattributesFile = /tmp/unused\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, target.Repository, "add", "--", "tracked-config.inc")
+	gitTest(t, target.Repository, "commit", "-m", "add tracked config include")
+	gitTest(t, target.Repository, "config", "include.path", "../tracked-config.inc")
+
+	err := rejectGitConfigTarget(context.Background(), target)
+	if err == nil || !strings.Contains(err.Error(), "configuration source") {
+		t.Fatalf("error = %v, want active Git configuration source rejection", err)
+	}
+}
+
+func TestRejectConfiguredNormalizationRejectsLegacyCRLF(t *testing.T) {
+	target, _, _, _, _ := newTestProvider(t, "initial")
+	if err := os.WriteFile(filepath.Join(target.Repository, ".gitattributes"), []byte(target.Path+" crlf\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, target.Repository, "add", "--", ".gitattributes")
+	gitTest(t, target.Repository, "commit", "-m", "configure legacy crlf normalization")
+
+	err := rejectConfiguredNormalization(context.Background(), target)
+	if err == nil || !strings.Contains(err.Error(), "crlf") {
+		t.Fatalf("error = %v, want legacy crlf rejection", err)
+	}
+}
+
 func TestRejectConfiguredNormalizationRejectsIdent(t *testing.T) {
 	target, _, _, _, _ := newTestProvider(t, "initial")
 	if err := os.WriteFile(filepath.Join(target.Repository, ".gitattributes"), []byte(target.Path+" ident\n"), 0o644); err != nil {
@@ -125,7 +157,7 @@ func TestSanitizedGitEnvPreservesCommitIdentity(t *testing.T) {
 	t.Setenv("GIT_COMMITTER_EMAIL", "committer@example.invalid")
 	t.Setenv("GIT_DIR", "/outside/repository")
 	t.Setenv("GIT_WORK_TREE", "/outside/worktree")
-	t.Setenv("GIT_INDEX_FILE", "/outside/index")
+	 t.Setenv("GIT_INDEX_FILE", "/outside/index")
 
 	env := sanitizedGitEnv()
 	joined := strings.Join(env, "\x00")
