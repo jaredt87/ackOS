@@ -1,0 +1,35 @@
+name: PR10 Final Fix
+
+on:
+  push:
+    branches: [feat/phase2-git-provider]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply final config guard
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('integrations/git/provider.go')
+          s = p.read_text()
+          start = s.index('func rejectGitConfigTarget(ctx context.Context, target Target) error {')
+          end = s.index('func rejectGrafts(ctx context.Context, target Target) error {', start)
+          body = s[start:end]
+          marker = '\treturn nil\n}\n'
+          extra = '''\tgitConfig, configErr := runGit(ctx, target.Repository, "rev-parse", "--git-path", "config")\n\tif configErr == nil {\n\t\tconfigPath := strings.TrimSpace(gitConfig)\n\t\tif !filepath.IsAbs(configPath) {\n\t\t\tconfigPath = filepath.Join(target.Repository, configPath)\n\t\t}\n\t\tconfigPath, resolveErr := filepath.Abs(configPath)\n\t\tif resolveErr != nil {\n\t\t\treturn fmt.Errorf("resolve Git config path: %w", resolveErr)\n\t\t}\n\t\tdata, readErr := os.ReadFile(configPath)\n\t\tif readErr == nil {\n\t\t\tsection := ""\n\t\t\tfor _, raw := range strings.Split(string(data), "\\n") {\n\t\t\t\tline := strings.TrimSpace(raw)\n\t\t\t\tif strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {\n\t\t\t\t\tsection = strings.ToLower(strings.TrimSpace(line[1 : len(line)-1]))\n\t\t\t\t\tcontinue\n\t\t\t\t}\n\t\t\t\tif !strings.HasPrefix(section, "include") {\n\t\t\t\t\tcontinue\n\t\t\t\t}\n\t\t\t\tkey, value, ok := strings.Cut(line, "=")\n\t\t\t\tif !ok || strings.ToLower(strings.TrimSpace(key)) != "path" {\n\t\t\t\t\tcontinue\n\t\t\t\t}\n\t\t\t\tinclude := strings.TrimSpace(value)\n\t\t\t\tif !filepath.IsAbs(include) {\n\t\t\t\t\tinclude = filepath.Join(filepath.Dir(configPath), include)\n\t\t\t\t}\n\t\t\t\tinclude, resolveErr = filepath.Abs(include)\n\t\t\t\tif resolveErr != nil {\n\t\t\t\t\treturn fmt.Errorf("resolve Git include: %w", resolveErr)\n\t\t\t\t}\n\t\t\t\tif include == configured {\n\t\t\t\t\treturn fmt.Errorf("git target is an active Git configuration source")\n\t\t\t\t}\n\t\t\t\tif matches, globErr := filepath.Glob(include); globErr == nil {\n\t\t\t\t\tfor _, match := range matches {\n\t\t\t\t\t\tmatch, _ = filepath.Abs(match)\n\t\t\t\t\t\tif match == configured {\n\t\t\t\t\t\t\treturn fmt.Errorf("git target is an active Git configuration source")\n\t\t\t\t\t\t}\n\t\t\t\t\t}\n\t\t\t\t}\n\t\t\t}\n\t\t}\n\t}\n\treturn nil\n}\n'''
+          if marker not in body:
+              raise SystemExit('config function marker not found')
+          p.write_text(s[:start] + body.replace(marker, extra, 1) + s[end:])
+          PY
+          gofmt -w integrations/git/provider.go
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add integrations/git/provider.go
+          git commit -m 'fix: reject active Git config includes from disk'
+          git push
