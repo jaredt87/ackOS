@@ -1,0 +1,55 @@
+name: Patch PR10 findings v4
+on:
+  pull_request:
+    types: [synchronize]
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor == 'jaredt87'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/phase2-git-provider
+          fetch-depth: 0
+      - name: Apply fixes
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('integrations/git/provider.go'); s=p.read_text()
+          a='''func rejectAttributesTarget(ctx context.Context, target Target) error {\n\tif strings.EqualFold(filepath.Base(target.Path), ".gitattributes") {\n\t\treturn fmt.Errorf("git .gitattributes targets are not supported because the target can change its own filter environment")\n\t}\n'''
+          h='''func rejectActiveAttributesPath(ctx context.Context, target Target, gitPath string) error {\n\tpath, err := runGit(ctx, target.Repository, "rev-parse", "--git-path", gitPath)\n\tif err != nil { return nil }; path=strings.TrimSpace(path); if path=="" {return nil}\n\tif !filepath.IsAbs(path){path=filepath.Join(target.Repository,path)}\n\tconfigured,err:=filepath.Abs(filepath.Join(target.Repository,target.Path)); if err!=nil{return err}; actual,err:=filepath.Abs(path); if err!=nil{return err}\n\tconfigured,err=filepath.EvalSymlinks(configured); if err!=nil{return err}; actual,err=filepath.EvalSymlinks(actual); if os.IsNotExist(err){return nil}; if err!=nil{return err}\n\tconfigured,_=filepath.Abs(configured); actual,_=filepath.Abs(actual); if configured==actual{return fmt.Errorf("git target is an active Git attributes source")}; return nil\n}\n\n'''
+          if 'func rejectActiveAttributesPath(' not in s:s=s.replace(a,h+a,1)
+          if 'rejectActiveAttributesPath(ctx, target, "info/attributes")' not in s:s=s.replace(a,a+'\tif err := rejectActiveAttributesPath(ctx, target, "info/attributes"); err != nil { return err }\n',1)
+          s=s.replace('_, include, ok := strings.Cut(line, "\\t")','separator := strings.IndexAny(line, " \\t")\n\t\t\tif separator < 0 { continue }\n\t\t\tinclude := strings.TrimSpace(line[separator:])\n\t\t\tif include == "" { continue }',1)
+          old='''func readFile(ctx context.Context, target Target) (string, error) {\n\tif err := ctx.Err(); err != nil {\n\t\treturn "", err\n\t}\n\tpath := filepath.Join(target.Repository, target.Path)\n\tfd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)\n\tif err != nil {\n\t\treturn "", fmt.Errorf("open git file: %w", err)\n\t}\n\tfile := os.NewFile(uintptr(fd), path)\n\tif file == nil {\n\t\t_ = syscall.Close(fd)\n\t\treturn "", fmt.Errorf("open git file: invalid file descriptor")\n\t}\n'''
+          new='''func readFile(ctx context.Context, target Target) (string, error) {\n\tif err := ctx.Err(); err != nil { return "", err }\n\tfile, err := openTargetNoSymlink(target)\n\tif err != nil { return "", fmt.Errorf("open git file: %w", err) }\n'''
+          if old in s:s=s.replace(old,new,1)
+          m='''func validateNoSymlinks(target Target) error {\n'''
+          oh='''func openTargetNoSymlink(target Target) (*os.File,error) {\n\tfd,err:=syscall.Open(target.Repository,syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW|syscall.O_DIRECTORY,0); if err!=nil{return nil,err}\n\tparts:=strings.Split(filepath.Clean(target.Path),string(filepath.Separator))\n\tfor i,part:=range parts{if part==""||part=="."||part==".."{_ = syscall.Close(fd);return nil,fmt.Errorf("invalid target path component")}; flags:=syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW; if i<len(parts)-1{flags|=syscall.O_DIRECTORY}; next,err:=syscall.Openat(fd,part,flags,0); if err!=nil{_ = syscall.Close(fd);return nil,err}; _=syscall.Close(fd); fd=next}\n\tf:=os.NewFile(uintptr(fd),filepath.Join(target.Repository,target.Path)); if f==nil{_ = syscall.Close(fd);return nil,fmt.Errorf("invalid file descriptor")}; return f,nil\n}\n\n'''
+          if 'func openTargetNoSymlink(' not in s:s=s.replace(m,oh+m,1)
+          old='''func verifyCommit(e Executor, ctx context.Context, parent string, t kernel.Transition, executionID string) error {\n\treturn verifyCommitAt(ctx, e.Target, func(args ...string) (string, error) { return e.git(ctx, args...) }, parent, t, executionID)\n}\n\nfunc verifyLatestCommit(v Verifier, ctx context.Context, t kernel.Transition, executionID string) error {\n\treturn verifyCommitAt(ctx, v.Target, func(args ...string) (string, error) { return v.git(ctx, args...) }, "", t, executionID)\n}\n'''
+          new='''func verifyCommit(e Executor, ctx context.Context, parent string, t kernel.Transition, executionID string) error { return verifyCommitAt(ctx,e.Target,func(args ...string)(string,error){return e.git(ctx,args...)},parent,"",t,executionID) }\n\nfunc verifyLatestCommit(v Verifier, ctx context.Context, t kernel.Transition, executionID string) (string,error) {\n\thead,err:=v.git(ctx,"rev-parse","HEAD"); if err!=nil{return "",err}; if err:=verifyCommitAt(ctx,v.Target,func(args ...string)(string,error){return v.git(ctx,args...)},"",head,t,executionID); err!=nil{return "",err}; return head,nil\n}\n'''
+          if old in s:s=s.replace(old,new,1)
+          old='func verifyCommitAt(ctx context.Context, target Target, git func(...string) (string, error), expectedParent string, t kernel.Transition, executionID string) error {'
+          new='func verifyCommitAt(ctx context.Context, target Target, git func(...string) (string, error), expectedParent string, expectedHead string, t kernel.Transition, executionID string) error {'
+          if old in s:s=s.replace(old,new,1)
+          old='''\thead, err := git("rev-parse", "HEAD")\n\tif err != nil {\n\t\treturn fmt.Errorf("read committed Git HEAD: %w", err)\n\t}\n'''
+          new='''\thead, err := git("rev-parse", "HEAD")\n\tif err != nil { return fmt.Errorf("read committed Git HEAD: %w", err) }\n\tif expectedHead != "" && head != expectedHead { return fmt.Errorf("Git HEAD changed before commit verification") }\n'''
+          if old in s:s=s.replace(old,new,1)
+          if 'if _, err := verifyLatestCommit(v, ctx, t, authority.ExecutionID); err != nil {' not in s:s=s.replace('if err := verifyLatestCommit(v, ctx, t, authority.ExecutionID); err != nil {','if _, err := verifyLatestCommit(v, ctx, t, authority.ExecutionID); err != nil {',1)
+          p.write_text(s)
+          t=Path('integrations/git/current_findings_test.go'); ts=t.read_text(); ts=ts.replace('}, parent, transition, "mode-test")','}, parent, "", transition, "mode-test")'); ts=ts.replace('verifyCommitAt(context.Background(), target, git, parent, transition, "marker-test")','verifyCommitAt(context.Background(), target, git, parent, "", transition, "marker-test")'); t.write_text(ts)
+          PY
+          gofmt -w integrations/git/provider.go integrations/git/current_findings_test.go
+          go test ./integrations/git
+      - name: Commit fixes
+        run: |
+          git config user.name 'ackOS automation'
+          git config user.email 'ackos-automation@example.invalid'
+          git add integrations/git/provider.go integrations/git/current_findings_test.go
+          git diff --cached --quiet && exit 0
+          git commit -m 'fix: close latest PR10 verification gaps'
+          git push origin HEAD:feat/phase2-git-provider
