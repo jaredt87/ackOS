@@ -1,6 +1,8 @@
 name: PR10 security fix
 
 on:
+  push:
+    branches: [feat/phase2-git-provider]
   pull_request:
     types: [synchronize]
 
@@ -9,7 +11,7 @@ permissions:
 
 jobs:
   apply:
-    if: github.event.pull_request.number == 10
+    if: github.ref == 'refs/heads/feat/phase2-git-provider' || github.event.pull_request.number == 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
