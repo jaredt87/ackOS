@@ -1,0 +1,37 @@
+name: PR10 Dedupe
+
+on:
+  push:
+    branches: [feat/phase2-git-provider]
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deduplicate config guard
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('integrations/git/provider.go')
+          s = p.read_text()
+          start = s.index('func rejectGitConfigTarget(ctx context.Context, target Target) error {')
+          end = s.index('func rejectGrafts(ctx context.Context, target Target) error {', start)
+          body = s[start:end]
+          marker = '\tgitConfig, configErr := runGit(ctx, target.Repository, "rev-parse", "--git-path", "config")\n'
+          parts = body.split(marker)
+          if len(parts) > 2:
+              body = parts[0] + marker + parts[1]
+          p.write_text(s[:start] + body + s[end:])
+          PY
+          gofmt -w integrations/git/provider.go
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add integrations/git/provider.go
+          git commit -m 'fix: deduplicate Git config guard'
+          git fetch origin feat/phase2-git-provider
+          git rebase origin/feat/phase2-git-provider
+          git push origin HEAD:feat/phase2-git-provider
