@@ -19,7 +19,7 @@ func TestRejectGitConfigTargetRejectsRecursiveCommentOnlyInclude(t *testing.T) {
 	target, _, _, _, _ := newTestProvider(t, "initial")
 	parent := filepath.Join(target.Repository, "parent.inc")
 	leaf := filepath.Join(target.Repository, "leaf.inc")
-	if err := os.WriteFile(parent, []byte("[include]\n\tpath = leaf.inc\n"), 0o644); err != nil {
+	if err := os.WriteFile(parent, []byte("[core]\n\tbare = false\n[include]\n\tpath = leaf.inc\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(leaf, []byte("# comment-only config source\n"), 0o644); err != nil {
