@@ -1,0 +1,220 @@
+name: PR10 hardening patch
+
+on:
+  push:
+    branches:
+      - fix/pr10-codex-hardening
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: "!contains(github.event.head_commit.message, 'apply PR10 hardening')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/pr10-codex-hardening
+      - name: Apply hardening patch
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          provider = Path('integrations/git/provider.go')
+          s = provider.read_text()
+
+          old_read = '''func readFile(ctx context.Context, target Target) (string, error) {
+\tif err := ctx.Err(); err != nil {
+\t\treturn "", err
+\t}
+\tpath := filepath.Join(target.Repository, target.Path)
+\tfd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+\tif err != nil {
+\t\treturn "", fmt.Errorf("open git file: %w", err)
+\t}
+\tfile := os.NewFile(uintptr(fd), path)
+\tif file == nil {
+\t\t_ = syscall.Close(fd)
+\t\treturn "", fmt.Errorf("open git file: invalid file descriptor")
+\t}
+\tdefer file.Close()
+\tinfo, err := file.Stat()
+\tif err != nil {
+\t\treturn "", fmt.Errorf("stat git file: %w", err)
+\t}
+\tif !info.Mode().IsRegular() {
+\t\treturn "", fmt.Errorf("git target is not a regular file")
+\t}
+\tif stat, ok := info.Sys().(*syscall.Stat_t); ok && stat.Nlink > 1 {
+\t\treturn "", fmt.Errorf("git target has multiple hard links")
+\t}
+\treadDone := make(chan struct{})
+\tvar content []byte
+\tvar readErr error
+\tgo func() {
+\t\tcontent, readErr = io.ReadAll(file)
+\t\tclose(readDone)
+\t}()
+\tselect {
+\tcase <-readDone:
+\t\tif readErr != nil {
+\t\t\treturn "", fmt.Errorf("read git file: %w", readErr)
+\t\t}
+\tcase <-ctx.Done():
+\t\t_ = file.Close()
+\t\treturn "", ctx.Err()
+\t}
+\tif err := ctx.Err(); err != nil {
+\t\treturn "", err
+\t}
+\treturn string(content), nil
+}'''
+          new_read = '''func readFile(ctx context.Context, target Target) (string, error) {
+\tif err := ctx.Err(); err != nil {
+\t\treturn "", err
+\t}
+\tparentFD, err := openParentDirNoSymlink(target)
+\tif err != nil {
+\t\treturn "", err
+\t}
+\tdefer syscall.Close(parentFD)
+\tname := filepath.Base(filepath.Clean(target.Path))
+\tfd, err := syscall.Openat(parentFD, name, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+\tif err != nil {
+\t\treturn "", fmt.Errorf("open git file: %w", err)
+\t}
+\tfile := os.NewFile(uintptr(fd), filepath.Join(target.Repository, target.Path))
+\tif file == nil {
+\t\t_ = syscall.Close(fd)
+\t\treturn "", fmt.Errorf("open git file: invalid file descriptor")
+\t}
+\tdefer file.Close()
+\tinfo, err := file.Stat()
+\tif err != nil {
+\t\treturn "", fmt.Errorf("stat git file: %w", err)
+\t}
+\tif !info.Mode().IsRegular() {
+\t\treturn "", fmt.Errorf("git target is not a regular file")
+\t}
+\tif stat, ok := info.Sys().(*syscall.Stat_t); ok && stat.Nlink > 1 {
+\t\treturn "", fmt.Errorf("git target has multiple hard links")
+\t}
+\treadDone := make(chan struct{})
+\tvar content []byte
+\tvar readErr error
+\tgo func() {
+\t\tcontent, readErr = io.ReadAll(file)
+\t\tclose(readDone)
+\t}()
+\tselect {
+\tcase <-readDone:
+\t\tif readErr != nil {
+\t\t\treturn "", fmt.Errorf("read git file: %w", readErr)
+\t\t}
+\tcase <-ctx.Done():
+\t\t_ = file.Close()
+\t\treturn "", ctx.Err()
+\t}
+\tif err := ctx.Err(); err != nil {
+\t\treturn "", err
+\t}
+\treturn string(content), nil
+}'''
+          if old_read not in s:
+              raise SystemExit('readFile pattern not found')
+          s=s.replace(old_read,new_read,1)
+
+          old_verify = '''func verifyLatestCommit(v Verifier, ctx context.Context, t kernel.Transition, executionID string) error {
+\treturn verifyCommitAt(ctx, v.Target, func(args ...string) (string, error) { return v.git(ctx, args...) }, "", t, executionID)
+}
+
+func verifyCommitAt(ctx context.Context, target Target, git func(...string) (string, error), expectedParent string, t kernel.Transition, executionID string) error {'''
+          new_verify = '''func verifyLatestCommit(v Verifier, ctx context.Context, t kernel.Transition, executionID string) (string, error) {
+\treturn verifyCommitAt(ctx, v.Target, func(args ...string) (string, error) { return v.git(ctx, args...) }, "", t, executionID)
+}
+
+func verifyCommitAt(ctx context.Context, target Target, git func(...string) (string, error), expectedParent string, t kernel.Transition, executionID string) (string, error) {'''
+          if old_verify not in s:
+              raise SystemExit('verify signature pattern not found')
+          s=s.replace(old_verify,new_verify,1)
+
+          start=s.index('func verifyCommitAt(')
+          end=s.index('\nfunc (e Executor) requireTracked', start)
+          fn=s[start:end]
+          fn=fn.replace('return fmt.Errorf(', 'return "", fmt.Errorf(')
+          fn=fn.replace('\treturn nil\n}', '\treturn head, nil\n}', 1)
+          s=s[:start]+fn+s[end:]
+
+          old_exec='''\tif err := verifyCommit(e, ctx, head, t, authority.ExecutionID); err != nil {\n\t\treturn fail(err)\n\t}'''
+          new_exec='''\tif _, err := verifyCommit(e, ctx, head, t, authority.ExecutionID); err != nil {\n\t\treturn fail(err)\n\t}'''
+          if old_exec not in s:
+              raise SystemExit('executor verify call not found')
+          s=s.replace(old_exec,new_exec,1)
+
+          old_verifier='''\tif err := verifyLatestCommit(v, ctx, t, authority.ExecutionID); err != nil {\n\t\treturn kernel.Observation{}, err\n\t}\n\tverifiedHead, err := v.git(ctx, "rev-parse", "HEAD")\n\tif err != nil {\n\t\treturn kernel.Observation{}, fmt.Errorf("re-read verified Git HEAD: %w", err)\n\t}'''
+          new_verifier='''\tverifiedHead, err := verifyLatestCommit(v, ctx, t, authority.ExecutionID)\n\tif err != nil {\n\t\treturn kernel.Observation{}, err\n\t}'''
+          if old_verifier not in s:
+              raise SystemExit('verifier call pattern not found')
+          s=s.replace(old_verifier,new_verifier,1)
+
+          old_attrs='''\tif configuredResolved == actualResolved {\n\t\treturn fmt.Errorf("git target is configured as the active attributes file")\n\t}\n\treturn nil\n}\n\nfunc rejectGitConfigTarget'''
+          new_attrs='''\tif configuredResolved == actualResolved {\n\t\treturn fmt.Errorf("git target is configured as the active attributes file")\n\t}\n\tinfoAttrs := filepath.Join(target.Repository, ".git", "info", "attributes")\n\tinfoAttrsResolved, err := filepath.EvalSymlinks(infoAttrs)\n\tif err == nil {\n\t\tinfoAttrsResolved, err = filepath.Abs(infoAttrsResolved)\n\t\tif err != nil {\n\t\t\treturn fmt.Errorf("resolve Git info attributes identity path: %w", err)\n\t\t}\n\t\tif infoAttrsResolved == configuredResolved {\n\t\t\treturn fmt.Errorf("git target is configured as the active info/attributes file")\n\t\t}\n\t} else if !os.IsNotExist(err) {\n\t\treturn fmt.Errorf("resolve Git info attributes identity: %w", err)\n\t}\n\treturn nil\n}\n\nfunc rejectGitConfigTarget'''
+          if old_attrs not in s:
+              raise SystemExit('attrs insertion point not found')
+          s=s.replace(old_attrs,new_attrs,1)
+
+          old_include='''\t\tfor _, line := range strings.Split(includeOutput, "\\n") {\n\t\t\tline = strings.TrimSpace(line)\n\t\t\tif line == "" {\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\t_, include, ok := strings.Cut(line, "\\t")\n\t\t\tif !ok || include == "" {\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\tif !filepath.IsAbs(include) {\n\t\t\t\tinclude = filepath.Join(filepath.Dir(resolvedSource), include)\n\t\t\t}\n\t\t\taddSource(include)\n\t\t}'''
+          new_include='''\t\tfor _, line := range strings.Split(includeOutput, "\\n") {\n\t\t\tline = strings.TrimSpace(line)\n\t\t\tif line == "" {\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\tidx := strings.IndexAny(line, " \\t")\n\t\t\tif idx < 0 {\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\tinclude := strings.TrimSpace(line[idx+1:])\n\t\t\tif include == "" {\n\t\t\t\tcontinue\n\t\t\t}\n\t\t\tif !filepath.IsAbs(include) {\n\t\t\t\tinclude = filepath.Join(filepath.Dir(resolvedSource), include)\n\t\t\t}\n\t\t\taddSource(include)\n\t\t}'''
+          if old_include not in s:
+              raise SystemExit('include parser pattern not found')
+          s=s.replace(old_include,new_include,1)
+
+          old_mode='''func gitTreeMode(ctx context.Context, target Target, tree string) (string, error) {\n\toutput, err := runGit(ctx, target.Repository, "--no-replace-objects", "ls-tree", "--format=%(objectmode)", tree, "--", literalPathspec(target.Path))\n\tif err != nil {\n\t\treturn "", err\n\t}\n\tlines := strings.Fields(output)\n\tif len(lines) != 1 || (lines[0] != "100644" && lines[0] != "100755") {\n\t\treturn "", fmt.Errorf("target Git tree entry is not a regular file")\n\t}\n\treturn lines[0], nil\n}\n'''
+          new_mode=old_mode+'''\nfunc liveTargetMode(target Target) (string, error) {\n\tparentFD, err := openParentDirNoSymlink(target)\n\tif err != nil {\n\t\treturn "", err\n\t}\n\tdefer syscall.Close(parentFD)\n\tfd, err := syscall.Openat(parentFD, filepath.Base(filepath.Clean(target.Path)), syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)\n\tif err != nil {\n\t\treturn "", fmt.Errorf("open Git target for mode check: %w", err)\n\t}\n\tfile := os.NewFile(uintptr(fd), filepath.Join(target.Repository, target.Path))\n\tif file == nil {\n\t\t_ = syscall.Close(fd)\n\t\treturn "", fmt.Errorf("open Git target for mode check: invalid file descriptor")\n\t}\n\tdefer file.Close()\n\tinfo, err := file.Stat()\n\tif err != nil {\n\t\treturn "", fmt.Errorf("stat Git target for mode check: %w", err)\n\t}\n\tif !info.Mode().IsRegular() {\n\t\treturn "", fmt.Errorf("Git target is not a regular file")\n\t}\n\tmode := info.Mode().Perm()\n\tswitch mode {\n\tcase 0o644:\n\t\treturn "100644", nil\n\tcase 0o755:\n\t\treturn "100755", nil\n\tdefault:\n\t\treturn "", fmt.Errorf("Git target has unsupported mode %o", mode)\n\t}\n}\n\nfunc gitIndexMode(ctx context.Context, target Target) (string, error) {\n\toutput, err := runGit(ctx, target.Repository, "ls-files", "--stage", "-z", "--", literalPathspec(target.Path))\n\tif err != nil {\n\t\treturn "", err\n\t}\n\toutput = strings.TrimSuffix(output, "\\x00")\n\trecords := strings.Split(output, "\\x00")\n\tif len(records) != 1 {\n\t\treturn "", fmt.Errorf("unexpected Git index metadata")\n\t}\n\tmeta, path, ok := strings.Cut(records[0], "\\t")\n\tif !ok || path != target.Path {\n\t\treturn "", fmt.Errorf("unexpected Git index target metadata")\n\t}\n\tfields := strings.Fields(meta)\n\tif len(fields) != 3 || fields[2] != "0" || (fields[0] != "100644" && fields[0] != "100755") {\n\t\treturn "", fmt.Errorf("target Git index entry is not a regular file")\n\t}\n\treturn fields[0], nil\n}\n'''
+          if old_mode not in s:
+              raise SystemExit('mode helper pattern not found')
+          s=s.replace(old_mode,new_mode,1)
+
+          old_final='''\tif finalContent != t.After {\n\t\treturn kernel.Observation{}, fmt.Errorf("git file changed during verification")\n\t}\n\tfinalHead, err := v.git(ctx, "rev-parse", "HEAD")'''
+          new_final='''\tif finalContent != t.After {\n\t\treturn kernel.Observation{}, fmt.Errorf("git file changed during verification")\n\t}\n\texpectedMode, err := gitTreeMode(ctx, v.Target, verifiedHead)\n\tif err != nil {\n\t\treturn kernel.Observation{}, fmt.Errorf("read verified Git target mode: %w", err)\n\t}\n\tliveMode, err := liveTargetMode(v.Target)\n\tif err != nil {\n\t\treturn kernel.Observation{}, fmt.Errorf("read live Git target mode: %w", err)\n\t}\n\tif liveMode != expectedMode {\n\t\treturn kernel.Observation{}, fmt.Errorf("Git target mode changed during verification")\n\t}\n\tindexMode, err := gitIndexMode(ctx, v.Target)\n\tif err != nil {\n\t\treturn kernel.Observation{}, fmt.Errorf("read live Git index target mode: %w", err)\n\t}\n\tif indexMode != expectedMode {\n\t\treturn kernel.Observation{}, fmt.Errorf("Git index target mode changed during verification")\n\t}\n\tfinalHead, err := v.git(ctx, "rev-parse", "HEAD")'''
+          if old_final not in s:
+              raise SystemExit('final verification insertion point not found')
+          s=s.replace(old_final,new_final,1)
+
+          # Also reject an empty target at construction so observer/recovery never reach kernel.NewObservation with an invalid state.
+          old_target='''\tif err := validateNoSymlinks(target); err != nil {\n\t\treturn Target{}, err\n\t}\n\treturn target, nil\n}'''
+          new_target='''\tif err := validateNoSymlinks(target); err != nil {\n\t\treturn Target{}, err\n\t}\n\tcontent, err := readFile(context.Background(), target)\n\tif err != nil {\n\t\treturn Target{}, err\n\t}\n\tif content == "" {\n\t\treturn Target{}, fmt.Errorf("git target must not be empty")\n\t}\n\treturn target, nil\n}'''
+          if old_target not in s:
+              raise SystemExit('NewTarget insertion point not found')
+          s=s.replace(old_target,new_target,1)
+
+          provider.write_text(s)
+
+          test=Path('integrations/git/provider_test.go')
+          ts=test.read_text()
+          addition='''\nfunc TestVerifierRejectsLiveTargetModeMutation(t *testing.T) {\n\ttarget, observer, executor, verifier, _ := newTestProvider(t, "initial")\n\tobservation, err := observer.Observe(context.Background(), target.Subject)\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\ttransition := kernel.Transition{Subject: target.Subject, Before: observation.State, After: "updated"}\n\tauthority := kernel.Authority{ExecutionID: "attempt-live-mode"}\n\tif result := executor.Execute(context.Background(), transition, authority); !result.Success {\n\t\tt.Fatal(result.Message)\n\t}\n\tif err := os.Chmod(filepath.Join(target.Repository, target.Path), 0o755); err != nil {\n\t\tt.Fatal(err)\n\t}\n\tif _, err := verifier.Verify(context.Background(), transition, authority); err == nil || !strings.Contains(err.Error(), "target mode changed") {\n\t\tt.Fatalf("verifier error = %v, want live target mode rejection", err)\n\t}\n}\n\nfunc TestVerifierRejectsLiveIndexTargetModeMutation(t *testing.T) {\n\ttarget, observer, executor, verifier, _ := newTestProvider(t, "initial")\n\tobservation, err := observer.Observe(context.Background(), target.Subject)\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\ttransition := kernel.Transition{Subject: target.Subject, Before: observation.State, After: "updated"}\n\tauthority := kernel.Authority{ExecutionID: "attempt-index-mode"}\n\tif result := executor.Execute(context.Background(), transition, authority); !result.Success {\n\t\tt.Fatal(result.Message)\n\t}\n\tgitTest(t, target.Repository, "update-index", "--chmod=+x", "--", target.Path)\n\tif _, err := verifier.Verify(context.Background(), transition, authority); err == nil || !strings.Contains(err.Error(), "index target mode changed") {\n\t\tt.Fatalf("verifier error = %v, want live index mode rejection", err)\n\t}\n}\n'''
+          marker='\nfunc TestAtomicWriteTargetRejectsSymlinkedParent'
+          if marker not in ts:
+              raise SystemExit('test insertion marker not found')
+          ts=ts.replace(marker, addition+marker, 1)
+          empty_test='''\nfunc TestNewTargetRejectsEmptyFile(t *testing.T) {\n\tdir := t.TempDir()\n\tgitTest(t, dir, "init")\n\tgitTest(t, dir, "config", "user.email", "ackos-test@example.invalid")\n\tgitTest(t, dir, "config", "user.name", "ackOS test")\n\tpath := filepath.Join(dir, "empty.txt")\n\tif err := os.WriteFile(path, nil, 0o644); err != nil {\n\t\tt.Fatal(err)\n\t}\n\tgitTest(t, dir, "add", "--", "empty.txt")\n\tgitTest(t, dir, "commit", "-m", "initial")\n\tif _, err := NewTarget(dir, "empty.txt", "repo:empty.txt"); err == nil || !strings.Contains(err.Error(), "must not be empty") {\n\t\tt.Fatalf("NewTarget error = %v, want empty-target rejection", err)\n\t}\n}\n'''
+          marker2='\nfunc TestNewTargetRejectsPathTraversal'
+          ts=ts.replace(marker2, empty_test+marker2, 1)
+          test.write_text(ts)
+
+          # Remove this one-shot patch workflow from the same commit.
+          Path('.github/workflows/pr10-hardening.yml').unlink()
+          PY
+      - name: Format and test
+        run: |
+          gofmt -w integrations/git/provider.go integrations/git/provider_test.go
+          go test ./...
+      - name: Commit patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add integrations/git/provider.go integrations/git/provider_test.go .github/workflows/pr10-hardening.yml
+          git commit -m 'fix: apply PR10 hardening'
+          git push origin HEAD:fix/pr10-codex-hardening
