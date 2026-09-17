@@ -9,16 +9,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Verify and clean temporary workflows
+      - name: Verify and clean temporary workflow
         run: |
           test -f integrations/git/provider.go
           grep -q 'func openParentDirNoSymlink' integrations/git/provider.go
           grep -q 'func TestAtomicWriteTargetRejectsSymlinkedParent' integrations/git/provider_test.go
           go test ./integrations/git
-      - name: Remove temporary workflow files
+      - name: Remove temporary workflow
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm .github/workflows/fix-pr10-anchor-rename.yml .github/workflows/fix-pr10-anchor-rename2.yml .github/pr10-trigger.txt
-          git commit -m 'chore: remove temporary PR10 fix workflows'
+          git rm .github/workflows/fix-pr10-anchor-rename2.yml .github/pr10-trigger.txt
+          git commit -m 'chore: remove temporary PR10 fix workflow'
           git push origin HEAD:feat/phase2-git-provider
