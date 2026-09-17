@@ -1,0 +1,90 @@
+name: PR10 Fix Config2
+
+on:
+  push:
+    branches: [feat/phase2-git-provider]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Strengthen config include detection
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('integrations/git/provider.go')
+          s = p.read_text()
+          start = s.index('func rejectGitConfigTarget(ctx context.Context, target Target) error {')
+          end = s.index('func rejectGrafts(ctx context.Context, target Target) error {', start)
+          fn = r'''func rejectGitConfigTarget(ctx context.Context, target Target) error {
+\tconfigured, err := filepath.Abs(filepath.Join(target.Repository, target.Path))
+\tif err != nil {
+\t\treturn fmt.Errorf("resolve configured Git target path: %w", err)
+\t}
+\toutput, err := runGit(ctx, target.Repository, "config", "--includes", "--show-origin", "--get-regexp", "^include(\\..*)?\\.path$")
+\tif err != nil {
+\t\treturn nil
+\t}
+\tfor _, line := range strings.Split(output, "\\n") {
+\t\tline = strings.TrimSpace(line)
+\t\tif line == "" {
+\t\t\tcontinue
+\t\t}
+\t\tparts := strings.SplitN(line, "\\t", 2)
+\t\tif len(parts) != 2 || !strings.HasPrefix(parts[0], "file:") {
+\t\t\tcontinue
+\t\t}
+\t\tsource := strings.TrimPrefix(parts[0], "file:")
+\t\tif !filepath.IsAbs(source) {
+\t\t\tsource = filepath.Join(target.Repository, source)
+\t\t}
+\t\tsource, err = filepath.Abs(source)
+\t\tif err != nil {
+\t\t\treturn fmt.Errorf("resolve Git configuration source: %w", err)
+\t\t}
+\t\tfields := strings.SplitN(parts[1], " ", 2)
+\t\tif len(fields) != 2 {
+\t\t\tcontinue
+\t\t}
+\t\tinclude := strings.TrimSpace(fields[1])
+\t\tif strings.HasPrefix(include, "~") {
+\t\t\thome, homeErr := os.UserHomeDir()
+\t\t\tif homeErr == nil {
+\t\t\t\tinclude = filepath.Join(home, strings.TrimPrefix(include, "~"))
+\t\t\t}
+\t\t}
+\t\tif !filepath.IsAbs(include) {
+\t\t\tinclude = filepath.Join(filepath.Dir(source), include)
+\t\t}
+\t\tinclude, err = filepath.Abs(include)
+\t\tif err != nil {
+\t\t\treturn fmt.Errorf("resolve Git include: %w", err)
+\t\t}
+\t\tif matches, globErr := filepath.Glob(include); globErr == nil && len(matches) > 0 {
+\t\t\tfor _, match := range matches {
+\t\t\t\tresolved, resolveErr := filepath.Abs(match)
+\t\t\t\tif resolveErr == nil && resolved == configured {
+\t\t\t\t\treturn fmt.Errorf("git target is an active Git configuration source")
+\t\t\t\t}
+\t\t\t}
+\t\t} else if include == configured {
+\t\t\treturn fmt.Errorf("git target is an active Git configuration source")
+\t\t}
+\t}
+\treturn nil
+}
+
+'''
+          s = s[:start] + fn + s[end:]
+          p.write_text(s)
+          PY
+          gofmt -w integrations/git/provider.go
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add integrations/git/provider.go
+          git commit -m 'fix: resolve active Git config includes'
+          git push
