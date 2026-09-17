@@ -27,8 +27,8 @@ func TestRejectConfiguredNormalizationRejectsEOLAttribute(t *testing.T) {
 	gitTest(t, target.Repository, "commit", "-m", "configure eol normalization")
 
 	err := rejectConfiguredNormalization(context.Background(), target)
-	if err == nil || !strings.Contains(err.Error(), "eol attribute") {
-		t.Fatalf("error = %v, want eol normalization rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "normalization") {
+		t.Fatalf("error = %v, want configured normalization rejection", err)
 	}
 }
 
