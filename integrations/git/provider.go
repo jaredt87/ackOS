@@ -494,7 +494,7 @@ func rejectConfiguredNormalization(ctx context.Context, target Target) error {
 		return fmt.Errorf("inspect Git text normalization: %w", err)
 	}
 	parts := strings.Split(strings.Trim(output, "\x00"), "\x00")
-	if len(parts) != 6 || parts[0] != target.Path || parts[1] != "text" || parts[3] != target.Path || parts[4] != "eol" {
+	if len(parts) != 6 || parts[1] != "text" || parts[4] != "eol" {
 		return fmt.Errorf("unexpected Git text normalization metadata")
 	}
 	if parts[2] != "unspecified" && parts[2] != "unset" {
