@@ -907,9 +907,22 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, aft
 	if commit == "" {
 		return fmt.Errorf("Git commit object is missing")
 	}
-	transaction := fmt.Sprintf("start\nsymref-verify HEAD %s\nupdate %s %s %s\nprepare\ncommit\n", headRef, headRef, commit, parent)
-	if _, err := runGitWithInput(ctx, target.Repository, []byte(transaction), nil, "update-ref", "--no-deref", "--stdin"); err != nil {
+	currentRef, err := runGit(ctx, target.Repository, "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+		return fmt.Errorf("re-read Git HEAD branch before commit: %w", err)
+	}
+	if strings.TrimSpace(currentRef) != headRef {
+		return fmt.Errorf("Git HEAD branch changed before commit")
+	}
+	if _, err := runGit(ctx, target.Repository, "update-ref", headRef, commit, parent); err != nil {
 		return fmt.Errorf("atomically install authorized Git commit on captured branch: %w", err)
+	}
+	currentRef, err = runGit(ctx, target.Repository, "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+		return fmt.Errorf("re-read Git HEAD branch after commit: %w", err)
+	}
+	if strings.TrimSpace(currentRef) != headRef {
+		return fmt.Errorf("Git HEAD branch changed during commit")
 	}
 	if _, err := runGit(ctx, target.Repository, "add", "--", literalPathspec(target.Path)); err != nil {
 		return fmt.Errorf("synchronize Git index after commit: %w", err)
