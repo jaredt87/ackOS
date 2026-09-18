@@ -247,8 +247,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	finalContent, err := e.read(ctx)
 	if err != nil {
 		return fail(fmt.Errorf("re-read Git target after verification: %w", err))
-	}
-	if finalContent != t.After {
+	}	if finalContent != t.After {
 		return fail(fmt.Errorf("git target changed after commit verification"))
 	}
 	finalHead, err := e.git(ctx, "rev-parse", "HEAD")
@@ -1199,37 +1198,3 @@ func gitTreeMode(ctx context.Context, target Target, tree string) (string, error
 	if err != nil {
 		return "", err
 	}
-	lines := strings.Fields(output)
-	if len(lines) != 1 || (lines[0] != "100644" && lines[0] != "100755") {
-		return "", fmt.Errorf("target Git tree entry is not a regular file")
-	}
-	return lines[0], nil
-}
-
-func gitBlobHash(ctx context.Context, target Target, content string) (string, error) {
-	tmp, err := os.CreateTemp("", "ackos-git-blob-*")
-	if err != nil {
-		return "", fmt.Errorf("create temporary Git blob input: %w", err)
-	}
-	name := tmp.Name()
-	defer os.Remove(name)
-	if _, err := tmp.WriteString(content); err != nil {
-		_ = tmp.Close()
-		return "", fmt.Errorf("write temporary Git blob input: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return "", fmt.Errorf("close temporary Git blob input: %w", err)
-	}
-	hash, err := runGit(ctx, target.Repository, "hash-object", "--no-filters", name)
-	if err != nil {
-		return "", fmt.Errorf("hash Git blob content: %w", err)
-	}
-	return strings.TrimSpace(hash), nil
-}
-
-func literalPathspec(path string) string { return ":(literal)" + path }
-
-func validIndexPathStatus(output, expected string) bool {
-	output = strings.TrimSuffix(output, "\x00")
-	records := strings.Split(output, "\x00")
-	if len(records) != 1 || len(records[0]) < 3 || records[0][1] != ' ' || records[0][2:] != expected {
