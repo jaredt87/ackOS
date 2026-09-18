@@ -181,11 +181,18 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if liveMode != parentMode {
 		return fail(fmt.Errorf("Git target mode does not match committed parent"))
 	}
+	indexMode, indexHash, err := gitIndexEntry(ctx, e.Target)
+	if err != nil {
+		return fail(fmt.Errorf("capture Git index target: %w", err))
+	}
+	if indexMode != parentMode || indexHash != beforeHash {
+		return fail(fmt.Errorf("Git index target changed before mutation"))
+	}
 	if err := atomicWriteTarget(e.Target, []byte(t.After)); err != nil {
 		return fail(fmt.Errorf("write git file: %w", err))
 	}
-	if _, err := e.git(ctx, "add", "--", literalPathspec(e.Target.Path)); err != nil {
-		return fail(fmt.Errorf("git add: %w", err))
+	if err := stageTargetCAS(ctx, e.Target, indexMode, indexHash, parentMode, afterHash); err != nil {
+		return fail(fmt.Errorf("stage Git target with compare-and-swap: %w", err))
 	}
 	cachedPaths, err := e.git(ctx, "diff", "--cached", "--name-only", "-z")
 	if err != nil {
@@ -201,9 +208,6 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if cachedHash != afterHash {
 		return fail(fmt.Errorf("staged Git target does not match authorized state"))
 	}
-	if err := requireIndexUnlocked(ctx, e.Target); err != nil {
-		return fail(err)
-	}
 	message := "ackOS: execute " + authority.ExecutionID
 	if err := commitVerifiedTree(ctx, e.Target, head, headRef, afterHash, []byte(t.After), message); err != nil {
 		return fail(err)
@@ -214,6 +218,9 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	verifiedHead, err := e.git(ctx, "rev-parse", "HEAD")
 	if err != nil {
 		return fail(fmt.Errorf("re-read Git HEAD after verification: %w", err))
+	}
+	if verifiedHead != head {
+		return fail(fmt.Errorf("Git HEAD changed after commit verification"))
 	}
 	finalContent, err := e.read(ctx)
 	if err != nil {
@@ -1082,6 +1089,64 @@ func gitIndexEntry(ctx context.Context, target Target) (string, string, error) {
 	}
 	return fields[0], fields[1], nil
 }
+func stageTargetCAS(ctx context.Context, target Target, expectedMode, expectedHash, newMode, newHash string) error {
+	indexPath, err := runGit(ctx, target.Repository, "rev-parse", "--git-path", "index")
+	if err != nil {
+		return fmt.Errorf("resolve Git index: %w", err)
+	}
+	indexPath = strings.TrimSpace(indexPath)
+	if !filepath.IsAbs(indexPath) {
+		indexPath = filepath.Join(target.Repository, indexPath)
+	}
+	lockPath := indexPath + ".lock"
+	lockFD, err := syscall.Open(lockPath, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_CLOEXEC, 0o600)
+	if err != nil {
+		return fmt.Errorf("acquire Git index lock: %w", err)
+	}
+	_ = syscall.Close(lockFD)
+	lockOwned := true
+	defer func() {
+		if lockOwned {
+			_ = os.Remove(lockPath)
+		}
+	}()
+
+	currentMode, currentHash, err := gitIndexEntry(ctx, target)
+	if err != nil {
+		return fmt.Errorf("re-read Git index target: %w", err)
+	}
+	if currentMode != expectedMode || currentHash != expectedHash {
+		return fmt.Errorf("Git index target changed before staging")
+	}
+	indexBytes, err := os.ReadFile(indexPath)
+	if err != nil {
+		return fmt.Errorf("read Git index: %w", err)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(indexPath), ".ackos-index-stage-*")
+	if err != nil {
+		return fmt.Errorf("create temporary Git index: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(indexBytes); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("copy Git index: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temporary Git index: %w", err)
+	}
+	env := map[string]string{"GIT_INDEX_FILE": tmpPath}
+	cacheinfo := newMode + "," + newHash
+	if _, err := runGitWithEnv(ctx, target.Repository, env, "update-index", "--add", "--cacheinfo", cacheinfo, target.Path); err != nil {
+		return fmt.Errorf("update temporary Git index: %w", err)
+	}
+	if err := os.Rename(tmpPath, lockPath); err != nil {
+		return fmt.Errorf("install staged Git index: %w", err)
+	}
+	lockOwned = false
+	return nil
+}
+
 func gitIndexMode(ctx context.Context, target Target) (string, error) {
 	mode, _, err := gitIndexEntry(ctx, target)
 	return mode, err
