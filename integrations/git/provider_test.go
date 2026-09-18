@@ -239,6 +239,47 @@ func TestExecutorRejectsRepositorySubstitution(t *testing.T) {
 		t.Fatalf("result = %+v, want repository identity substitution rejection", result)
 	}
 }
+func TestObserverRejectsRepositorySubstitution(t *testing.T) {
+	target, _, _, _, recovery := newTestProvider(t, "initial")
+	moved := target.Repository + "-moved"
+	if err := os.Rename(target.Repository, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(target.Repository, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target.Repository, target.Path), []byte("replacement"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	observer := Observer{Target: target}
+	if _, err := observer.Observe(context.Background(), target.Subject); err == nil || !strings.Contains(err.Error(), "repository identity changed") {
+		t.Fatalf("observer error = %v, want repository identity substitution rejection", err)
+	}
+	if _, err := recovery.Observe(context.Background(), target.Subject); err == nil || !strings.Contains(err.Error(), "repository identity changed") {
+		t.Fatalf("recovery observer error = %v, want repository identity substitution rejection", err)
+	}
+}
+
+func TestVerifierRejectsDirtyWorkingTree(t *testing.T) {
+	target, observer, executor, verifier, _ := newTestProvider(t, "initial")
+	observation, err := observer.Observe(context.Background(), target.Subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition := kernel.Transition{Subject: target.Subject, Before: observation.State, After: "updated"}
+	authority := kernel.Authority{ExecutionID: "attempt-dirty-worktree"}
+	if result := executor.Execute(context.Background(), transition, authority); !result.Success {
+		t.Fatal(result.Message)
+	}
+	other := filepath.Join(target.Repository, "docs", "other.md")
+	if err := os.WriteFile(other, []byte("unstaged change"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil || !strings.Contains(err.Error(), "worktree is not clean during verification") {
+		t.Fatalf("verifier error = %v, want dirty-worktree rejection", err)
+	}
+}
+
 func TestExecutorRejectsResourceSubstitution(t *testing.T) {
 	target, _, executor, _, _ := newTestProvider(t, "initial")
 	transition := kernel.Transition{Subject: "different-resource", Before: "initial", After: "updated"}
