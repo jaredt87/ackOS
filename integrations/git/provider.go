@@ -297,8 +297,7 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, err
 	}
 	if err := v.requireTracked(ctx); err != nil {
-		return kernel.Observation{}, err
-	}
+		return kernel.Observation{}, err	}
 	if err := requireNoInProgressGitOperation(ctx, v.Target); err != nil {
 		return kernel.Observation{}, err
 	}
@@ -439,7 +438,8 @@ func readFile(ctx context.Context, target Target) (string, error) {
 			return "", fmt.Errorf("read git file: %w", readErr)
 		}
 	case <-ctx.Done():
-		_ = file.Close()		return "", ctx.Err()
+		_ = file.Close()
+		return "", ctx.Err()
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -597,8 +597,7 @@ func atomicWriteTarget(target Target, content []byte) error {
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
-		return err
-	}
+		return err	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
@@ -897,8 +896,7 @@ func targetGitAttr(ctx context.Context, target Target) (string, error) {
 
 func rejectConfiguredNormalization(ctx context.Context, target Target) error {
 	autocrlf, err := runGit(ctx, target.Repository, "config", "--get", "core.autocrlf")
-	if err == nil {
-		raw := strings.ToLower(strings.TrimSpace(autocrlf))
+	if err == nil {		raw := strings.ToLower(strings.TrimSpace(autocrlf))
 		if raw == "input" {
 			return fmt.Errorf("git target uses core.autocrlf normalization; normalized targets are not supported")
 		}
@@ -1236,3 +1234,107 @@ func validIndexPathStatus(output, expected string) bool {
 	output = strings.TrimSuffix(output, "\x00")
 	records := strings.Split(output, "\x00")
 	if len(records) != 1 || len(records[0]) < 3 || records[0][1] != ' ' || records[0][2:] != expected {
+		return false
+	}
+	status := records[0][0]
+	return status != 'S' && !(status >= 'a' && status <= 'z')
+}
+
+func exactNULPathList(output, expected string) bool {
+	output = strings.TrimSuffix(output, "\x00")
+	if output == "" {
+		return false
+	}
+	paths := strings.Split(output, "\x00")
+	return len(paths) == 1 && paths[0] == expected
+}
+
+func (e Executor) git(ctx context.Context, args ...string) (string, error) {
+	return runGit(ctx, e.Target.Repository, args...)
+}
+func (v Verifier) git(ctx context.Context, args ...string) (string, error) {
+	return runGit(ctx, v.Target.Repository, args...)
+}
+
+func runGit(ctx context.Context, repository string, args ...string) (string, error) {
+	return runGitWithInput(ctx, repository, nil, nil, args...)
+}
+
+func runGitInput(ctx context.Context, repository string, input []byte, args ...string) (string, error) {
+	return runGitWithInput(ctx, repository, input, nil, args...)
+}
+
+func runGitWithEnv(ctx context.Context, repository string, env map[string]string, args ...string) (string, error) {
+	return runGitWithInput(ctx, repository, nil, env, args...)
+}
+
+func runGitWithInput(ctx context.Context, repository string, input []byte, overrides map[string]string, args ...string) (string, error) {
+	gitArgs := append([]string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"}, args...)
+	cmd := exec.Command("git", gitArgs...)
+	cmd.Dir = repository
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = 2 * time.Second
+	cmd.Env = sanitizedGitEnv()
+	for key, value := range overrides {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
+	if input != nil {
+		cmd.Stdin = bytes.NewReader(input)
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("start git: %w", err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case runErr := <-done:
+		if runErr != nil {
+			return "", fmt.Errorf("%w: %s", runErr, strings.TrimSpace(stderr.String()))
+		}
+	case <-ctx.Done():
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		select {
+		case <-done:
+		case <-time.After(cmd.WaitDelay):
+		}
+		return "", ctx.Err()
+	}
+	output := stdout.String()
+	for _, arg := range args {
+		if arg == "-z" {
+			return output, nil
+		}
+	}
+	if len(args) > 0 && args[0] == "show" {
+		return output, nil
+	}
+	return strings.TrimSpace(output), nil
+}
+
+func sanitizedGitEnv() []string {
+	blocked := map[string]struct{}{
+		"GIT_DIR":                          {},
+		"GIT_WORK_TREE":                    {},
+		"GIT_INDEX_FILE":                   {},
+		"GIT_OBJECT_DIRECTORY":             {},
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES": {},
+		"GIT_COMMON_DIR":                   {},
+		"GIT_NAMESPACE":                    {},
+		"GIT_CEILING_DIRECTORIES":          {},
+		"GIT_DISCOVERY_ACROSS_FILESYSTEM":  {},
+		"GIT_GRAFT_FILE":                   {},
+	}
+	env := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		if key, _, ok := strings.Cut(entry, "="); ok {
+			if _, blocked := blocked[key]; blocked {
+				continue
+			}
+		}
+		env = append(env, entry)
+	}
+	return env
+}
