@@ -140,6 +140,14 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err := validateMutationBoundary(ctx, e.Target, t.Before); err != nil {
 		return fail(err)
 	}
+	headRef, err := e.git(ctx, "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+		return fail(fmt.Errorf("read Git HEAD branch: %w", err))
+	}
+	headRef = strings.TrimSpace(headRef)
+	if headRef == "" {
+		return fail(fmt.Errorf("Git HEAD is detached"))
+	}
 	head, err := e.git(ctx, "rev-parse", "HEAD")
 	if err != nil {
 		return fail(fmt.Errorf("read git HEAD: %w", err))
@@ -161,6 +169,17 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	}
 	if headHash != beforeHash {
 		return fail(fmt.Errorf("Git parent does not match authorized state"))
+	}
+	parentMode, err := gitTreeMode(ctx, e.Target, head)
+	if err != nil {
+		return fail(fmt.Errorf("read Git parent target mode: %w", err))
+	}
+	liveMode, err := liveTargetMode(e.Target)
+	if err != nil {
+		return fail(fmt.Errorf("read live Git target mode: %w", err))
+	}
+	if liveMode != parentMode {
+		return fail(fmt.Errorf("Git target mode does not match committed parent"))
 	}
 	if err := atomicWriteTarget(e.Target, []byte(t.After)); err != nil {
 		return fail(fmt.Errorf("write git file: %w", err))
@@ -186,7 +205,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(err)
 	}
 	message := "ackOS: execute " + authority.ExecutionID
-	if err := commitVerifiedTree(ctx, e.Target, head, afterHash, []byte(t.After), message); err != nil {
+	if err := commitVerifiedTree(ctx, e.Target, head, headRef, afterHash, []byte(t.After), message); err != nil {
 		return fail(err)
 	}
 	if err := verifyCommit(e, ctx, head, t, authority.ExecutionID); err != nil {
@@ -843,7 +862,7 @@ func rejectConfiguredNormalization(ctx context.Context, target Target) error {
 	return nil
 }
 
-func commitVerifiedTree(ctx context.Context, target Target, parent, afterHash string, content []byte, message string) error {
+func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, afterHash string, content []byte, message string) error {
 	blob, err := runGitInput(ctx, target.Repository, content, "hash-object", "-w", "--stdin")
 	if err != nil {
 		return fmt.Errorf("store authorized Git blob: %w", err)
@@ -885,13 +904,12 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, afterHash st
 	if commit == "" {
 		return fmt.Errorf("Git commit object is missing")
 	}
-	headRef, err := runGit(ctx, target.Repository, "symbolic-ref", "-q", "HEAD")
+	currentRef, err := runGit(ctx, target.Repository, "symbolic-ref", "-q", "HEAD")
 	if err != nil {
-		return fmt.Errorf("read Git HEAD branch before commit: %w", err)
+		return fmt.Errorf("re-read Git HEAD branch before commit: %w", err)
 	}
-	headRef = strings.TrimSpace(headRef)
-	if headRef == "" {
-		return fmt.Errorf("Git HEAD is detached")
+	if strings.TrimSpace(currentRef) != headRef {
+		return fmt.Errorf("Git HEAD branch changed before commit")
 	}
 	currentHead, err := runGit(ctx, target.Repository, "rev-parse", "HEAD")
 	if err != nil || strings.TrimSpace(currentHead) != parent {
@@ -904,7 +922,8 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, afterHash st
 }
 
 func verifyCommit(e Executor, ctx context.Context, parent string, t kernel.Transition, executionID string) error {
-	return verifyCommitAt(ctx, e.Target, func(args ...string) (string, error) { return e.git(ctx, args...) }, parent, t, executionID)
+	_, err := verifyCommitAt(ctx, e.Target, func(args ...string) (string, error) { return e.git(ctx, args...) }, parent, t, executionID)
+	return err
 }
 
 func verifyLatestCommit(v Verifier, ctx context.Context, t kernel.Transition, executionID string) (string, error) {
@@ -1075,10 +1094,10 @@ func gitTreeBlobHash(ctx context.Context, target Target, tree string) (string, e
 	tab := strings.IndexByte(record, '\t')
 	if tab < 0 { return "", fmt.Errorf("unexpected Git tree target metadata") }
 	fields := strings.Fields(record[:tab])
-	if len(fields) != 3 || fields[1] == "" || (fields[0] != "100644" && fields[0] != "100755") || fields[2] != "blob" {
+	if len(fields) != 3 || fields[1] != "blob" || (fields[0] != "100644" && fields[0] != "100755") || fields[2] == "" {
 		return "", fmt.Errorf("target Git tree entry is not a regular file")
 	}
-	return fields[1], nil
+	return fields[2], nil
 }
 
 func gitTreeMode(ctx context.Context, target Target, tree string) (string, error) {
