@@ -48,6 +48,16 @@ func NewTarget(repository, path, subject string) (Target, error) {
 	if err := validateNoSymlinks(target); err != nil {
 		return Target{}, err
 	}
+	targetInfo, err := os.Stat(filepath.Join(target.Repository, target.Path))
+	if err != nil {
+		return Target{}, fmt.Errorf("stat target: %w", err)
+	}
+	if !targetInfo.Mode().IsRegular() {
+		return Target{}, fmt.Errorf("git target is not a regular file")
+	}
+	if targetInfo.Size() == 0 {
+		return Target{}, fmt.Errorf("empty Git target files are not supported")
+	}
 	return target, nil
 }
 
@@ -114,7 +124,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err := rejectGrafts(ctx, e.Target); err != nil {
 		return fail(err)
 	}
-	status, err := e.git(ctx, "status", "--porcelain", "--untracked-files=all")
+	status, err := e.git(ctx, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=all")
 	if err != nil {
 		return fail(fmt.Errorf("read git status: %w", err))
 	}
@@ -243,10 +253,10 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	if content != t.After {
 		return kernel.Observation{}, fmt.Errorf("git file state mismatch")
 	}
-	if err := verifyLatestCommit(v, ctx, t, authority.ExecutionID); err != nil {
+	verifiedHead, err := verifyLatestCommit(v, ctx, t, authority.ExecutionID)
+	if err != nil {
 		return kernel.Observation{}, err
 	}
-	verifiedHead, err := v.git(ctx, "rev-parse", "HEAD")
 	if err != nil {
 		return kernel.Observation{}, fmt.Errorf("re-read verified Git HEAD: %w", err)
 	}
@@ -268,12 +278,19 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	if liveMode != expectedMode {
 		return kernel.Observation{}, fmt.Errorf("Git target mode changed during verification")
 	}
-	indexMode, err := gitIndexMode(ctx, v.Target)
+	indexMode, indexHash, err := gitIndexEntry(ctx, v.Target)
 	if err != nil {
-		return kernel.Observation{}, fmt.Errorf("read live Git index target mode: %w", err)
+		return kernel.Observation{}, fmt.Errorf("read live Git index target entry: %w", err)
 	}
 	if indexMode != expectedMode {
 		return kernel.Observation{}, fmt.Errorf("Git index target mode changed during verification")
+	}
+	expectedHash, err := gitTreeBlobHash(ctx, v.Target, verifiedHead)
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("read verified Git target blob: %w", err)
+	}
+	if indexHash != expectedHash {
+		return kernel.Observation{}, fmt.Errorf("Git index target blob changed during verification")
 	}
 	finalHead, err := v.git(ctx, "rev-parse", "HEAD")
 	if err != nil {
@@ -302,8 +319,13 @@ func readFile(ctx context.Context, target Target) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
+	parentFD, err := openParentDirNoSymlink(target)
+	if err != nil {
+		return "", err
+	}
+	defer syscall.Close(parentFD)
 	path := filepath.Join(target.Repository, target.Path)
-	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	fd, err := syscall.Openat(parentFD, filepath.Base(filepath.Clean(target.Path)), syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return "", fmt.Errorf("open git file: %w", err)
 	}
@@ -460,10 +482,10 @@ func atomicWriteTarget(target Target, content []byte) error {
 		_ = tmp.Close()
 		_ = syscall.Unlinkat(parentFD, tmpName)
 	}()
-	if err := tmp.Chmod(mode); err != nil {
+	if _, err := tmp.Write(content); err != nil {
 		return err
 	}
-	if _, err := tmp.Write(content); err != nil {
+	if err := tmp.Chmod(mode); err != nil {
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
@@ -610,6 +632,19 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 	if configuredResolved == actualResolved {
 		return fmt.Errorf("git target is configured as the active attributes file")
 	}
+	infoAttrs, err := runGit(ctx, target.Repository, "rev-parse", "--git-path", "info/attributes")
+	if err == nil {
+		infoAttrs = strings.TrimSpace(infoAttrs)
+		if !filepath.IsAbs(infoAttrs) {
+			infoAttrs = filepath.Join(target.Repository, infoAttrs)
+		}
+		if resolved, resolveErr := filepath.EvalSymlinks(infoAttrs); resolveErr == nil {
+			resolved, _ = filepath.Abs(resolved)
+			if resolved == configuredResolved {
+				return fmt.Errorf("git target is the active .git/info/attributes source")
+			}
+		}
+	}
 	return nil
 }
 
@@ -656,6 +691,9 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 			continue
 		}
 		origin, _, ok := strings.Cut(line, "\t")
+		if !ok {
+			origin, _, ok = strings.Cut(line, " ")
+		}
 		if !ok || !strings.HasPrefix(origin, "file:") {
 			continue
 		}
@@ -690,7 +728,11 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 			if line == "" {
 				continue
 			}
-			_, include, ok := strings.Cut(line, "\t")
+			_, include, ok := strings.Cut(line, " ")
+			if !ok {
+				_, include, ok = strings.Cut(line, "\t")
+			}
+			include = strings.TrimSpace(include)
 			if !ok || include == "" {
 				continue
 			}
@@ -843,11 +885,20 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, afterHash st
 	if commit == "" {
 		return fmt.Errorf("Git commit object is missing")
 	}
-	if _, err := runGit(ctx, target.Repository, "update-ref", "HEAD", commit, parent); err != nil {
-		return fmt.Errorf("atomically install authorized Git commit: %w", err)
+	headRef, err := runGit(ctx, target.Repository, "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+		return fmt.Errorf("read Git HEAD branch before commit: %w", err)
 	}
-	if _, err := runGit(ctx, target.Repository, "add", "--", literalPathspec(target.Path)); err != nil {
-		return fmt.Errorf("synchronize Git index after commit: %w", err)
+	headRef = strings.TrimSpace(headRef)
+	if headRef == "" {
+		return fmt.Errorf("Git HEAD is detached")
+	}
+	currentHead, err := runGit(ctx, target.Repository, "rev-parse", "HEAD")
+	if err != nil || strings.TrimSpace(currentHead) != parent {
+		return fmt.Errorf("Git HEAD changed before commit")
+	}
+	if _, err := runGit(ctx, target.Repository, "update-ref", headRef, commit, parent); err != nil {
+		return fmt.Errorf("atomically install authorized Git commit on captured branch: %w", err)
 	}
 	return nil
 }
@@ -856,75 +907,75 @@ func verifyCommit(e Executor, ctx context.Context, parent string, t kernel.Trans
 	return verifyCommitAt(ctx, e.Target, func(args ...string) (string, error) { return e.git(ctx, args...) }, parent, t, executionID)
 }
 
-func verifyLatestCommit(v Verifier, ctx context.Context, t kernel.Transition, executionID string) error {
+func verifyLatestCommit(v Verifier, ctx context.Context, t kernel.Transition, executionID string) (string, error) {
 	return verifyCommitAt(ctx, v.Target, func(args ...string) (string, error) { return v.git(ctx, args...) }, "", t, executionID)
 }
 
-func verifyCommitAt(ctx context.Context, target Target, git func(...string) (string, error), expectedParent string, t kernel.Transition, executionID string) error {
+func verifyCommitAt(ctx context.Context, target Target, git func(...string) (string, error), expectedParent string, t kernel.Transition, executionID string) (string, error) {
 	safeGit := func(args ...string) (string, error) { return git(append([]string{"--no-replace-objects"}, args...)...) }
 	head, err := safeGit("rev-parse", "HEAD")
 	if err != nil {
-		return fmt.Errorf("read committed Git HEAD: %w", err)
+		return "", fmt.Errorf("read committed Git HEAD: %w", err)
 	}
 	parents, err := safeGit("rev-list", "--parents", "-n", "1", head)
 	if err != nil {
-		return fmt.Errorf("read committed Git parents: %w", err)
+		return "", fmt.Errorf("read committed Git parents: %w", err)
 	}
 	fields := strings.Fields(parents)
 	if len(fields) != 2 || fields[0] != head {
-		return fmt.Errorf("authorized Git execution did not produce one parent commit")
+		return "", fmt.Errorf("authorized Git execution did not produce one parent commit")
 	}
 	if expectedParent != "" && fields[1] != expectedParent {
-		return fmt.Errorf("authorized Git execution parent changed unexpectedly")
+		return "", fmt.Errorf("authorized Git execution parent changed unexpectedly")
 	}
 	message, err := safeGit("log", "-1", "--format=%B", head)
 	if err != nil {
-		return fmt.Errorf("read Git commit message: %w", err)
+		return "", fmt.Errorf("read Git commit message: %w", err)
 	}
 	if strings.TrimSpace(message) != "ackOS: execute "+executionID {
-		return fmt.Errorf("git execution marker mismatch")
+		return "", fmt.Errorf("git execution marker mismatch")
 	}
 	paths, err := safeGit("diff-tree", "--no-commit-id", "--name-only", "-r", "-z", head)
 	if err != nil {
-		return fmt.Errorf("inspect committed Git diff: %w", err)
+		return "", fmt.Errorf("inspect committed Git diff: %w", err)
 	}
 	if !exactNULPathList(paths, target.Path) {
-		return fmt.Errorf("committed Git diff contains an unauthorized path")
+		return "", fmt.Errorf("committed Git diff contains an unauthorized path")
 	}
 	parentMode, err := gitTreeMode(ctx, target, head+"^")
 	if err != nil {
-		return fmt.Errorf("read committed Git parent mode: %w", err)
+		return "", fmt.Errorf("read committed Git parent mode: %w", err)
 	}
 	targetMode, err := gitTreeMode(ctx, target, head)
 	if err != nil {
-		return fmt.Errorf("read committed Git target mode: %w", err)
+		return "", fmt.Errorf("read committed Git target mode: %w", err)
 	}
 	if parentMode != targetMode {
-		return fmt.Errorf("committed Git target mode changed unexpectedly")
+		return "", fmt.Errorf("committed Git target mode changed unexpectedly")
 	}
 	beforeHash, err := safeGit("rev-parse", head+"^:./"+target.Path)
 	if err != nil {
-		return fmt.Errorf("read committed Git parent state: %w", err)
+		return "", fmt.Errorf("read committed Git parent state: %w", err)
 	}
 	expectedBeforeHash, err := gitBlobHash(ctx, target, t.Before)
 	if err != nil {
-		return fmt.Errorf("normalize authorized Git parent state: %w", err)
+		return "", fmt.Errorf("normalize authorized Git parent state: %w", err)
 	}
 	if beforeHash != expectedBeforeHash {
-		return fmt.Errorf("committed Git parent does not match authorized state")
+		return "", fmt.Errorf("committed Git parent does not match authorized state")
 	}
 	afterHash, err := safeGit("rev-parse", head+":./"+target.Path)
 	if err != nil {
-		return fmt.Errorf("read committed Git target state: %w", err)
+		return "", fmt.Errorf("read committed Git target state: %w", err)
 	}
 	expectedAfterHash, err := gitBlobHash(ctx, target, t.After)
 	if err != nil {
-		return fmt.Errorf("normalize authorized Git target state: %w", err)
+		return "", fmt.Errorf("normalize authorized Git target state: %w", err)
 	}
 	if afterHash != expectedAfterHash {
-		return fmt.Errorf("committed Git target does not match authorized state")
+		return "", fmt.Errorf("committed Git target does not match authorized state")
 	}
-	return nil
+	return head, nil
 }
 
 func (e Executor) requireTracked(ctx context.Context) error {
@@ -986,35 +1037,48 @@ func liveTargetMode(target Target) (string, error) {
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("Git target is not a regular file")
 	}
-	switch info.Mode().Perm() {
-	case 0o644:
-		return "100644", nil
-	case 0o755:
+	if info.Mode().Perm()&0o111 != 0 {
 		return "100755", nil
-	default:
-		return "", fmt.Errorf("Git target has unsupported mode %o", info.Mode().Perm())
 	}
+	return "100644", nil
 }
 
-func gitIndexMode(ctx context.Context, target Target) (string, error) {
+func gitIndexEntry(ctx context.Context, target Target) (string, string, error) {
 	output, err := runGit(ctx, target.Repository, "ls-files", "--stage", "-z", "--", literalPathspec(target.Path))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	output = strings.TrimSuffix(output, "\x00")
 	records := strings.Split(output, "\x00")
 	if len(records) != 1 {
-		return "", fmt.Errorf("unexpected Git index metadata")
+		return "", "", fmt.Errorf("unexpected Git index metadata")
 	}
 	meta, path, ok := strings.Cut(records[0], "\t")
 	if !ok || path != target.Path {
-		return "", fmt.Errorf("unexpected Git index target metadata")
+		return "", "", fmt.Errorf("unexpected Git index target metadata")
 	}
 	fields := strings.Fields(meta)
 	if len(fields) != 3 || fields[2] != "0" || (fields[0] != "100644" && fields[0] != "100755") {
-		return "", fmt.Errorf("target Git index entry is not a regular file")
+		return "", "", fmt.Errorf("target Git index entry is not a regular file")
 	}
-	return fields[0], nil
+	return fields[0], fields[1], nil
+}
+func gitIndexMode(ctx context.Context, target Target) (string, error) {
+	mode, _, err := gitIndexEntry(ctx, target)
+	return mode, err
+}
+
+func gitTreeBlobHash(ctx context.Context, target Target, tree string) (string, error) {
+	output, err := runGit(ctx, target.Repository, "--no-replace-objects", "ls-tree", "-z", tree, "--", literalPathspec(target.Path))
+	if err != nil { return "", err }
+	record := strings.TrimSuffix(output, "\x00")
+	tab := strings.IndexByte(record, '\t')
+	if tab < 0 { return "", fmt.Errorf("unexpected Git tree target metadata") }
+	fields := strings.Fields(record[:tab])
+	if len(fields) != 3 || fields[1] == "" || (fields[0] != "100644" && fields[0] != "100755") || fields[2] != "blob" {
+		return "", fmt.Errorf("target Git tree entry is not a regular file")
+	}
+	return fields[1], nil
 }
 
 func gitTreeMode(ctx context.Context, target Target, tree string) (string, error) {
