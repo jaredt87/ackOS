@@ -22,8 +22,10 @@ type Target struct {
 	Path       string
 	Subject    string
 
-	repositoryDev uint64
-	repositoryIno uint64
+	repositoryDev  uint64
+	repositoryIno  uint64
+	capturedHead   string
+	capturedHeadRef string
 }
 
 func NewTarget(repository, path, subject string) (Target, error) {
@@ -52,6 +54,22 @@ func NewTarget(repository, path, subject string) (Target, error) {
 	}
 	target.repositoryDev = uint64(stat.Dev)
 	target.repositoryIno = uint64(stat.Ino)
+	head, err := runGit(context.Background(), target.Repository, "rev-parse", "HEAD")
+	if err != nil {
+		return Target{}, fmt.Errorf("capture Git HEAD: %w", err)
+	}
+	target.capturedHead = strings.TrimSpace(head)
+	if target.capturedHead == "" {
+		return Target{}, fmt.Errorf("capture Git HEAD: empty revision")
+	}
+	headRef, err := runGit(context.Background(), target.Repository, "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+		return Target{}, fmt.Errorf("capture Git HEAD branch: %w", err)
+	}
+	target.capturedHeadRef = strings.TrimSpace(headRef)
+	if target.capturedHeadRef == "" || !strings.HasPrefix(target.capturedHeadRef, "refs/heads/") {
+		return Target{}, fmt.Errorf("Git HEAD must remain attached to a branch")
+	}
 	if err := requireWorktreeRoot(context.Background(), target); err != nil {
 		return Target{}, err
 	}
@@ -152,13 +170,17 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err != nil {
 		return fail(fmt.Errorf("read git HEAD: %w", err))
 	}
+	head = strings.TrimSpace(head)
+	if head != e.Target.capturedHead {
+		return fail(fmt.Errorf("Git HEAD changed before execution"))
+	}
 	headRef, err := e.git(ctx, "symbolic-ref", "-q", "HEAD")
 	if err != nil {
 		return fail(fmt.Errorf("read Git HEAD branch: %w", err))
 	}
 	headRef = strings.TrimSpace(headRef)
-	if headRef == "" || !strings.HasPrefix(headRef, "refs/heads/") {
-		return fail(fmt.Errorf("Git HEAD must remain attached to a branch during execution"))
+	if headRef != e.Target.capturedHeadRef {
+		return fail(fmt.Errorf("Git HEAD branch changed before execution"))
 	}
 	expectedMode, err := gitTreeMode(ctx, e.Target, head)
 	if err != nil {
@@ -197,8 +219,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	}
 	cachedPaths, err := e.git(ctx, "diff", "--cached", "--name-only", "-z")
 	if err != nil {
-		return fail(fmt.Errorf("inspect staged Git diff: %w", err))
-	}
+		return fail(fmt.Errorf("inspect staged Git diff: %w", err))	}
 	if !exactNULPathList(cachedPaths, e.Target.Path) {
 		return fail(fmt.Errorf("staged Git diff contains an unauthorized path"))
 	}
@@ -255,6 +276,23 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	if err := requireWorktreeRoot(ctx, v.Target); err != nil {
 		return kernel.Observation{}, err
 	}
+	if v.Target.capturedHead == "" || v.Target.capturedHeadRef == "" {
+		return kernel.Observation{}, fmt.Errorf("captured Git execution identity is unavailable")
+	}
+	currentHead, err := v.git(ctx, "rev-parse", "HEAD")
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("read captured Git HEAD: %w", err)
+	}
+	if strings.TrimSpace(currentHead) == "" {
+		return kernel.Observation{}, fmt.Errorf("captured Git HEAD is unavailable")
+	}
+	currentRef, err := v.git(ctx, "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("read captured Git HEAD branch: %w", err)
+	}
+	if strings.TrimSpace(currentRef) != v.Target.capturedHeadRef {
+		return kernel.Observation{}, fmt.Errorf("Git HEAD is not on the authorized branch")
+	}
 	if err := validateNoSymlinks(v.Target); err != nil {
 		return kernel.Observation{}, err
 	}
@@ -296,6 +334,10 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	verifiedHead, err := v.git(ctx, "rev-parse", "HEAD")
 	if err != nil {
 		return kernel.Observation{}, fmt.Errorf("re-read verified Git HEAD: %w", err)
+	}
+	verifiedHead = strings.TrimSpace(verifiedHead)
+	if verifiedHead == "" {
+		return kernel.Observation{}, fmt.Errorf("verified Git HEAD is unavailable")
 	}
 	finalContent, err := v.read(ctx)
 	if err != nil {
@@ -397,8 +439,7 @@ func readFile(ctx context.Context, target Target) (string, error) {
 			return "", fmt.Errorf("read git file: %w", readErr)
 		}
 	case <-ctx.Done():
-		_ = file.Close()
-		return "", ctx.Err()
+		_ = file.Close()		return "", ctx.Err()
 	}
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -597,8 +638,7 @@ func requireCommitIdentity(ctx context.Context, target Target) error {
 			return fmt.Errorf("Git commit identity is not configured: %s: %w", identity, err)
 		}
 	}
-	return nil
-}
+	return nil}
 
 func requireIndexUnlocked(ctx context.Context, target Target) error {
 	path, err := runGit(ctx, target.Repository, "rev-parse", "--git-path", "index.lock")
@@ -797,8 +837,7 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 			if !filepath.IsAbs(include) {
 				include = filepath.Join(filepath.Dir(resolvedSource), include)
 			}
-			addSource(include)
-		}
+			addSource(include)		}
 	}
 	return nil
 }
@@ -971,7 +1010,7 @@ func verifyCommit(e Executor, ctx context.Context, parent string, t kernel.Trans
 }
 
 func verifyLatestCommit(v Verifier, ctx context.Context, t kernel.Transition, executionID string) error {
-	return verifyCommitAt(ctx, v.Target, func(args ...string) (string, error) { return v.git(ctx, args...) }, "", t, executionID)
+	return verifyCommitAt(ctx, v.Target, func(args ...string) (string, error) { return v.git(ctx, args...) }, v.Target.capturedHead, t, executionID)
 }
 
 func verifyLiveIndexMatchesHead(ctx context.Context, target Target, head string) error {
@@ -997,8 +1036,7 @@ func verifyCommitAt(ctx context.Context, target Target, git func(...string) (str
 	}
 	parents, err := safeGit("rev-list", "--parents", "-n", "1", head)
 	if err != nil {
-		return fmt.Errorf("read committed Git parents: %w", err)
-	}
+		return fmt.Errorf("read committed Git parents: %w", err)	}
 	fields := strings.Fields(parents)
 	if len(fields) != 2 || fields[0] != head {
 		return fmt.Errorf("authorized Git execution did not produce one parent commit")
@@ -1198,107 +1236,3 @@ func validIndexPathStatus(output, expected string) bool {
 	output = strings.TrimSuffix(output, "\x00")
 	records := strings.Split(output, "\x00")
 	if len(records) != 1 || len(records[0]) < 3 || records[0][1] != ' ' || records[0][2:] != expected {
-		return false
-	}
-	status := records[0][0]
-	return status != 'S' && !(status >= 'a' && status <= 'z')
-}
-
-func exactNULPathList(output, expected string) bool {
-	output = strings.TrimSuffix(output, "\x00")
-	if output == "" {
-		return false
-	}
-	paths := strings.Split(output, "\x00")
-	return len(paths) == 1 && paths[0] == expected
-}
-
-func (e Executor) git(ctx context.Context, args ...string) (string, error) {
-	return runGit(ctx, e.Target.Repository, args...)
-}
-func (v Verifier) git(ctx context.Context, args ...string) (string, error) {
-	return runGit(ctx, v.Target.Repository, args...)
-}
-
-func runGit(ctx context.Context, repository string, args ...string) (string, error) {
-	return runGitWithInput(ctx, repository, nil, nil, args...)
-}
-
-func runGitInput(ctx context.Context, repository string, input []byte, args ...string) (string, error) {
-	return runGitWithInput(ctx, repository, input, nil, args...)
-}
-
-func runGitWithEnv(ctx context.Context, repository string, env map[string]string, args ...string) (string, error) {
-	return runGitWithInput(ctx, repository, nil, env, args...)
-}
-
-func runGitWithInput(ctx context.Context, repository string, input []byte, overrides map[string]string, args ...string) (string, error) {
-	gitArgs := append([]string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"}, args...)
-	cmd := exec.Command("git", gitArgs...)
-	cmd.Dir = repository
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.WaitDelay = 2 * time.Second
-	cmd.Env = sanitizedGitEnv()
-	for key, value := range overrides {
-		cmd.Env = append(cmd.Env, key+"="+value)
-	}
-	if input != nil {
-		cmd.Stdin = bytes.NewReader(input)
-	}
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		return "", fmt.Errorf("start git: %w", err)
-	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case runErr := <-done:
-		if runErr != nil {
-			return "", fmt.Errorf("%w: %s", runErr, strings.TrimSpace(stderr.String()))
-		}
-	case <-ctx.Done():
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		select {
-		case <-done:
-		case <-time.After(cmd.WaitDelay):
-		}
-		return "", ctx.Err()
-	}
-	output := stdout.String()
-	for _, arg := range args {
-		if arg == "-z" {
-			return output, nil
-		}
-	}
-	if len(args) > 0 && args[0] == "show" {
-		return output, nil
-	}
-	return strings.TrimSpace(output), nil
-}
-
-func sanitizedGitEnv() []string {
-	blocked := map[string]struct{}{
-		"GIT_DIR":                          {},
-		"GIT_WORK_TREE":                    {},
-		"GIT_INDEX_FILE":                   {},
-		"GIT_OBJECT_DIRECTORY":             {},
-		"GIT_ALTERNATE_OBJECT_DIRECTORIES": {},
-		"GIT_COMMON_DIR":                   {},
-		"GIT_NAMESPACE":                    {},
-		"GIT_CEILING_DIRECTORIES":          {},
-		"GIT_DISCOVERY_ACROSS_FILESYSTEM":  {},
-		"GIT_GRAFT_FILE":                   {},
-	}
-	env := make([]string, 0, len(os.Environ()))
-	for _, entry := range os.Environ() {
-		if key, _, ok := strings.Cut(entry, "="); ok {
-			if _, blocked := blocked[key]; blocked {
-				continue
-			}
-		}
-		env = append(env, entry)
-	}
-	return env
-}
