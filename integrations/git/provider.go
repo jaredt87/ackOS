@@ -22,8 +22,8 @@ type Target struct {
 	Path       string
 	Subject    string
 
-	repositoryDev  uint64
-	repositoryIno  uint64
+	repositoryDev uint64
+	repositoryIno uint64
 }
 
 func NewTarget(repository, path, subject string) (Target, error) {
