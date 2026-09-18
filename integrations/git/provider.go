@@ -318,6 +318,9 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	if indexHash != expectedHash {
 		return kernel.Observation{}, fmt.Errorf("Git index target blob changed during verification")
 	}
+	if err := verifyLiveIndexMatchesHead(ctx, v.Target, verifiedHead); err != nil {
+		return kernel.Observation{}, err
+	}
 	finalHead, err := v.git(ctx, "rev-parse", "HEAD")
 	if err != nil {
 		return kernel.Observation{}, fmt.Errorf("re-read Git HEAD at verification return boundary: %w", err)
@@ -1144,6 +1147,21 @@ func stageTargetCAS(ctx context.Context, target Target, expectedMode, expectedHa
 		return fmt.Errorf("install staged Git index: %w", err)
 	}
 	lockOwned = false
+	return nil
+}
+
+func verifyLiveIndexMatchesHead(ctx context.Context, target Target, head string) error {
+	indexTree, err := runGit(ctx, target.Repository, "write-tree")
+	if err != nil {
+		return fmt.Errorf("write live Git index tree for verification: %w", err)
+	}
+	expectedTree, err := runGit(ctx, target.Repository, "--no-replace-objects", "rev-parse", head+"^{tree}")
+	if err != nil {
+		return fmt.Errorf("read verified Git tree for index verification: %w", err)
+	}
+	if strings.TrimSpace(indexTree) != strings.TrimSpace(expectedTree) {
+		return fmt.Errorf("Git index contains unauthorized staged content")
+	}
 	return nil
 }
 
