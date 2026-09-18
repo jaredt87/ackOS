@@ -46,10 +46,12 @@ func NewTarget(repository, path, subject string) (Target, error) {
 		return Target{}, fmt.Errorf("path must be repository-relative")
 	}
 	target := Target{Repository: absRepo, Path: cleanPath, Subject: subject}
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
-		target.repositoryDev = uint64(stat.Dev)
-		target.repositoryIno = uint64(stat.Ino)
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Dev == 0 || stat.Ino == 0 {
+		return Target{}, fmt.Errorf("capture configured repository identity")
 	}
+	target.repositoryDev = uint64(stat.Dev)
+	target.repositoryIno = uint64(stat.Ino)
 	if err := requireWorktreeRoot(context.Background(), target); err != nil {
 		return Target{}, err
 	}
@@ -257,6 +259,9 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, err
 	}
 	if err := v.requireTracked(ctx); err != nil {
+		return kernel.Observation{}, err
+	}
+	if err := requireNoInProgressGitOperation(ctx, v.Target); err != nil {
 		return kernel.Observation{}, err
 	}
 	status, err := v.git(ctx, "status", "--porcelain", "--untracked-files=all")
@@ -653,12 +658,12 @@ func requireWorktreeRoot(ctx context.Context, target Target) error {
 	if err != nil {
 		return fmt.Errorf("revalidate configured repository identity: %w", err)
 	}
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok && target.repositoryDev != 0 && target.repositoryIno != 0 {
-		if uint64(stat.Dev) != target.repositoryDev || uint64(stat.Ino) != target.repositoryIno {
-			return fmt.Errorf("configured repository identity changed")
-		}
-	} else if target.repositoryDev != 0 || target.repositoryIno != 0 {
-		return fmt.Errorf("cannot revalidate configured repository identity")
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Dev == 0 || stat.Ino == 0 || target.repositoryDev == 0 || target.repositoryIno == 0 {
+		return fmt.Errorf("configured repository identity is unavailable")
+	}
+	if uint64(stat.Dev) != target.repositoryDev || uint64(stat.Ino) != target.repositoryIno {
+		return fmt.Errorf("configured repository identity changed")
 	}
 	return nil
 }
