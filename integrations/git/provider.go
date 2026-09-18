@@ -3,6 +3,7 @@ package git
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"context"
 	"fmt"
 	"io"
@@ -80,6 +81,11 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err := ctx.Err(); err != nil {
 		return fail(err)
 	}
+	unlock, err := acquireTargetLock(ctx, e.Target)
+	if err != nil {
+		return fail(err)
+	}
+	defer unlock()
 	if err := requireWorktreeRoot(ctx, e.Target); err != nil {
 		return fail(err)
 	}
@@ -133,6 +139,17 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	head, err := e.git(ctx, "rev-parse", "HEAD")
 	if err != nil {
 		return fail(fmt.Errorf("read git HEAD: %w", err))
+	}
+	expectedMode, err := gitTreeMode(ctx, e.Target, head)
+	if err != nil {
+		return fail(fmt.Errorf("read Git parent target mode: %w", err))
+	}
+	liveMode, err := liveTargetMode(e.Target)
+	if err != nil {
+		return fail(fmt.Errorf("read live Git target mode: %w", err))
+	}
+	if liveMode != expectedMode {
+		return fail(fmt.Errorf("Git target mode does not match parent before mutation"))
 	}
 	beforeHash, err := gitBlobHash(ctx, e.Target, t.Before)
 	if err != nil {
@@ -403,6 +420,35 @@ func validateNoSymlinks(target Target) error {
 		return fmt.Errorf("git target is not a regular file")
 	}
 	return nil
+}
+
+
+func acquireTargetLock(ctx context.Context, target Target) (func(), error) {
+	sum := sha256.Sum256([]byte(target.Repository + "\x00" + target.Path))
+	path := filepath.Join(os.TempDir(), fmt.Sprintf("ackos-target-%x.lock", sum))
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open ackOS target lock: %w", err)
+	}
+	for {
+		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			return func() {
+				_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+				_ = file.Close()
+			}, nil
+		}
+		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
+			_ = file.Close()
+			return nil, fmt.Errorf("acquire ackOS target lock: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			_ = file.Close()
+			return nil, ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
 }
 
 func validateMutationBoundary(ctx context.Context, target Target, expected string) error {
