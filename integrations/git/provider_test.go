@@ -57,6 +57,26 @@ func TestProviderLifecycleCommitsExactTransition(t *testing.T) {
 	_ = recovery
 }
 
+func TestExecutorRejectsLiveModeMismatchBeforeMutation(t *testing.T) {
+	target, observer, executor, _, _ := newTestProvider(t, "initial")
+	if err := os.Chmod(filepath.Join(target.Repository, target.Path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, target.Repository, "config", "core.fileMode", "false")
+	observation, err := observer.Observe(context.Background(), target.Subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition := kernel.Transition{Subject: target.Subject, Before: observation.State, After: "updated"}
+	result := executor.Execute(context.Background(), transition, kernel.Authority{ExecutionID: "attempt-live-mode-boundary"})
+	if result.Success || !strings.Contains(result.Message, "mode does not match parent") {
+		t.Fatalf("result = %+v, want live mode mismatch rejection", result)
+	}
+	if got := readTestFile(t, target); got != "initial" {
+		t.Fatalf("target changed during mode rejection: %q", got)
+	}
+}
+
 func TestVerifierAcceptsOrdinaryUnixModes(t *testing.T) {
 	target, observer, executor, verifier, _ := newTestProvider(t, "initial")
 	if err := os.Chmod(filepath.Join(target.Repository, target.Path), 0o600); err != nil {
