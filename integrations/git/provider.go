@@ -65,6 +65,9 @@ func (o Observer) Observe(ctx context.Context, _ string) (kernel.Observation, er
 	if err := ctx.Err(); err != nil {
 		return kernel.Observation{}, err
 	}
+	if err := requireWorktreeRoot(ctx, o.Target); err != nil {
+		return kernel.Observation{}, err
+	}
 	if err := validateNoSymlinks(o.Target); err != nil {
 		return kernel.Observation{}, err
 	}
@@ -255,6 +258,13 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	}
 	if err := v.requireTracked(ctx); err != nil {
 		return kernel.Observation{}, err
+	}
+	status, err := v.git(ctx, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("read git status during verification: %w", err)
+	}
+	if status != "" {
+		return kernel.Observation{}, fmt.Errorf("git worktree is not clean during verification")
 	}
 	if err := rejectConfiguredFilters(ctx, v.Target); err != nil {
 		return kernel.Observation{}, err
