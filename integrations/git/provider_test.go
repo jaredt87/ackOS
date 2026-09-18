@@ -395,6 +395,50 @@ func TestExecutorRejectsUntrackedTarget(t *testing.T) {
 	}
 }
 
+func TestTargetRejectsMissingRepositoryIdentity(t *testing.T) {
+	dir := t.TempDir()
+	gitTest(t, dir, "init")
+	gitTest(t, dir, "config", "user.email", "ackos-test@example.invalid")
+	gitTest(t, dir, "config", "user.name", "ackOS test")
+	path := filepath.Join(dir, "target.md")
+	if err := os.WriteFile(path, []byte("initial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, dir, "add", "--", "target.md")
+	gitTest(t, dir, "commit", "-m", "initial")
+	target := Target{Repository: dir, Path: "target.md", Subject: "test-repo:target.md"}
+	if _, err := (Observer{Target: target}).Observe(context.Background(), target.Subject); err == nil || !strings.Contains(err.Error(), "repository identity is unavailable") {
+		t.Fatalf("observer error = %v, want missing-identity rejection", err)
+	}
+	result := (Executor{Target: target}).Execute(context.Background(), kernel.Transition{Subject: target.Subject, Before: "initial", After: "updated"}, kernel.Authority{ExecutionID: "attempt-missing-identity"})
+	if result.Success || !strings.Contains(result.Message, "repository identity is unavailable") {
+		t.Fatalf("executor result = %+v, want missing-identity rejection", result)
+	}
+	if _, err := (Verifier{Target: target}).Verify(context.Background(), kernel.Transition{Subject: target.Subject, Before: "initial", After: "updated"}, kernel.Authority{ExecutionID: "attempt-missing-identity"}); err == nil || !strings.Contains(err.Error(), "repository identity is unavailable") {
+		t.Fatalf("verifier error = %v, want missing-identity rejection", err)
+	}
+}
+
+func TestVerifierRejectsPendingGitMerge(t *testing.T) {
+	target, observer, executor, verifier, _ := newTestProvider(t, "initial")
+	observation, err := observer.Observe(context.Background(), target.Subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, target.Repository, "checkout", "-b", "merge-test")
+	gitTest(t, target.Repository, "commit", "--allow-empty", "-m", "merge side")
+	gitTest(t, target.Repository, "checkout", "-")
+	gitTest(t, target.Repository, "commit", "--allow-empty", "-m", "local side")
+	gitTest(t, target.Repository, "merge", "--no-commit", "merge-test")
+	transition := kernel.Transition{Subject: target.Subject, Before: observation.State, After: "updated"}
+	authority := kernel.Authority{ExecutionID: "attempt-verifier-pending-merge"}
+	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil || !strings.Contains(err.Error(), "MERGE_HEAD") {
+		t.Fatalf("verifier error = %v, want pending-merge rejection", err)
+	}
+	_ = executor
+	gitTest(t, target.Repository, "merge", "--abort")
+}
+
 func TestExecutorRejectsPendingGitMerge(t *testing.T) {
 	target, observer, executor, _, _ := newTestProvider(t, "initial")
 	observation, err := observer.Observe(context.Background(), target.Subject)
