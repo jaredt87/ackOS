@@ -21,6 +21,9 @@ type Target struct {
 	Repository string
 	Path       string
 	Subject    string
+
+	repositoryDev  uint64
+	repositoryIno  uint64
 }
 
 func NewTarget(repository, path, subject string) (Target, error) {
@@ -43,6 +46,10 @@ func NewTarget(repository, path, subject string) (Target, error) {
 		return Target{}, fmt.Errorf("path must be repository-relative")
 	}
 	target := Target{Repository: absRepo, Path: cleanPath, Subject: subject}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+		target.repositoryDev = uint64(stat.Dev)
+		target.repositoryIno = uint64(stat.Ino)
+	}
 	if err := requireWorktreeRoot(context.Background(), target); err != nil {
 		return Target{}, err
 	}
@@ -310,6 +317,9 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	}
 	if indexHash != expectedHash {
 		return kernel.Observation{}, fmt.Errorf("Git index target blob changed during verification")
+	}
+	if err := verifyLiveIndexMatchesHead(ctx, v.Target, verifiedHead); err != nil {
+		return kernel.Observation{}, err
 	}
 	finalHead, err := v.git(ctx, "rev-parse", "HEAD")
 	if err != nil {
@@ -629,6 +639,17 @@ func requireWorktreeRoot(ctx context.Context, target Target) error {
 	if configured != gitRoot {
 		return fmt.Errorf("repository must be the Git worktree root")
 	}
+	info, err := os.Stat(configured)
+	if err != nil {
+		return fmt.Errorf("revalidate configured repository identity: %w", err)
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok && target.repositoryDev != 0 && target.repositoryIno != 0 {
+		if uint64(stat.Dev) != target.repositoryDev || uint64(stat.Ino) != target.repositoryIno {
+			return fmt.Errorf("configured repository identity changed")
+		}
+	} else if target.repositoryDev != 0 || target.repositoryIno != 0 {
+		return fmt.Errorf("cannot revalidate configured repository identity")
+	}
 	return nil
 }
 
@@ -936,6 +957,21 @@ func verifyCommit(e Executor, ctx context.Context, parent string, t kernel.Trans
 
 func verifyLatestCommit(v Verifier, ctx context.Context, t kernel.Transition, executionID string) error {
 	return verifyCommitAt(ctx, v.Target, func(args ...string) (string, error) { return v.git(ctx, args...) }, "", t, executionID)
+}
+
+func verifyLiveIndexMatchesHead(ctx context.Context, target Target, head string) error {
+	indexTree, err := runGit(ctx, target.Repository, "write-tree")
+	if err != nil {
+		return fmt.Errorf("write live Git index tree for verification: %w", err)
+	}
+	expectedTree, err := runGit(ctx, target.Repository, "--no-replace-objects", "rev-parse", head+"^{tree}")
+	if err != nil {
+		return fmt.Errorf("read verified Git tree for index verification: %w", err)
+	}
+	if strings.TrimSpace(indexTree) != strings.TrimSpace(expectedTree) {
+		return fmt.Errorf("Git index contains unauthorized staged content")
+	}
+	return nil
 }
 
 func verifyCommitAt(ctx context.Context, target Target, git func(...string) (string, error), expectedParent string, t kernel.Transition, executionID string) error {
