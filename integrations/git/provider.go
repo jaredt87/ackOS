@@ -3,8 +3,8 @@ package git
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
