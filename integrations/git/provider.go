@@ -247,7 +247,8 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	finalContent, err := e.read(ctx)
 	if err != nil {
 		return fail(fmt.Errorf("re-read Git target after verification: %w", err))
-	}	if finalContent != t.After {
+	}
+	if finalContent != t.After {
 		return fail(fmt.Errorf("git target changed after commit verification"))
 	}
 	finalHead, err := e.git(ctx, "rev-parse", "HEAD")
