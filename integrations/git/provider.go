@@ -398,7 +398,9 @@ func (o RecoveryObserver) Observe(ctx context.Context, subject string) (kernel.O
 }
 
 func (o Observer) read(ctx context.Context) (string, error) { return readFile(ctx, o.Target) }
-func (e Executor) read(ctx context.Context) (string, error) { return readFile(ctx, e.Target) }func (v Verifier) read(ctx context.Context) (string, error) { return readFile(ctx, v.Target) }
+func (e Executor) read(ctx context.Context) (string, error) { return readFile(ctx, e.Target) }
+
+func (v Verifier) read(ctx context.Context) (string, error) { return readFile(ctx, v.Target) }
 
 func readFile(ctx context.Context, target Target) (string, error) {
 	if err := ctx.Err(); err != nil {
@@ -608,7 +610,8 @@ func atomicWriteTarget(target Target, content []byte) error {
 	}
 	if err := tmp.Sync(); err != nil {
 		return err
-	}	if err := tmp.Close(); err != nil {
+	}
+	if err := tmp.Close(); err != nil {
 		return err
 	}
 	if err := syscall.Renameat(parentFD, tmpName, parentFD, filepath.Base(path)); err != nil {
@@ -825,7 +828,8 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 		if !ok || !strings.HasPrefix(origin, "file:") {
 			continue
 	
-	}		addSource(strings.TrimPrefix(origin, "file:"))
+	}
+		addSource(strings.TrimPrefix(origin, "file:"))
 	}
 	gitConfig, configErr := runGit(ctx, target.Repository, "rev-parse", "--git-path", "config")
 	if configErr == nil {
