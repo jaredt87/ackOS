@@ -22,9 +22,9 @@ type Target struct {
 	Path       string
 	Subject    string
 
-	repositoryDev   uint64
-	repositoryIno   uint64
-	capturedHead    string
+	repositoryDev  uint64
+	repositoryIno  uint64
+	capturedHead   string
 	capturedHeadRef string
 }
 
@@ -247,7 +247,8 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	finalContent, err := e.read(ctx)
 	if err != nil {
 		return fail(fmt.Errorf("re-read Git target after verification: %w", err))
-	}	if finalContent != t.After {
+	}
+	if finalContent != t.After {
 		return fail(fmt.Errorf("git target changed after commit verification"))
 	}
 	finalHead, err := e.git(ctx, "rev-parse", "HEAD")
@@ -496,7 +497,8 @@ func validateNoSymlinks(target Target) error {
 }
 
 func acquireTargetLock(ctx context.Context, target Target) (func(), error) {
-	sum := sha256.Sum256([]byte(target.Repository + "\x00" + target.Path))	path := filepath.Join(os.TempDir(), fmt.Sprintf("ackos-target-%x.lock", sum))
+	sum := sha256.Sum256([]byte(target.Repository + "\x00" + target.Path))
+	path := filepath.Join(os.TempDir(), fmt.Sprintf("ackos-target-%x.lock", sum))
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open ackOS target lock: %w", err)
@@ -745,7 +747,8 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 	if err != nil {
 		return fmt.Errorf("resolve configured attributes identity path: %w", err)
 	}
-	if configuredResolved == actualResolved {		return fmt.Errorf("git target is configured as the active attributes file")
+	if configuredResolved == actualResolved {
+		return fmt.Errorf("git target is configured as the active attributes file")
 	}
 	return nil
 }
@@ -994,7 +997,8 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, aft
 		return fmt.Errorf("re-read Git HEAD branch after commit: %w", err)
 	}
 	if strings.TrimSpace(currentRef) != headRef {
-		return fmt.Errorf("Git HEAD branch changed during commit")	}
+		return fmt.Errorf("Git HEAD branch changed during commit")
+	}
 	if _, err := runGit(ctx, target.Repository, "add", "--", literalPathspec(target.Path)); err != nil {
 		return fmt.Errorf("synchronize Git index after commit: %w", err)
 	}
@@ -1198,3 +1202,37 @@ func gitTreeMode(ctx context.Context, target Target, tree string) (string, error
 	if err != nil {
 		return "", err
 	}
+	lines := strings.Fields(output)
+	if len(lines) != 1 || (lines[0] != "100644" && lines[0] != "100755") {
+		return "", fmt.Errorf("target Git tree entry is not a regular file")
+	}
+	return lines[0], nil
+}
+
+func gitBlobHash(ctx context.Context, target Target, content string) (string, error) {
+	tmp, err := os.CreateTemp("", "ackos-git-blob-*")
+	if err != nil {
+		return "", fmt.Errorf("create temporary Git blob input: %w", err)
+	}
+	name := tmp.Name()
+	defer os.Remove(name)
+	if _, err := tmp.WriteString(content); err != nil {
+		_ = tmp.Close()
+		return "", fmt.Errorf("write temporary Git blob input: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return "", fmt.Errorf("close temporary Git blob input: %w", err)
+	}
+	hash, err := runGit(ctx, target.Repository, "hash-object", "--no-filters", name)
+	if err != nil {
+		return "", fmt.Errorf("hash Git blob content: %w", err)
+	}
+	return strings.TrimSpace(hash), nil
+}
+
+func literalPathspec(path string) string { return ":(literal)" + path }
+
+func validIndexPathStatus(output, expected string) bool {
+	output = strings.TrimSuffix(output, "\x00")
+	records := strings.Split(output, "\x00")
+	if len(records) != 1 || len(records[0]) < 3 || records[0][1] != ' ' || records[0][2:] != expected {
