@@ -197,8 +197,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err != nil {
 		return fail(fmt.Errorf("normalize authorized Git parent state: %w", err))
 	}
-	afterHash, err := gitBlobHash(ctx, e.Target, t.After)
-	if err != nil {
+	afterHash, err := gitBlobHash(ctx, e.Target, t.After)	if err != nil {
 		return fail(fmt.Errorf("normalize authorized Git target state: %w", err))
 	}
 	if beforeHash == afterHash {
@@ -219,7 +218,8 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	}
 	cachedPaths, err := e.git(ctx, "diff", "--cached", "--name-only", "-z")
 	if err != nil {
-		return fail(fmt.Errorf("inspect staged Git diff: %w", err))	}
+		return fail(fmt.Errorf("inspect staged Git diff: %w", err))
+	}
 	if !exactNULPathList(cachedPaths, e.Target.Path) {
 		return fail(fmt.Errorf("staged Git diff contains an unauthorized path"))
 	}
@@ -297,7 +297,8 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, err
 	}
 	if err := v.requireTracked(ctx); err != nil {
-		return kernel.Observation{}, err	}
+		return kernel.Observation{}, err
+	}
 	if err := requireNoInProgressGitOperation(ctx, v.Target); err != nil {
 		return kernel.Observation{}, err
 	}
@@ -397,8 +398,7 @@ func (o RecoveryObserver) Observe(ctx context.Context, subject string) (kernel.O
 }
 
 func (o Observer) read(ctx context.Context) (string, error) { return readFile(ctx, o.Target) }
-func (e Executor) read(ctx context.Context) (string, error) { return readFile(ctx, e.Target) }
-func (v Verifier) read(ctx context.Context) (string, error) { return readFile(ctx, v.Target) }
+func (e Executor) read(ctx context.Context) (string, error) { return readFile(ctx, e.Target) }func (v Verifier) read(ctx context.Context) (string, error) { return readFile(ctx, v.Target) }
 
 func readFile(ctx context.Context, target Target) (string, error) {
 	if err := ctx.Err(); err != nil {
@@ -436,7 +436,8 @@ func readFile(ctx context.Context, target Target) (string, error) {
 	case <-readDone:
 		if readErr != nil {
 			return "", fmt.Errorf("read git file: %w", readErr)
-		}
+	
+	}
 	case <-ctx.Done():
 		_ = file.Close()
 		return "", ctx.Err()
@@ -469,10 +470,12 @@ func validateNoSymlinks(target Target) error {
 		info, err := os.Lstat(current)
 		if err != nil {
 			return fmt.Errorf("inspect git target path: %w", err)
-		}
+	
+	}
 		if info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("git target path contains a symlink: %s", current)
-		}
+	
+	}
 	}
 	resolved, err := filepath.EvalSymlinks(filepath.Join(root, cleanPath))
 	if err != nil {
@@ -509,18 +512,22 @@ func acquireTargetLock(ctx context.Context, target Target) (func(), error) {
 			return func() {
 				_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 				_ = file.Close()
-			}, nil
-		}
+		
+	}, nil
+	
+	}
 		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
 			_ = file.Close()
 			return nil, fmt.Errorf("acquire ackOS target lock: %w", err)
-		}
+	
+	}
 		select {
 		case <-ctx.Done():
 			_ = file.Close()
 			return nil, ctx.Err()
 		case <-time.After(25 * time.Millisecond):
-		}
+	
+	}
 	}
 }
 
@@ -547,12 +554,14 @@ func openParentDirNoSymlink(target Target) (int, error) {
 	for _, part := range strings.Split(filepath.Dir(cleanPath), string(filepath.Separator)) {
 		if part == "." || part == "" {
 			continue
-		}
+	
+	}
 		next, err := syscall.Openat(fd, part, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
 		if err != nil {
 			_ = syscall.Close(fd)
 			return -1, fmt.Errorf("open git target parent directory: %w", err)
-		}
+	
+	}
 		_ = syscall.Close(fd)
 		fd = next
 	}
@@ -571,7 +580,8 @@ func atomicWriteTarget(target Target, content []byte) error {
 	if info, err := os.Stat(path); err == nil {
 		if err := rejectUnpreservableMetadata(path, info); err != nil {
 			return err
-		}
+	
+	}
 		mode = info.Mode()
 	}
 
@@ -597,8 +607,8 @@ func atomicWriteTarget(target Target, content []byte) error {
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
-		return err	}
-	if err := tmp.Close(); err != nil {
+		return err
+	}	if err := tmp.Close(); err != nil {
 		return err
 	}
 	if err := syscall.Renameat(parentFD, tmpName, parentFD, filepath.Base(path)); err != nil {
@@ -611,23 +621,28 @@ func rejectUnpreservableMetadata(path string, info os.FileInfo) error {
 	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
 		if uint32(os.Geteuid()) != stat.Uid || uint32(os.Getegid()) != stat.Gid {
 			return fmt.Errorf("git target ownership cannot be preserved by atomic replacement")
-		}
+	
+	}
 	}
 	for size := 256; ; size *= 2 {
 		buf := make([]byte, size)
 		n, err := syscall.Listxattr(path, buf)
 		if err == syscall.ENOTSUP || err == syscall.EOPNOTSUPP {
 			return nil
-		}
+	
+	}
 		if err != nil {
 			return fmt.Errorf("inspect git target extended attributes: %w", err)
-		}
+	
+	}
 		if n == 0 {
 			return nil
-		}
+	
+	}
 		if n < len(buf) {
 			return fmt.Errorf("git target has extended attributes or ACLs that cannot be preserved by atomic replacement")
-		}
+	
+	}
 	}
 }
 
@@ -635,9 +650,11 @@ func requireCommitIdentity(ctx context.Context, target Target) error {
 	for _, identity := range []string{"GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"} {
 		if _, err := runGit(ctx, target.Repository, "var", identity); err != nil {
 			return fmt.Errorf("Git commit identity is not configured: %s: %w", identity, err)
-		}
+	
 	}
-	return nil}
+	}
+	return nil
+}
 
 func requireIndexUnlocked(ctx context.Context, target Target) error {
 	path, err := runGit(ctx, target.Repository, "rev-parse", "--git-path", "index.lock")
@@ -661,18 +678,23 @@ func requireNoInProgressGitOperation(ctx context.Context, target Target) error {
 		path, err := runGit(ctx, target.Repository, "rev-parse", "--git-path", marker)
 		if err != nil {
 			return fmt.Errorf("inspect Git operation state: %w", err)
-		}
+	
+	}
 		path = strings.TrimSpace(path)
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(target.Repository, path)
-		}
+	
+	}
 		if info, err := os.Stat(path); err == nil {
 			if marker == "MERGE_HEAD" || marker == "CHERRY_PICK_HEAD" || marker == "REVERT_HEAD" || marker == "REBASE_HEAD" || info.IsDir() {
 				return fmt.Errorf("Git operation is already in progress: %s", marker)
-			}
-		} else if !os.IsNotExist(err) {
+		
+	}
+	
+	} else if !os.IsNotExist(err) {
 			return fmt.Errorf("inspect Git operation state %s: %w", marker, err)
-		}
+	
+	}
 	}
 	return nil
 }
@@ -771,16 +793,20 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 	addSource := func(path string) {
 		if path == "" {
 			return
-		}
+	
+	}
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(target.Repository, path)
-		}
+	
+	}
 		if abs, absErr := filepath.Abs(path); absErr == nil {
 			path = abs
-		}
+	
+	}
 		if _, ok := seen[path]; ok {
 			return
-		}
+	
+	}
 		seen[path] = struct{}{}
 		queue = append(queue, path)
 	}
@@ -793,12 +819,13 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
-		}
+	
+	}
 		origin, _, ok := strings.Cut(line, "\t")
 		if !ok || !strings.HasPrefix(origin, "file:") {
 			continue
-		}
-		addSource(strings.TrimPrefix(origin, "file:"))
+	
+	}		addSource(strings.TrimPrefix(origin, "file:"))
 	}
 	gitConfig, configErr := runGit(ctx, target.Repository, "rev-parse", "--git-path", "config")
 	if configErr == nil {
@@ -811,32 +838,40 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 		resolvedSource, resolveErr := filepath.EvalSymlinks(source)
 		if resolveErr != nil {
 			continue
-		}
+	
+	}
 		resolvedSource, resolveErr = filepath.Abs(resolvedSource)
 		if resolveErr != nil {
 			return fmt.Errorf("resolve Git configuration source identity: %w", resolveErr)
-		}
+	
+	}
 		if resolvedSource == configured {
 			return fmt.Errorf("git target is an active Git configuration source")
-		}
+	
+	}
 
 		includeOutput, includeErr := runGit(ctx, target.Repository, "config", "--file", resolvedSource, "--path", "--get-regexp", `^include.*\.path$`)
 		if includeErr != nil {
 			continue
-		}
+	
+	}
 		for _, line := range strings.Split(includeOutput, "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" {
 				continue
-			}
+		
+	}
 			_, include, ok := strings.Cut(line, "\t")
 			if !ok || include == "" {
 				continue
-			}
+		
+	}
 			if !filepath.IsAbs(include) {
 				include = filepath.Join(filepath.Dir(resolvedSource), include)
-			}
-			addSource(include)		}
+		
+	}
+			addSource(include)	
+	}
 	}
 	return nil
 }
@@ -877,7 +912,8 @@ func rejectConfiguredFilters(ctx context.Context, target Target) error {
 	for i := 0; i < len(parts); i += 3 {
 		if parts[i+1] != "filter" || (parts[i+2] != "unspecified" && parts[i+2] != "unset") {
 			return fmt.Errorf("git repository uses a configured clean filter; filtered repositories are not supported")
-		}
+	
+	}
 	}
 	return nil
 }
@@ -896,14 +932,17 @@ func targetGitAttr(ctx context.Context, target Target) (string, error) {
 
 func rejectConfiguredNormalization(ctx context.Context, target Target) error {
 	autocrlf, err := runGit(ctx, target.Repository, "config", "--get", "core.autocrlf")
-	if err == nil {		raw := strings.ToLower(strings.TrimSpace(autocrlf))
+	if err == nil {
+		raw := strings.ToLower(strings.TrimSpace(autocrlf))
 		if raw == "input" {
 			return fmt.Errorf("git target uses core.autocrlf normalization; normalized targets are not supported")
-		}
+	
+	}
 		parsed, boolErr := runGit(ctx, target.Repository, "config", "--bool", "--get", "core.autocrlf")
 		if boolErr == nil && strings.EqualFold(strings.TrimSpace(parsed), "true") {
 			return fmt.Errorf("git target uses core.autocrlf normalization; normalized targets are not supported")
-		}
+	
+	}
 	}
 	output, err := runGit(ctx, target.Repository, "check-attr", "-z", "text", "eol", "crlf", "ident", "working-tree-encoding", "--", target.Path)
 	if err != nil {
@@ -1034,7 +1073,8 @@ func verifyCommitAt(ctx context.Context, target Target, git func(...string) (str
 	}
 	parents, err := safeGit("rev-list", "--parents", "-n", "1", head)
 	if err != nil {
-		return fmt.Errorf("read committed Git parents: %w", err)	}
+		return fmt.Errorf("read committed Git parents: %w", err)
+	}
 	fields := strings.Fields(parents)
 	if len(fields) != 2 || fields[0] != head {
 		return fmt.Errorf("authorized Git execution did not produce one parent commit")
@@ -1293,20 +1333,23 @@ func runGitWithInput(ctx context.Context, repository string, input []byte, overr
 	case runErr := <-done:
 		if runErr != nil {
 			return "", fmt.Errorf("%w: %s", runErr, strings.TrimSpace(stderr.String()))
-		}
+	
+	}
 	case <-ctx.Done():
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		select {
 		case <-done:
 		case <-time.After(cmd.WaitDelay):
-		}
+	
+	}
 		return "", ctx.Err()
 	}
 	output := stdout.String()
 	for _, arg := range args {
 		if arg == "-z" {
 			return output, nil
-		}
+	
+	}
 	}
 	if len(args) > 0 && args[0] == "show" {
 		return output, nil
@@ -1332,8 +1375,10 @@ func sanitizedGitEnv() []string {
 		if key, _, ok := strings.Cut(entry, "="); ok {
 			if _, blocked := blocked[key]; blocked {
 				continue
-			}
-		}
+		
+	}
+	
+	}
 		env = append(env, entry)
 	}
 	return env
