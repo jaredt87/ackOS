@@ -140,6 +140,14 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err != nil {
 		return fail(fmt.Errorf("read git HEAD: %w", err))
 	}
+	headRef, err := e.git(ctx, "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+		return fail(fmt.Errorf("read Git HEAD branch: %w", err))
+	}
+	headRef = strings.TrimSpace(headRef)
+	if headRef == "" || !strings.HasPrefix(headRef, "refs/heads/") {
+		return fail(fmt.Errorf("Git HEAD must remain attached to a branch during execution"))
+	}
 	expectedMode, err := gitTreeMode(ctx, e.Target, head)
 	if err != nil {
 		return fail(fmt.Errorf("read Git parent target mode: %w", err))
@@ -193,7 +201,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(err)
 	}
 	message := "ackOS: execute " + authority.ExecutionID
-	if err := commitVerifiedTree(ctx, e.Target, head, afterHash, []byte(t.After), message); err != nil {
+	if err := commitVerifiedTree(ctx, e.Target, head, headRef, afterHash, []byte(t.After), message); err != nil {
 		return fail(err)
 	}
 	if err := verifyCommit(e, ctx, head, t, authority.ExecutionID); err != nil {
@@ -857,7 +865,7 @@ func rejectConfiguredNormalization(ctx context.Context, target Target) error {
 	return nil
 }
 
-func commitVerifiedTree(ctx context.Context, target Target, parent, afterHash string, content []byte, message string) error {
+func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, afterHash string, content []byte, message string) error {
 	blob, err := runGitInput(ctx, target.Repository, content, "hash-object", "-w", "--stdin")
 	if err != nil {
 		return fmt.Errorf("store authorized Git blob: %w", err)
@@ -899,8 +907,9 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, afterHash st
 	if commit == "" {
 		return fmt.Errorf("Git commit object is missing")
 	}
-	if _, err := runGit(ctx, target.Repository, "update-ref", "HEAD", commit, parent); err != nil {
-		return fmt.Errorf("atomically install authorized Git commit: %w", err)
+	transaction := fmt.Sprintf("start\nsymref-verify HEAD %s\nverify %s %s\nupdate %s %s %s\nprepare\ncommit\n", headRef, headRef, parent, headRef, commit, parent)
+	if _, err := runGitWithInput(ctx, target.Repository, []byte(transaction), "update-ref", "--stdin"); err != nil {
+		return fmt.Errorf("atomically install authorized Git commit on captured branch: %w", err)
 	}
 	if _, err := runGit(ctx, target.Repository, "add", "--", literalPathspec(target.Path)); err != nil {
 		return fmt.Errorf("synchronize Git index after commit: %w", err)
