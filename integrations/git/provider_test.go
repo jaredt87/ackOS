@@ -132,6 +132,27 @@ func TestVerifierRejectsLiveTargetModeMutation(t *testing.T) {
 	}
 }
 
+func TestVerifierRejectsUnauthorizedStagedIndexContent(t *testing.T) {
+	target, observer, executor, verifier, _ := newTestProvider(t, "initial")
+	observation, err := observer.Observe(context.Background(), target.Subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition := kernel.Transition{Subject: target.Subject, Before: observation.State, After: "updated"}
+	authority := kernel.Authority{ExecutionID: "attempt-index-other-path"}
+	if result := executor.Execute(context.Background(), transition, authority); !result.Success {
+		t.Fatal(result.Message)
+	}
+	other := filepath.Join(target.Repository, "docs", "other.md")
+	if err := os.WriteFile(other, []byte("unauthorized"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, target.Repository, "add", "--", "docs/other.md")
+	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil || !strings.Contains(err.Error(), "unauthorized staged content") {
+		t.Fatalf("verifier error = %v, want unauthorized staged content rejection", err)
+	}
+}
+
 func TestVerifierRejectsLiveIndexTargetModeMutation(t *testing.T) {
 	target, observer, executor, verifier, _ := newTestProvider(t, "initial")
 	observation, err := observer.Observe(context.Background(), target.Subject)
