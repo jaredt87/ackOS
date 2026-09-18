@@ -908,7 +908,7 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, aft
 		return fmt.Errorf("Git commit object is missing")
 	}
 	transaction := fmt.Sprintf("start\nsymref-verify HEAD %s\nverify %s %s\nupdate %s %s %s\nprepare\ncommit\n", headRef, headRef, parent, headRef, commit, parent)
-	if _, err := runGitWithInput(ctx, target.Repository, []byte(transaction), nil, "update-ref", "--stdin"); err != nil {
+	if _, err := runGitWithInput(ctx, target.Repository, []byte(transaction), nil, "update-ref", "--no-deref", "--stdin"); err != nil {
 		return fmt.Errorf("atomically install authorized Git commit on captured branch: %w", err)
 	}
 	if _, err := runGit(ctx, target.Repository, "add", "--", literalPathspec(target.Path)); err != nil {
