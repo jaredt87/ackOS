@@ -227,7 +227,6 @@ func TestVerifyCommitReadsMarkerFromCapturedCommit(t *testing.T) {
 	}
 }
 
-
 func TestVerifierRejectsCommitWithWrongPreExecutionParent(t *testing.T) {
 	target, _, _, _, _ := newTestProvider(t, "initial")
 	capturedParent := target.capturedHead
