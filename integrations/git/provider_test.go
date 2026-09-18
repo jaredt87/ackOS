@@ -217,6 +217,28 @@ func TestProviderLifecyclePreservesBlobWhitespace(t *testing.T) {
 	}
 }
 
+func TestExecutorRejectsRepositorySubstitution(t *testing.T) {
+	target, _, executor, _, _ := newTestProvider(t, "initial")
+	moved := target.Repository + "-moved"
+	if err := os.Rename(target.Repository, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(target.Repository, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, target.Repository, "init")
+	gitTest(t, target.Repository, "config", "user.email", "ackos-test@example.invalid")
+	gitTest(t, target.Repository, "config", "user.name", "ackOS test")
+	if err := os.WriteFile(filepath.Join(target.Repository, target.Path), []byte("initial"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, target.Repository, "add", "--", target.Path)
+	gitTest(t, target.Repository, "commit", "-m", "replacement")
+	result := executor.Execute(context.Background(), kernel.Transition{Subject: target.Subject, Before: "initial", After: "updated"}, kernel.Authority{ExecutionID: "attempt-repository-substitution"})
+	if result.Success || !strings.Contains(result.Message, "repository identity changed") {
+		t.Fatalf("result = %+v, want repository identity substitution rejection", result)
+	}
+}
 func TestExecutorRejectsResourceSubstitution(t *testing.T) {
 	target, _, executor, _, _ := newTestProvider(t, "initial")
 	transition := kernel.Transition{Subject: "different-resource", Before: "initial", After: "updated"}
