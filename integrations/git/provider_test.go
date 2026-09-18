@@ -108,8 +108,8 @@ func TestVerifierRejectsLiveIndexTargetBlobMutation(t *testing.T) {
 		t.Fatal(result.Message)
 	}
 	gitTest(t, target.Repository, "update-index", "--cacheinfo", "100644", "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391", target.Path)
-	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil || !strings.Contains(err.Error(), "index target blob") {
-		t.Fatalf("verifier error = %v, want live index blob rejection", err)
+	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil || !strings.Contains(err.Error(), "worktree is not clean during verification") {
+		t.Fatalf("verifier error = %v, want dirty-worktree rejection", err)
 	}
 }
 
@@ -127,8 +127,8 @@ func TestVerifierRejectsLiveTargetModeMutation(t *testing.T) {
 	if err := os.Chmod(filepath.Join(target.Repository, target.Path), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil || !strings.Contains(err.Error(), "target mode changed") {
-		t.Fatalf("verifier error = %v, want live target mode rejection", err)
+	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil || !strings.Contains(err.Error(), "worktree is not clean during verification") {
+		t.Fatalf("verifier error = %v, want dirty-worktree rejection", err)
 	}
 }
 
@@ -148,8 +148,8 @@ func TestVerifierRejectsUnauthorizedStagedIndexContent(t *testing.T) {
 		t.Fatal(err)
 	}
 	gitTest(t, target.Repository, "add", "--", "docs/other.md")
-	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil || !strings.Contains(err.Error(), "unauthorized staged content") {
-		t.Fatalf("verifier error = %v, want unauthorized staged content rejection", err)
+	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil || !strings.Contains(err.Error(), "worktree is not clean during verification") {
+		t.Fatalf("verifier error = %v, want dirty-worktree rejection", err)
 	}
 }
 
@@ -165,8 +165,8 @@ func TestVerifierRejectsLiveIndexTargetModeMutation(t *testing.T) {
 		t.Fatal(result.Message)
 	}
 	gitTest(t, target.Repository, "update-index", "--chmod=+x", "--", target.Path)
-	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil || !strings.Contains(err.Error(), "index target mode changed") {
-		t.Fatalf("verifier error = %v, want live index mode rejection", err)
+	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil || !strings.Contains(err.Error(), "worktree is not clean during verification") {
+		t.Fatalf("verifier error = %v, want dirty-worktree rejection", err)
 	}
 }
 
@@ -248,6 +248,9 @@ func TestObserverRejectsRepositorySubstitution(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(target.Repository, "docs"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	gitTest(t, target.Repository, "init")
+	gitTest(t, target.Repository, "config", "user.email", "ackos-test@example.invalid")
+	gitTest(t, target.Repository, "config", "user.name", "ackOS test")
 	if err := os.WriteFile(filepath.Join(target.Repository, target.Path), []byte("replacement"), 0o644); err != nil {
 		t.Fatal(err)
 	}
