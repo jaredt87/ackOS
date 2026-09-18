@@ -209,7 +209,8 @@ func TestVerifyCommitReadsMarkerFromCapturedCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := commitVerifiedTree(context.Background(), target, parent, afterHash, []byte("updated"), "ackOS: execute marker-test"); err != nil {
+	headRef := strings.TrimSpace(gitTest(t, target.Repository, "symbolic-ref", "-q", "HEAD"))
+	if err := commitVerifiedTree(context.Background(), target, parent, headRef, afterHash, []byte("updated"), "ackOS: execute marker-test"); err != nil {
 		t.Fatal(err)
 	}
 
