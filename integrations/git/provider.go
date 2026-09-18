@@ -422,7 +422,6 @@ func validateNoSymlinks(target Target) error {
 	return nil
 }
 
-
 func acquireTargetLock(ctx context.Context, target Target) (func(), error) {
 	sum := sha256.Sum256([]byte(target.Repository + "\x00" + target.Path))
 	path := filepath.Join(os.TempDir(), fmt.Sprintf("ackos-target-%x.lock", sum))
