@@ -30,7 +30,10 @@ jobs:
         with:
           go-version: '1.25'
       - name: Check formatting
-        run: test -z "$(gofmt -l .)"
+        run: |
+          gofmt -l .
+          test -z "$(gofmt -l .)"
+          gofmt -d integrations/git/provider.go
       - name: Vet
         run: go vet ./...
       - name: Test
