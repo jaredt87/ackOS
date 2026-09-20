@@ -31,7 +31,8 @@ jobs:
           go-version: '1.25'
       - name: Check formatting
         run: |
-          gofmt -l .
+          gofmt -d integrations/git/current_findings_test.go
+          gofmt -d integrations/git/provider_test.go
           test -z "$(gofmt -l .)"
       - name: Vet
         run: go vet ./...
