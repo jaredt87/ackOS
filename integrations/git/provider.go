@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"sync"
 	"time"
 
 	"github.com/jaredt87/ackOS/kernel"
@@ -26,6 +27,60 @@ type Target struct {
 	repositoryIno   uint64
 	capturedHead    string
 	capturedHeadRef string
+	lifecycle       *lifecycleState
+}
+
+type executionParent struct {
+	head string
+	ref  string
+}
+
+type lifecycleState struct {
+	mu      sync.Mutex
+	parents map[string]executionParent
+}
+
+func (s *lifecycleState) capture(ctx context.Context, target Target, executionID string) (executionParent, error) {
+	if s == nil {
+		return executionParent{}, fmt.Errorf("Git lifecycle state is unavailable")
+	}
+	head, err := runGit(ctx, target.Repository, "rev-parse", "HEAD")
+	if err != nil {
+		return executionParent{}, fmt.Errorf("capture Git execution parent: %w", err)
+	}
+	head = strings.TrimSpace(head)
+	if head == "" {
+		return executionParent{}, fmt.Errorf("capture Git execution parent: empty revision")
+	}
+	ref, err := runGit(ctx, target.Repository, "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+		return executionParent{}, fmt.Errorf("capture Git execution branch: %w", err)
+	}
+	ref = strings.TrimSpace(ref)
+	if ref == "" || !strings.HasPrefix(ref, "refs/heads/") {
+		return executionParent{}, fmt.Errorf("Git HEAD must remain attached to a branch")
+	}
+	parent := executionParent{head: head, ref: ref}
+	s.mu.Lock()
+	if s.parents == nil {
+		s.parents = make(map[string]executionParent)
+	}
+	s.parents[executionID] = parent
+	s.mu.Unlock()
+	return parent, nil
+}
+
+func (s *lifecycleState) parent(executionID string) (executionParent, error) {
+	if s == nil {
+		return executionParent{}, fmt.Errorf("Git lifecycle state is unavailable")
+	}
+	s.mu.Lock()
+	parent, ok := s.parents[executionID]
+	s.mu.Unlock()
+	if !ok {
+		return executionParent{}, fmt.Errorf("Git execution lifecycle state is unavailable")
+	}
+	return parent, nil
 }
 
 func NewTarget(repository, path, subject string) (Target, error) {
@@ -57,7 +112,7 @@ func NewTarget(repository, path, subject string) (Target, error) {
 		return Target{}, fmt.Errorf("path must be repository-relative")
 
 	}
-	target := Target{Repository: absRepo, Path: cleanPath, Subject: subject}
+	target := Target{Repository: absRepo, Path: cleanPath, Subject: subject, lifecycle: &lifecycleState{parents: make(map[string]executionParent)}}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok || stat.Dev == 0 || stat.Ino == 0 {
 
@@ -161,6 +216,10 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(err)
 
 	}
+	expectedParent, err := e.Target.lifecycle.capture(ctx, e.Target, authority.ExecutionID)
+	if err != nil {
+		return fail(err)
+	}
 	if err := validateNoSymlinks(e.Target); err != nil {
 
 		return fail(err)
@@ -238,29 +297,21 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(err)
 
 	}
-	head, err := e.git(ctx, "rev-parse", "HEAD")
+	head := expectedParent.head
+	headRef := expectedParent.ref
+	currentHead, err := e.git(ctx, "rev-parse", "HEAD")
 	if err != nil {
-
-		return fail(fmt.Errorf("read git HEAD: %w", err))
-
+		return fail(fmt.Errorf("re-read Git execution parent: %w", err))
 	}
-	head = strings.TrimSpace(head)
-	if head != e.Target.capturedHead {
-
+	if strings.TrimSpace(currentHead) != head {
 		return fail(fmt.Errorf("Git HEAD changed before execution"))
-
 	}
-	headRef, err := e.git(ctx, "symbolic-ref", "-q", "HEAD")
+	currentRef, err := e.git(ctx, "symbolic-ref", "-q", "HEAD")
 	if err != nil {
-
-		return fail(fmt.Errorf("read Git HEAD branch: %w", err))
-
+		return fail(fmt.Errorf("re-read Git execution branch: %w", err))
 	}
-	headRef = strings.TrimSpace(headRef)
-	if headRef != e.Target.capturedHeadRef {
-
+	if strings.TrimSpace(currentRef) != headRef {
 		return fail(fmt.Errorf("Git HEAD branch changed before execution"))
-
 	}
 	expectedMode, err := gitTreeMode(ctx, e.Target, head)
 	if err != nil {
@@ -408,10 +459,9 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, err
 
 	}
-	if v.Target.capturedHead == "" || v.Target.capturedHeadRef == "" {
-
-		return kernel.Observation{}, fmt.Errorf("captured Git execution identity is unavailable")
-
+	expectedParent, err := v.Target.lifecycle.parent(authority.ExecutionID)
+	if err != nil {
+		return kernel.Observation{}, err
 	}
 	currentHead, err := v.git(ctx, "rev-parse", "HEAD")
 	if err != nil {
@@ -430,7 +480,7 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, fmt.Errorf("Git HEAD is not on the authorized branch: %w", err)
 
 	}
-	if strings.TrimSpace(currentRef) != v.Target.capturedHeadRef {
+	if strings.TrimSpace(currentRef) != expectedParent.ref {
 
 		return kernel.Observation{}, fmt.Errorf("Git HEAD is not on the authorized branch")
 
@@ -492,7 +542,7 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, fmt.Errorf("git file state mismatch")
 
 	}
-	if err := verifyLatestCommit(v, ctx, t, authority.ExecutionID); err != nil {
+	if err := verifyLatestCommit(v, ctx, expectedParent.head, t, authority.ExecutionID); err != nil {
 
 		return kernel.Observation{}, err
 
@@ -1501,8 +1551,8 @@ func verifyCommit(e Executor, ctx context.Context, parent string, t kernel.Trans
 	return verifyCommitAt(ctx, e.Target, func(args ...string) (string, error) { return e.git(ctx, args...) }, parent, t, executionID)
 }
 
-func verifyLatestCommit(v Verifier, ctx context.Context, t kernel.Transition, executionID string) error {
-	return verifyCommitAt(ctx, v.Target, func(args ...string) (string, error) { return v.git(ctx, args...) }, v.Target.capturedHead, t, executionID)
+func verifyLatestCommit(v Verifier, ctx context.Context, expectedParent string, t kernel.Transition, executionID string) error {
+	return verifyCommitAt(ctx, v.Target, func(args ...string) (string, error) { return v.git(ctx, args...) }, expectedParent, t, executionID)
 }
 
 func verifyLiveIndexMatchesHead(ctx context.Context, target Target, head string) error {
