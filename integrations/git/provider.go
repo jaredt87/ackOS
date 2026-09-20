@@ -427,7 +427,7 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	currentRef, err := v.git(ctx, "symbolic-ref", "-q", "HEAD")
 	if err != nil {
 
-		return kernel.Observation{}, fmt.Errorf("read captured Git HEAD branch: %w", err)
+		return kernel.Observation{}, fmt.Errorf("Git HEAD is not on the authorized branch: %w", err)
 
 	}
 	if strings.TrimSpace(currentRef) != v.Target.capturedHeadRef {

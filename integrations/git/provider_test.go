@@ -375,6 +375,12 @@ func TestExecutorRejectsUntrackedTarget(t *testing.T) {
 	gitTest(t, dir, "init")
 	gitTest(t, dir, "config", "user.email", "ackos-test@example.invalid")
 	gitTest(t, dir, "config", "user.name", "ackOS test")
+	seed := filepath.Join(dir, "seed.txt")
+	if err := os.WriteFile(seed, []byte("seed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, dir, "add", "--", "seed.txt")
+	gitTest(t, dir, "commit", "-m", "initial")
 	path := filepath.Join(dir, "docs", "ignored.md")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)

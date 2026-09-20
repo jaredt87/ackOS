@@ -205,10 +205,11 @@ func TestVerifyCommitRejectsTargetModeChange(t *testing.T) {
 func TestVerifyCommitReadsMarkerFromCapturedCommit(t *testing.T) {
 	target, _, _, _, _ := newTestProvider(t, "initial")
 	parent := strings.TrimSpace(gitTest(t, target.Repository, "rev-parse", "HEAD"))
-	afterHash, err := gitBlobHash(context.Background(), target, "updated")
+	afterHash, err := runGitInput(context.Background(), target.Repository, []byte("updated"), "hash-object", "-w", "--no-filters", "--stdin")
 	if err != nil {
 		t.Fatal(err)
 	}
+	afterHash = strings.TrimSpace(afterHash)
 	headRef := strings.TrimSpace(gitTest(t, target.Repository, "symbolic-ref", "-q", "HEAD"))
 	if err := commitVerifiedTree(context.Background(), target, parent, headRef, afterHash, []byte("updated"), "ackOS: execute marker-test"); err != nil {
 		t.Fatal(err)
