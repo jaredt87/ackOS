@@ -27,6 +27,12 @@ type Target struct {
 	repositoryIno   uint64
 	capturedHead    string
 	capturedHeadRef string
+	gitDirPath       string
+	gitDirDev        uint64
+	gitDirIno        uint64
+	gitCommonDirPath string
+	gitCommonDirDev  uint64
+	gitCommonDirIno  uint64
 	lifecycle       *lifecycleState
 }
 
@@ -81,6 +87,13 @@ func (s *lifecycleState) parent(executionID string) (executionParent, error) {
 		return executionParent{}, fmt.Errorf("Git execution lifecycle state is unavailable")
 	}
 	return parent, nil
+}
+
+func (s *lifecycleState) discard(executionID string) {
+	if s == nil { return }
+	s.mu.Lock()
+	delete(s.parents, executionID)
+	s.mu.Unlock()
 }
 
 func NewTarget(repository, path, subject string) (Target, error) {
@@ -150,6 +163,16 @@ func NewTarget(repository, path, subject string) (Target, error) {
 		return Target{}, err
 
 	}
+	metadata, err := captureGitMetadataIdentity(context.Background(), target)
+	if err != nil {
+		return Target{}, err
+	}
+	target.gitDirPath = metadata.gitDirPath
+	target.gitDirDev = metadata.gitDirDev
+	target.gitDirIno = metadata.gitDirIno
+	target.gitCommonDirPath = metadata.gitCommonDirPath
+	target.gitCommonDirDev = metadata.gitCommonDirDev
+	target.gitCommonDirIno = metadata.gitCommonDirIno
 	if err := validateNoSymlinks(target); err != nil {
 
 		return Target{}, err
@@ -215,10 +238,6 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 
 		return fail(err)
 
-	}
-	expectedParent, err := e.Target.lifecycle.capture(ctx, e.Target, authority.ExecutionID)
-	if err != nil {
-		return fail(err)
 	}
 	if err := validateNoSymlinks(e.Target); err != nil {
 
@@ -297,6 +316,17 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(err)
 
 	}
+	expectedParent, err := e.Target.lifecycle.capture(ctx, e.Target, authority.ExecutionID)
+	if err != nil {
+		return fail(err)
+	}
+	lifecycleComplete := false
+	defer func() {
+		if !lifecycleComplete {
+			e.Target.lifecycle.discard(authority.ExecutionID)
+		}
+	}()
+
 	head := expectedParent.head
 	headRef := expectedParent.ref
 	currentHead, err := e.git(ctx, "rev-parse", "HEAD")
@@ -433,6 +463,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(fmt.Errorf("Git HEAD changed after commit verification"))
 
 	}
+	lifecycleComplete = true
 	return kernel.ExecutionResult{Success: true, Message: "git file transitioned and committed"}
 }
 
@@ -463,6 +494,7 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	if err != nil {
 		return kernel.Observation{}, err
 	}
+	defer v.Target.lifecycle.discard(authority.ExecutionID)
 	currentHead, err := v.git(ctx, "rev-parse", "HEAD")
 	if err != nil {
 
@@ -1063,6 +1095,58 @@ func requireNoInProgressGitOperation(ctx context.Context, target Target) error {
 	return nil
 }
 
+type gitMetadataIdentity struct {
+	gitDirPath string
+	gitDirDev uint64
+	gitDirIno uint64
+	gitCommonDirPath string
+	gitCommonDirDev uint64
+	gitCommonDirIno uint64
+}
+
+func captureGitMetadataIdentity(ctx context.Context, target Target) (gitMetadataIdentity, error) {
+	return readGitMetadataIdentity(ctx, target)
+}
+
+func requireGitMetadataIdentity(ctx context.Context, target Target) error {
+	if target.gitDirPath == "" || target.gitCommonDirPath == "" || target.gitDirDev == 0 || target.gitDirIno == 0 || target.gitCommonDirDev == 0 || target.gitCommonDirIno == 0 {
+		return fmt.Errorf("captured Git metadata identity is unavailable")
+	}
+	current, err := readGitMetadataIdentity(ctx, target)
+	if err != nil { return err }
+	if current.gitDirPath != target.gitDirPath || current.gitDirDev != target.gitDirDev || current.gitDirIno != target.gitDirIno || current.gitCommonDirPath != target.gitCommonDirPath || current.gitCommonDirDev != target.gitCommonDirDev || current.gitCommonDirIno != target.gitCommonDirIno {
+		return fmt.Errorf("Git metadata directory identity changed")
+	}
+	return nil
+}
+
+func readGitMetadataIdentity(ctx context.Context, target Target) (gitMetadataIdentity, error) {
+	resolve := func(raw string) (string, uint64, uint64, error) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" { return "", 0, 0, fmt.Errorf("Git metadata directory is empty") }
+		if !filepath.IsAbs(raw) { raw = filepath.Join(target.Repository, raw) }
+		resolved, err := filepath.EvalSymlinks(raw)
+		if err != nil { return "", 0, 0, fmt.Errorf("resolve Git metadata directory identity: %w", err) }
+		resolved, err = filepath.Abs(resolved)
+		if err != nil { return "", 0, 0, fmt.Errorf("resolve Git metadata directory path: %w", err) }
+		info, err := os.Stat(resolved)
+		if err != nil { return "", 0, 0, fmt.Errorf("stat Git metadata directory: %w", err) }
+		if !info.IsDir() { return "", 0, 0, fmt.Errorf("Git metadata path is not a directory") }
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Dev == 0 || stat.Ino == 0 { return "", 0, 0, fmt.Errorf("Git metadata directory identity is unavailable") }
+		return resolved, uint64(stat.Dev), uint64(stat.Ino), nil
+	}
+	gitDir, err := runGit(ctx, target.Repository, "rev-parse", "--git-dir")
+	if err != nil { return gitMetadataIdentity{}, fmt.Errorf("resolve Git metadata directory: %w", err) }
+	commonDir, err := runGit(ctx, target.Repository, "rev-parse", "--git-common-dir")
+	if err != nil { return gitMetadataIdentity{}, fmt.Errorf("resolve Git common metadata directory: %w", err) }
+	gitPath, gitDev, gitIno, err := resolve(gitDir)
+	if err != nil { return gitMetadataIdentity{}, err }
+	commonPath, commonDev, commonIno, err := resolve(commonDir)
+	if err != nil { return gitMetadataIdentity{}, err }
+	return gitMetadataIdentity{gitDirPath: gitPath, gitDirDev: gitDev, gitDirIno: gitIno, gitCommonDirPath: commonPath, gitCommonDirDev: commonDev, gitCommonDirIno: commonIno}, nil
+}
+
 func requireWorktreeRoot(ctx context.Context, target Target) error {
 	root, err := runGit(ctx, target.Repository, "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -1103,6 +1187,9 @@ func requireWorktreeRoot(ctx context.Context, target Target) error {
 
 		return fmt.Errorf("configured repository identity changed")
 
+	}
+	if err := requireGitMetadataIdentity(ctx, target); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1484,7 +1571,7 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, aft
 	}
 	defer os.Remove(indexPath)
 	env := map[string]string{"GIT_INDEX_FILE": indexPath}
-	if _, err := runGitWithEnv(ctx, target.Repository, env, "read-tree", parent); err != nil {
+	if _, err := runGitWithEnv(ctx, target.Repository, env, "--no-replace-objects", "read-tree", parent); err != nil {
 
 		return fmt.Errorf("capture Git parent index: %w", err)
 
