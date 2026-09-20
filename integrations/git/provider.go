@@ -185,7 +185,10 @@ func NewTarget(repository, path, subject string) (Target, error) {
 
 type Observer struct{ Target Target }
 
-func (o Observer) Observe(ctx context.Context, _ string) (kernel.Observation, error) {
+func (o Observer) Observe(ctx context.Context, subject string) (kernel.Observation, error) {
+	if subject != o.Target.Subject {
+		return kernel.Observation{}, fmt.Errorf("git subject mismatch: got %q, want %q", subject, o.Target.Subject)
+	}
 	if err := ctx.Err(); err != nil {
 
 		return kernel.Observation{}, err
@@ -263,6 +266,11 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 
 	}
 	if err := requireNoInProgressGitOperation(ctx, e.Target); err != nil {
+
+		return fail(err)
+
+	}
+	if err := rejectReplaceRefs(ctx, e.Target); err != nil {
 
 		return fail(err)
 
@@ -673,6 +681,13 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 
 		return kernel.Observation{}, fmt.Errorf("Git HEAD changed during verification")
 
+	}
+	finalRef, err := v.git(ctx, "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("re-read Git HEAD branch at verification return boundary: %w", err)
+	}
+	if strings.TrimSpace(finalRef) != expectedParent.ref {
+		return kernel.Observation{}, fmt.Errorf("Git HEAD branch changed during verification")
 	}
 	return kernel.NewObservation(v.Target.Subject, finalContent, 0, time.Now().UTC())
 }
@@ -1468,6 +1483,17 @@ func rejectGrafts(ctx context.Context, target Target) error {
 
 		return fmt.Errorf("inspect Git graft file: %w", err)
 
+	}
+	return nil
+}
+
+func rejectReplaceRefs(ctx context.Context, target Target) error {
+	output, err := runGit(ctx, target.Repository, "replace", "-l")
+	if err != nil {
+		return fmt.Errorf("inspect Git replacement refs: %w", err)
+	}
+	if strings.TrimSpace(output) != "" {
+		return fmt.Errorf("git replacement refs are active; replacement objects are not supported")
 	}
 	return nil
 }
