@@ -454,6 +454,13 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(fmt.Errorf("git target changed after commit verification"))
 
 	}
+	finalInfo, err := os.Stat(filepath.Join(e.Target.Repository, e.Target.Path))
+	if err != nil {
+		return fail(fmt.Errorf("revalidate Git target metadata: %w", err))
+	}
+	if err := rejectUnpreservableMetadata(filepath.Join(e.Target.Repository, e.Target.Path), finalInfo); err != nil {
+		return fail(fmt.Errorf("Git target metadata changed after commit verification: %w", err))
+	}
 	finalHead, err := e.git(ctx, "rev-parse", "HEAD")
 	if err != nil {
 
@@ -534,6 +541,21 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, err
 
 	}
+	if err := rejectConfiguredFilters(ctx, v.Target); err != nil {
+		return kernel.Observation{}, err
+	}
+	if err := rejectConfiguredNormalization(ctx, v.Target); err != nil {
+		return kernel.Observation{}, err
+	}
+	if err := rejectAttributesTarget(ctx, v.Target); err != nil {
+		return kernel.Observation{}, err
+	}
+	if err := rejectGitConfigTarget(ctx, v.Target); err != nil {
+		return kernel.Observation{}, err
+	}
+	if err := rejectGrafts(ctx, v.Target); err != nil {
+		return kernel.Observation{}, err
+	}
 	status, err := v.git(ctx, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 
@@ -543,26 +565,6 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	if status != "" {
 
 		return kernel.Observation{}, fmt.Errorf("git worktree is not clean during verification")
-
-	}
-	if err := rejectConfiguredFilters(ctx, v.Target); err != nil {
-
-		return kernel.Observation{}, err
-
-	}
-	if err := rejectConfiguredNormalization(ctx, v.Target); err != nil {
-
-		return kernel.Observation{}, err
-
-	}
-	if err := rejectGitConfigTarget(ctx, v.Target); err != nil {
-
-		return kernel.Observation{}, err
-
-	}
-	if err := rejectGrafts(ctx, v.Target); err != nil {
-
-		return kernel.Observation{}, err
 
 	}
 	content, err := v.read(ctx)
@@ -603,6 +605,13 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 
 		return kernel.Observation{}, fmt.Errorf("git file changed during verification")
 
+	}
+	finalInfo, err := os.Stat(filepath.Join(v.Target.Repository, v.Target.Path))
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("revalidate Git target metadata: %w", err)
+	}
+	if err := rejectUnpreservableMetadata(filepath.Join(v.Target.Repository, v.Target.Path), finalInfo); err != nil {
+		return kernel.Observation{}, fmt.Errorf("Git target metadata changed during verification: %w", err)
 	}
 	expectedMode, err := gitTreeMode(ctx, v.Target, verifiedHead)
 	if err != nil {
@@ -893,6 +902,16 @@ func openParentDirNoSymlink(target Target) (int, error) {
 
 		return -1, fmt.Errorf("open git repository directory: %w", err)
 
+	}
+	var rootStat syscall.Stat_t
+	if err := syscall.Fstat(fd, &rootStat); err != nil {
+		_ = syscall.Close(fd)
+		return -1, fmt.Errorf("stat opened git repository directory: %w", err)
+	}
+	if target.repositoryDev == 0 || target.repositoryIno == 0 ||
+		uint64(rootStat.Dev) != target.repositoryDev || uint64(rootStat.Ino) != target.repositoryIno {
+		_ = syscall.Close(fd)
+		return -1, fmt.Errorf("configured repository identity changed")
 	}
 	for _, part := range strings.Split(filepath.Dir(cleanPath), string(filepath.Separator)) {
 
