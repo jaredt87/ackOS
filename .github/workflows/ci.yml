@@ -31,9 +31,8 @@ jobs:
           go-version: '1.25'
       - name: Check formatting
         run: |
-          files="$(gofmt -l .)"
-          printf "%s\n" "$files"
-          test -z "$files"
+          gofmt -d integrations/git/provider.go
+          test -z "$(gofmt -l .)"
       - name: Vet
         run: go vet ./...
       - name: Test
