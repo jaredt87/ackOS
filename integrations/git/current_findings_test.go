@@ -238,10 +238,11 @@ func TestVerifierRejectsCommitWithWrongPreExecutionParent(t *testing.T) {
 	gitTest(t, target.Repository, "add", "--", "other.txt")
 	gitTest(t, target.Repository, "commit", "-m", "advance history")
 
-	afterHash, err := gitBlobHash(context.Background(), target, "updated")
+	afterHash, err := runGitInput(context.Background(), target.Repository, []byte("updated"), "hash-object", "-w", "--no-filters", "--stdin")
 	if err != nil {
 		t.Fatal(err)
 	}
+	afterHash = strings.TrimSpace(afterHash)
 	gitTest(t, target.Repository, "write-tree")
 	gitTest(t, target.Repository, "update-index", "--add", "--cacheinfo", "100644,"+afterHash+","+target.Path)
 	tree := strings.TrimSpace(gitTest(t, target.Repository, "write-tree"))
