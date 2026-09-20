@@ -595,7 +595,9 @@ func (o RecoveryObserver) Observe(ctx context.Context, subject string) (kernel.O
 	return (Observer{Target: o.Target}).Observe(ctx, subject)
 }
 
-func (o Observer) read(ctx context.Context) (string, error) { return readFile(ctx, o.Target) }func (e Executor) read(ctx context.Context) (string, error) { return readFile(ctx, e.Target) }
+func (o Observer) read(ctx context.Context) (string, error) { return readFile(ctx, o.Target) }
+
+func (e Executor) read(ctx context.Context) (string, error) { return readFile(ctx, e.Target) }
 
 func (v Verifier) read(ctx context.Context) (string, error) { return readFile(ctx, v.Target) }
 
@@ -875,7 +877,8 @@ func atomicWriteTarget(target Target, content []byte) error {
 
 	return fmt.Errorf("create temporary git target: invalid file descriptor")
 
-	}	defer func() {
+	}
+	defer func() {
 		_ = tmp.Close()
 		_ = syscall.Unlinkat(parentFD, tmpName)
 
@@ -1459,7 +1462,8 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, aft
 
 	return fmt.Errorf("create temporary Git index: %w", err)
 
-	}	indexPath := indexFile.Name()
+	}
+	indexPath := indexFile.Name()
 	if err := indexFile.Close(); err != nil {
 		_ = os.Remove(indexPath)
 
