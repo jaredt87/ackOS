@@ -160,11 +160,6 @@ func NewTarget(repository, path, subject string) (Target, error) {
 		return Target{}, fmt.Errorf("Git HEAD must remain attached to a branch")
 
 	}
-	if err := requireWorktreeRoot(context.Background(), target); err != nil {
-
-		return Target{}, err
-
-	}
 	metadata, err := captureGitMetadataIdentity(context.Background(), target)
 	if err != nil {
 		return Target{}, err
@@ -175,6 +170,11 @@ func NewTarget(repository, path, subject string) (Target, error) {
 	target.gitCommonDirPath = metadata.gitCommonDirPath
 	target.gitCommonDirDev = metadata.gitCommonDirDev
 	target.gitCommonDirIno = metadata.gitCommonDirIno
+	if err := requireWorktreeRoot(context.Background(), target); err != nil {
+
+		return Target{}, err
+
+	}
 	if err := validateNoSymlinks(target); err != nil {
 
 		return Target{}, err
