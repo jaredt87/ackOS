@@ -90,7 +90,9 @@ func (s *lifecycleState) parent(executionID string) (executionParent, error) {
 }
 
 func (s *lifecycleState) discard(executionID string) {
-	if s == nil { return }
+	if s == nil {
+		return
+	}
 	s.mu.Lock()
 	delete(s.parents, executionID)
 	s.mu.Unlock()
@@ -1113,8 +1115,15 @@ func requireGitMetadataIdentity(ctx context.Context, target Target) error {
 		return fmt.Errorf("captured Git metadata identity is unavailable")
 	}
 	current, err := readGitMetadataIdentity(ctx, target)
-	if err != nil { return err }
-	if current.gitDirPath != target.gitDirPath || current.gitDirDev != target.gitDirDev || current.gitDirIno != target.gitDirIno || current.gitCommonDirPath != target.gitCommonDirPath || current.gitCommonDirDev != target.gitCommonDirDev || current.gitCommonDirIno != target.gitCommonDirIno {
+	if err != nil {
+		return err
+	}
+	if current.gitDirPath != target.gitDirPath ||
+		current.gitDirDev != target.gitDirDev ||
+		current.gitDirIno != target.gitDirIno ||
+		current.gitCommonDirPath != target.gitCommonDirPath ||
+		current.gitCommonDirDev != target.gitCommonDirDev ||
+		current.gitCommonDirIno != target.gitCommonDirIno {
 		return fmt.Errorf("Git metadata directory identity changed")
 	}
 	return nil
@@ -1123,28 +1132,53 @@ func requireGitMetadataIdentity(ctx context.Context, target Target) error {
 func readGitMetadataIdentity(ctx context.Context, target Target) (gitMetadataIdentity, error) {
 	resolve := func(raw string) (string, uint64, uint64, error) {
 		raw = strings.TrimSpace(raw)
-		if raw == "" { return "", 0, 0, fmt.Errorf("Git metadata directory is empty") }
-		if !filepath.IsAbs(raw) { raw = filepath.Join(target.Repository, raw) }
+		if raw == "" {
+			return "", 0, 0, fmt.Errorf("Git metadata directory is empty")
+		}
+		if !filepath.IsAbs(raw) {
+			raw = filepath.Join(target.Repository, raw)
+		}
 		resolved, err := filepath.EvalSymlinks(raw)
-		if err != nil { return "", 0, 0, fmt.Errorf("resolve Git metadata directory identity: %w", err) }
+		if err != nil {
+			return "", 0, 0, fmt.Errorf("resolve Git metadata directory identity: %w", err)
+		}
 		resolved, err = filepath.Abs(resolved)
-		if err != nil { return "", 0, 0, fmt.Errorf("resolve Git metadata directory path: %w", err) }
+		if err != nil {
+			return "", 0, 0, fmt.Errorf("resolve Git metadata directory path: %w", err)
+		}
 		info, err := os.Stat(resolved)
-		if err != nil { return "", 0, 0, fmt.Errorf("stat Git metadata directory: %w", err) }
-		if !info.IsDir() { return "", 0, 0, fmt.Errorf("Git metadata path is not a directory") }
+		if err != nil {
+			return "", 0, 0, fmt.Errorf("stat Git metadata directory: %w", err)
+		}
+		if !info.IsDir() {
+			return "", 0, 0, fmt.Errorf("Git metadata path is not a directory")
+		}
 		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !ok || stat.Dev == 0 || stat.Ino == 0 { return "", 0, 0, fmt.Errorf("Git metadata directory identity is unavailable") }
+		if !ok || stat.Dev == 0 || stat.Ino == 0 {
+			return "", 0, 0, fmt.Errorf("Git metadata directory identity is unavailable")
+		}
 		return resolved, uint64(stat.Dev), uint64(stat.Ino), nil
 	}
 	gitDir, err := runGit(ctx, target.Repository, "rev-parse", "--git-dir")
-	if err != nil { return gitMetadataIdentity{}, fmt.Errorf("resolve Git metadata directory: %w", err) }
+	if err != nil {
+		return gitMetadataIdentity{}, fmt.Errorf("resolve Git metadata directory: %w", err)
+	}
 	commonDir, err := runGit(ctx, target.Repository, "rev-parse", "--git-common-dir")
-	if err != nil { return gitMetadataIdentity{}, fmt.Errorf("resolve Git common metadata directory: %w", err) }
+	if err != nil {
+		return gitMetadataIdentity{}, fmt.Errorf("resolve Git common metadata directory: %w", err)
+	}
 	gitPath, gitDev, gitIno, err := resolve(gitDir)
-	if err != nil { return gitMetadataIdentity{}, err }
+	if err != nil {
+		return gitMetadataIdentity{}, err
+	}
 	commonPath, commonDev, commonIno, err := resolve(commonDir)
-	if err != nil { return gitMetadataIdentity{}, err }
-	return gitMetadataIdentity{gitDirPath: gitPath, gitDirDev: gitDev, gitDirIno: gitIno, gitCommonDirPath: commonPath, gitCommonDirDev: commonDev, gitCommonDirIno: commonIno}, nil
+	if err != nil {
+		return gitMetadataIdentity{}, err
+	}
+	return gitMetadataIdentity{
+		gitDirPath: gitPath, gitDirDev: gitDev, gitDirIno: gitIno,
+		gitCommonDirPath: commonPath, gitCommonDirDev: commonDev, gitCommonDirIno: commonIno,
+	}, nil
 }
 
 func requireWorktreeRoot(ctx context.Context, target Target) error {
