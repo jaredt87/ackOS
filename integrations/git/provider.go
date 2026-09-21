@@ -1010,7 +1010,11 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("git target is not a regular file")
 	}
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok && stat.Nlink > 1 {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("inspect git target identity")
+	}
+	if stat.Nlink > 1 {
 		return fmt.Errorf("git target has multiple hard links")
 	}
 	path := filepath.Join(target.Repository, target.Path)
