@@ -399,3 +399,55 @@ func TestVerifierRejectsDetachedHead(t *testing.T) {
 		t.Fatalf("error = %v, want authorized-branch rejection", err)
 	}
 }
+
+
+func TestNewTargetRejectsEmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	gitTest(t, dir, "init")
+	gitTest(t, dir, "config", "user.email", "ackos-test@example.invalid")
+	gitTest(t, dir, "config", "user.name", "ackOS test")
+	path := filepath.Join(dir, "empty.txt")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, dir, "add", "--", "empty.txt")
+	gitTest(t, dir, "commit", "-m", "empty target")
+	if _, err := NewTarget(dir, "empty.txt", "test-repo:empty.txt"); err == nil || !strings.Contains(err.Error(), "must not be empty") {
+		t.Fatalf("error = %v, want empty-target rejection", err)
+	}
+}
+
+func TestRejectSubmodulesRejectsGitlinkEntries(t *testing.T) {
+	target, _, _, _, _ := newTestProvider(t, "initial")
+	object := strings.TrimSpace(gitTest(t, target.Repository, "rev-parse", "HEAD"))
+	gitTest(t, target.Repository, "update-index", "--add", "--cacheinfo", "160000,"+object+","+target.Path)
+	if err := rejectSubmodules(context.Background(), target); err == nil || !strings.Contains(err.Error(), "submodules") {
+		t.Fatalf("error = %v, want submodule rejection", err)
+	}
+}
+
+func TestAtomicWriteTargetPreservesSpecialModeBits(t *testing.T) {
+	target, _, _, _, _ := newTestProvider(t, "initial")
+	path := filepath.Join(target.Repository, target.Path)
+	if err := os.Chmod(path, 0o6755); err != nil {
+		t.Fatal(err)
+	}
+	if err := atomicWriteTarget(target, []byte("updated")); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o755 || info.Mode()&os.ModeSetuid == 0 || info.Mode()&os.ModeSetgid == 0 {
+		t.Fatalf("mode = %o, want setuid/setgid 0755", info.Mode())
+	}
+}
+
+func TestLifecycleDiscardRemovesExecutionParent(t *testing.T) {
+	state := &lifecycleState{parents: map[string]executionParent{"execution": {head: "head", ref: "refs/heads/main"}}}
+	state.discard("execution")
+	if _, err := state.parent("execution"); err == nil {
+		t.Fatal("discarded execution parent remains available")
+	}
+}
