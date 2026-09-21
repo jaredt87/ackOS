@@ -733,6 +733,13 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	if strings.TrimSpace(finalRef) != expectedParent.ref {
 		return kernel.Observation{}, fmt.Errorf("Git HEAD branch changed during verification")
 	}
+	finalStatus, err := v.git(ctx, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("re-read Git worktree status at verification return boundary: %w", err)
+	}
+	if finalStatus != "" {
+		return kernel.Observation{}, fmt.Errorf("Git worktree changed at verification return boundary")
+	}
 	return kernel.NewObservation(v.Target.Subject, finalContent, 0, time.Now().UTC())
 }
 
@@ -1023,9 +1030,13 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if stat.Nlink > 1 {
 		return fmt.Errorf("git target has multiple hard links")
 	}
-	path := filepath.Join(target.Repository, target.Path)
+	path := filepath.Join(filepath.Dir(target.Repository), target.Path)
 	if err := rejectUnpreservableMetadata(path, info); err != nil {
 		return err
+	}
+	originalXattrs, err := captureXattrs(path)
+	if err != nil {
+		return fmt.Errorf("capture git target extended attributes: %w", err)
 	}
 	mode := info.Mode()
 	current, err := io.ReadAll(file)
@@ -1091,7 +1102,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		}
 		return fmt.Errorf("git target changed before atomic replacement")
 	}
-	if err := verifyExchangedTargetMetadata(exchangedPath, exchangedInfo, info); err != nil {
+	if err := verifyExchangedTargetMetadata(exchangedPath, exchangedInfo, info, originalXattrs); err != nil {
 		if rollbackErr := unix.Renameat2(parentFD, tmpName, parentFD, name, unix.RENAME_EXCHANGE); rollbackErr != nil {
 			return fmt.Errorf("restore concurrently modified git target: %w (metadata check: %v)", rollbackErr, err)
 		}
@@ -1130,7 +1141,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	return nil
 }
 
-func verifyExchangedTargetMetadata(path string, exchanged, original os.FileInfo) error {
+func verifyExchangedTargetMetadata(path string, exchanged, original os.FileInfo, originalXattrs map[string][]byte) error {
 	if !exchanged.Mode().IsRegular() {
 		return fmt.Errorf("git target type changed before atomic replacement")
 	}
@@ -1151,22 +1162,86 @@ func verifyExchangedTargetMetadata(path string, exchanged, original os.FileInfo)
 	if exchangedStat.Nlink != originalStat.Nlink {
 		return fmt.Errorf("git target link count changed before atomic replacement")
 	}
+	exchangedXattrs, err := captureXattrs(path)
+	if err != nil {
+		return fmt.Errorf("inspect exchanged git target extended attributes: %w", err)
+	}
+	if !equalXattrs(originalXattrs, exchangedXattrs) {
+		return fmt.Errorf("git target extended attributes changed before atomic replacement")
+	}
+	return nil
+}
+
+func captureXattrs(path string) (map[string][]byte, error) {
+	names, err := listXattrNames(path)
+	if err != nil {
+		return nil, err
+	}
+	result := make(map[string][]byte, len(names))
+	for _, name := range names {
+		value, err := getXattr(path, name)
+		if err != nil {
+			return nil, err
+		}
+		result[name] = value
+	}
+	return result, nil
+}
+
+func listXattrNames(path string) ([]string, error) {
 	for size := 256; ; size *= 2 {
 		buf := make([]byte, size)
 		n, err := syscall.Listxattr(path, buf)
 		if err == syscall.ENOTSUP || err == syscall.EOPNOTSUPP {
-			return nil
+			return nil, nil
 		}
 		if err != nil {
-			return fmt.Errorf("inspect exchanged git target extended attributes: %w", err)
+			return nil, err
 		}
 		if n == 0 {
-			return nil
+			return nil, nil
 		}
 		if n < len(buf) {
-			return fmt.Errorf("git target extended attributes changed before atomic replacement")
+			raw := buf[:n]
+			parts := bytes.Split(raw, []byte{0})
+			names := make([]string, 0, len(parts))
+			for _, part := range parts {
+				if len(part) > 0 {
+					names = append(names, string(part))
+				}
+			}
+			return names, nil
 		}
 	}
+}
+
+func getXattr(path, name string) ([]byte, error) {
+	for size := 256; ; size *= 2 {
+		buf := make([]byte, size)
+		n, err := syscall.Getxattr(path, name, buf)
+		if err == syscall.ENOTSUP || err == syscall.EOPNOTSUPP {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if n < len(buf) {
+			return append([]byte(nil), buf[:n]...), nil
+		}
+	}
+}
+
+func equalXattrs(a, b map[string][]byte) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for name, value := range a {
+		other, ok := b[name]
+		if !ok || !bytes.Equal(value, other) {
+			return false
+		}
+	}
+	return true
 }
 
 func rejectUnpreservableMetadata(path string, info os.FileInfo) error {
@@ -1580,6 +1655,13 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 	}
 	addSource(filepath.Join(target.gitDirPath, "config"))
 	addSource(filepath.Join(target.gitCommonDirPath, "config"))
+
+	// Git also loads a system-wide attributes file independently of the
+	// repository and per-user attributes sources. Resolve the active path
+	// explicitly so a target there cannot become an executable filter source.
+	if systemAttrs, systemErr := runGitTarget(ctx, target, "var", "GIT_ATTR_SYSTEM"); systemErr == nil {
+		addSource(strings.TrimSpace(systemAttrs))
+	}
 
 	for len(queue) > 0 {
 		source := queue[0]
