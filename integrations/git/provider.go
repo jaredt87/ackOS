@@ -181,6 +181,7 @@ func NewTarget(repository, path, subject string) (Target, error) {
 
 	}
 	return target, nil
+}	return target, nil
 }
 
 type Observer struct{ Target Target }
@@ -295,6 +296,9 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(err)
 
 	}
+	if err := rejectSubmodules(ctx, e.Target); err != nil {
+		return fail(err)
+	}
 	if err := rejectGrafts(ctx, e.Target); err != nil {
 
 		return fail(err)
@@ -332,9 +336,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	}
 	lifecycleComplete := false
 	defer func() {
-		if !lifecycleComplete {
-			e.Target.lifecycle.discard(authority.ExecutionID)
-		}
+		e.Target.lifecycle.discard(authority.ExecutionID)
 	}()
 
 	head := expectedParent.head
@@ -561,6 +563,9 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	if err := rejectGitConfigTarget(ctx, v.Target); err != nil {
 		return kernel.Observation{}, err
 	}
+	if err := rejectSubmodules(ctx, v.Target); err != nil {
+		return kernel.Observation{}, err
+	}
 	if err := rejectGrafts(ctx, v.Target); err != nil {
 		return kernel.Observation{}, err
 	}
@@ -711,40 +716,33 @@ func (v Verifier) read(ctx context.Context) (string, error) { return readFile(ct
 
 func readFile(ctx context.Context, target Target) (string, error) {
 	if err := ctx.Err(); err != nil {
-
 		return "", err
-
 	}
-	path := filepath.Join(target.Repository, target.Path)
-	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	parentFD, err := openParentDirNoSymlink(target)
 	if err != nil {
-
-		return "", fmt.Errorf("open git file: %w", err)
-
+		return "", err
 	}
-	file := os.NewFile(uintptr(fd), path)
+	defer syscall.Close(parentFD)
+	base := filepath.Base(filepath.Clean(target.Path))
+	fd, err := syscall.Openat(parentFD, base, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return "", fmt.Errorf("open git file: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), filepath.Join(target.Repository, target.Path))
 	if file == nil {
 		_ = syscall.Close(fd)
-
 		return "", fmt.Errorf("open git file: invalid file descriptor")
-
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-
 		return "", fmt.Errorf("stat git file: %w", err)
-
 	}
 	if !info.Mode().IsRegular() {
-
 		return "", fmt.Errorf("git target is not a regular file")
-
 	}
 	if stat, ok := info.Sys().(*syscall.Stat_t); ok && stat.Nlink > 1 {
-
 		return "", fmt.Errorf("git target has multiple hard links")
-
 	}
 	readDone := make(chan struct{})
 	var content []byte
@@ -752,26 +750,18 @@ func readFile(ctx context.Context, target Target) (string, error) {
 	go func() {
 		content, readErr = io.ReadAll(file)
 		close(readDone)
-
 	}()
 	select {
 	case <-readDone:
-
 		if readErr != nil {
-
 			return "", fmt.Errorf("read git file: %w", readErr)
-
 		}
 	case <-ctx.Done():
 		_ = file.Close()
-
 		return "", ctx.Err()
-
 	}
 	if err := ctx.Err(); err != nil {
-
 		return "", err
-
 	}
 	return string(content), nil
 }
@@ -953,68 +943,61 @@ func atomicWriteTarget(target Target, content []byte) error {
 	path := filepath.Join(target.Repository, target.Path)
 	parentFD, err := openParentDirNoSymlink(target)
 	if err != nil {
-
 		return err
-
 	}
 	defer syscall.Close(parentFD)
 
-	mode := os.FileMode(0o644)
-	if info, err := os.Stat(path); err == nil {
-
-		if err := rejectUnpreservableMetadata(path, info); err != nil {
-
-			return err
-
-		}
-		mode = info.Mode()
-
-	}
-
-	tmpName := fmt.Sprintf(".ackos-write-%d-%d", os.Getpid(), time.Now().UnixNano())
-	tmpFD, err := syscall.Openat(parentFD, tmpName, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW, uint32(mode.Perm()))
+	fd, err := syscall.Openat(parentFD, filepath.Base(filepath.Clean(target.Path)), syscall.O_RDWR|syscall.O_NOFOLLOW, 0)
 	if err != nil {
-
-		return fmt.Errorf("create temporary git target: %w", err)
-
+		return fmt.Errorf("open git target for update: %w", err)
 	}
-	tmp := os.NewFile(uintptr(tmpFD), filepath.Join(target.Repository, filepath.Dir(target.Path), tmpName))
-	if tmp == nil {
-		_ = syscall.Close(tmpFD)
-		_ = syscall.Unlinkat(parentFD, tmpName)
-
-		return fmt.Errorf("create temporary git target: invalid file descriptor")
-
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = syscall.Close(fd)
+		return fmt.Errorf("open git target for update: invalid file descriptor")
 	}
-	defer func() {
-		_ = tmp.Close()
-		_ = syscall.Unlinkat(parentFD, tmpName)
+	defer file.Close()
 
-	}()
-	if err := tmp.Chmod(mode); err != nil {
+	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return fmt.Errorf("lock git target for update: %w", err)
+	}
+	defer syscall.Flock(fd, syscall.LOCK_UN)
 
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat git target for update: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("git target is not a regular file")
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok && stat.Nlink > 1 {
+		return fmt.Errorf("git target has multiple hard links")
+	}
+	if err := rejectUnpreservableMetadata(path, info); err != nil {
 		return err
-
 	}
-	if _, err := tmp.Write(content); err != nil {
-
-		return err
-
+	mode := info.Mode()
+	current, err := io.ReadAll(file)
+	if err != nil {
+		return fmt.Errorf("read git target before replacement: %w", err)
 	}
-	if err := tmp.Sync(); err != nil {
-
-		return err
-
+	if string(current) == string(content) {
+		return fmt.Errorf("git target already contains requested state")
 	}
-	if err := tmp.Close(); err != nil {
-
-		return err
-
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("rewind git target: %w", err)
 	}
-	if err := syscall.Renameat(parentFD, tmpName, parentFD, filepath.Base(path)); err != nil {
-
-		return fmt.Errorf("replace git target: %w", err)
-
+	if err := file.Truncate(0); err != nil {
+		return fmt.Errorf("truncate git target: %w", err)
+	}
+	if _, err := file.Write(content); err != nil {
+		return fmt.Errorf("write git target: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		return fmt.Errorf("sync git target: %w", err)
+	}
+	if err := file.Chmod(mode); err != nil {
+		return fmt.Errorf("restore git target mode: %w", err)
 	}
 	return nil
 }
@@ -1506,6 +1489,29 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 			}
 			addSource(include)
 		}
+	}
+	return nil
+}
+
+func rejectSubmodules(ctx context.Context, target Target) error {
+	output, err := runGit(ctx, target.Repository, "ls-files", "-z", "--stage")
+	if err != nil {
+		return fmt.Errorf("inspect Git submodules: %w", err)
+	}
+	parts := strings.Split(strings.TrimSuffix(output, " "), " ")
+	for _, record := range parts {
+		if record == "" {
+			continue
+		}
+		meta, path, ok := strings.Cut(record, "	")
+		if !ok {
+			return fmt.Errorf("unexpected Git index metadata")
+		}
+		fields := strings.Fields(meta)
+		if len(fields) >= 3 && fields[0] == "160000" && fields[2] == "0" {
+			return fmt.Errorf("Git submodules are not supported")
+		}
+		_ = path
 	}
 	return nil
 }
