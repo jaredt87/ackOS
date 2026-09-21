@@ -427,7 +427,6 @@ func TestLifecycleDiscardRemovesExecutionParent(t *testing.T) {
 	}
 }
 
-
 func TestRejectCommandScopeConfigEnvironment(t *testing.T) {
 	t.Setenv("GIT_CONFIG_COUNT", "1")
 	t.Setenv("GIT_CONFIG_KEY_0", "include.path")
