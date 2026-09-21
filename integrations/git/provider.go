@@ -1504,7 +1504,7 @@ func rejectSubmodules(ctx context.Context, target Target) error {
 	if err != nil {
 		return fmt.Errorf("inspect Git submodules: %w", err)
 	}
-	parts := strings.Split(strings.TrimSuffix(output, " "), " ")
+	parts := strings.Split(strings.TrimSuffix(output, "\\x00"), "\\x00")
 	for _, record := range parts {
 		if record == "" {
 			continue
