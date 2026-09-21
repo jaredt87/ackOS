@@ -2518,17 +2518,14 @@ func sanitizedGitEnv() []string {
 	}
 	env := make([]string, 0, len(os.Environ()))
 	for _, entry := range os.Environ() {
-
-		if key, _, ok := strings.Cut(entry, "="); ok {
-
-			if _, blocked := blocked[key]; blocked {
-				continue
-
-			}
-
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		if _, isBlocked := blocked[key]; isBlocked || strings.HasPrefix(key, "GIT_CONFIG_") {
+			continue
 		}
 		env = append(env, entry)
-
 	}
 	return env
 }
