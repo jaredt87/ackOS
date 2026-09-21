@@ -426,3 +426,12 @@ func TestLifecycleDiscardRemovesExecutionParent(t *testing.T) {
 		t.Fatal("discarded execution parent remains available")
 	}
 }
+
+
+func TestRejectCommandScopeConfigEnvironment(t *testing.T) {
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "include.path")
+	if err := rejectCommandScopeConfigEnvironment(); err == nil {
+		t.Fatal("command-scope Git configuration environment was accepted")
+	}
+}
