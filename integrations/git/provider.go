@@ -771,7 +771,8 @@ func readFile(ctx context.Context, target Target) (string, error) {
 	}
 	if stat, ok := info.Sys().(*syscall.Stat_t); ok && stat.Nlink > 1 {
 		return "", fmt.Errorf("git target has multiple hard links")
-	}	readDone := make(chan struct{})
+	}
+	readDone := make(chan struct{})
 	var content []byte
 	var readErr error
 	go func() {
