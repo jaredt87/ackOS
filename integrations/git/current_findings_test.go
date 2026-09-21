@@ -128,7 +128,7 @@ func TestRejectAttributesTargetRejectsDefaultPerUserAttributesFile(t *testing.T)
 	gitTest(t, dir, "config", "user.email", "ackos-test@example.invalid")
 	gitTest(t, dir, "config", "user.name", "ackOS test")
 	path := filepath.Join(dir, "attributes")
-	if err := os.WriteFile(path, nil, 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("# default attributes\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	gitTest(t, dir, "add", "--", "attributes")
