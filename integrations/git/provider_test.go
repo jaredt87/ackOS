@@ -560,3 +560,26 @@ func gitTest(t *testing.T, dir string, args ...string) string {
 	}
 	return string(output)
 }
+
+
+func TestVerifierRejectsReplacementRefs(t *testing.T) {
+	target, observer, executor, verifier, _ := newTestProvider(t, "initial")
+	observation, err := observer.Observe(context.Background(), target.Subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transition := kernel.Transition{Subject: target.Subject, Before: observation.State, After: "updated"}
+	authority := kernel.Authority{ExecutionID: "attempt-replacement-ref"}
+	if result := executor.Execute(context.Background(), transition, authority); !result.Success {
+		t.Fatal(result.Message)
+	}
+
+	parent := strings.TrimSpace(gitTest(t, target.Repository, "rev-parse", "HEAD"))
+	replacementTree := strings.TrimSpace(gitTest(t, target.Repository, "rev-parse", parent+"^{tree}"))
+	replacement := strings.TrimSpace(gitTest(t, target.Repository, "commit-tree", replacementTree, "-p", parent, "-m", "replacement"))
+	gitTest(t, target.Repository, "replace", parent, replacement)
+
+	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil || !strings.Contains(err.Error(), "replacement refs are active") {
+		t.Fatalf("verifier error = %v, want replacement-ref rejection", err)
+	}
+}
