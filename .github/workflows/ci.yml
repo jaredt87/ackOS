@@ -27,7 +27,7 @@ jobs:
             awk '
               NR == 1 && $0 != "---" { exit 1 }
               NR > 1 && $0 == "---" { found_end = 1 }
-              !found_end && $0 ~ /^description:/ { found_description = 1 }
+              !found_end && $0 ~ /^description:[[:space:]]*[^#[:space:]].*$/ { found_description = 1 }
               END { exit !(found_description && found_end) }
             ' "$skill" || {
               echo "Missing YAML description frontmatter in $skill"
