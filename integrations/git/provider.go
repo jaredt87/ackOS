@@ -930,7 +930,7 @@ func validateNoSymlinks(target Target) error {
 }
 
 func acquireTargetLock(ctx context.Context, target Target) (func(), error) {
-	sum := sha256.Sum256([]byte(target.Repository + "\x00" + target.Path))
+	sum := sha256.Sum256([]byte(target.Repository))
 	path := filepath.Join(os.TempDir(), fmt.Sprintf("ackos-target-%x.lock", sum))
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
@@ -2054,6 +2054,23 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, aft
 
 		return fmt.Errorf("write authorized Git tree: %w", err)
 
+	}
+	// The temporary index is pathname-addressable, so validate the complete
+	// generated tree before creating or advancing the commit. This prevents a
+	// substituted index from introducing unauthorized paths.
+	changedPaths, err := runGitTarget(ctx, target, "--no-replace-objects", "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", parent, strings.TrimSpace(tree))
+	if err != nil {
+		return fmt.Errorf("inspect authorized Git tree: %w", err)
+	}
+	if !exactNULPathList(changedPaths, target.Path) {
+		return fmt.Errorf("authorized Git tree contains an unauthorized path")
+	}
+	treeHash, err := runGitTarget(ctx, target, "--no-replace-objects", "rev-parse", strings.TrimSpace(tree)+":./"+target.Path)
+	if err != nil {
+		return fmt.Errorf("read authorized Git tree target: %w", err)
+	}
+	if strings.TrimSpace(treeHash) != blob {
+		return fmt.Errorf("authorized Git tree target does not match the requested blob")
 	}
 	commit, err := runGitTarget(ctx, target, "commit-tree", strings.TrimSpace(tree), "-p", parent, "-m", message, "--no-gpg-sign")
 	if err != nil {
