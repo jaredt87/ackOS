@@ -1291,7 +1291,7 @@ func readGitMetadataIdentity(ctx context.Context, target Target) (gitMetadataIde
 }
 
 func requireWorktreeRoot(ctx context.Context, target Target) error {
-	root, err := runGit(ctx, target.Repository, "rev-parse", "--show-toplevel")
+	root, err := runGitTarget(ctx, target, "rev-parse", "--show-toplevel")
 	if err != nil {
 
 		return fmt.Errorf("resolve Git worktree root: %w", err)
@@ -2207,10 +2207,10 @@ func exactNULPathList(output, expected string) bool {
 }
 
 func (e Executor) git(ctx context.Context, args ...string) (string, error) {
-	return runGit(ctx, e.Target.Repository, args...)
+	return runGitTarget(ctx, e.Target, args...)
 }
 func (v Verifier) git(ctx context.Context, args ...string) (string, error) {
-	return runGit(ctx, v.Target.Repository, args...)
+	return runGitTarget(ctx, v.Target, args...)
 }
 
 func openGitMetadataDir(path string, expectedDev, expectedIno uint64) (int, error) {
@@ -2268,6 +2268,10 @@ func runGitTargetWithInput(ctx context.Context, target Target, input []byte, ove
 	anchored["GIT_DIR"] = fmt.Sprintf("/proc/self/fd/%d", gitFD)
 	anchored["GIT_COMMON_DIR"] = fmt.Sprintf("/proc/self/fd/%d", commonFD)
 	anchored["GIT_WORK_TREE"] = fmt.Sprintf("/proc/self/fd/%d", rootFD)
+	// Grafts can fabricate ancestry even when --no-replace-objects is used.
+	// Disable them for every anchored Git invocation; rejectGrafts separately
+	// turns a pre-existing graft file into an explicit provider error.
+	anchored["GIT_GRAFT_FILE"] = "/dev/null"
 	return runGitWithInput(ctx, fmt.Sprintf("/proc/self/fd/%d", rootFD), input, anchored, args...)
 }
 
