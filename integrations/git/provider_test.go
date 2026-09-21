@@ -583,7 +583,6 @@ func TestVerifierRejectsReplacementRefs(t *testing.T) {
 	}
 }
 
-
 func TestNewTargetAllowsEmptyTrackedFile(t *testing.T) {
 	dir := t.TempDir()
 	gitTest(t, dir, "init")
