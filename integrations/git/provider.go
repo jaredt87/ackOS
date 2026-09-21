@@ -1377,6 +1377,29 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 
 	}
 
+	// Empty global/system config files do not appear in --show-origin --list,
+	// but they remain active configuration sources. Enumerate their active
+	// file locations explicitly so an empty target cannot become dangerous
+	// after it is replaced.
+	if global := os.Getenv("GIT_CONFIG_GLOBAL"); global != "" {
+		addSource(global)
+	}
+	if os.Getenv("GIT_CONFIG_NOSYSTEM") == "" {
+		if system := os.Getenv("GIT_CONFIG_SYSTEM"); system != "" {
+			addSource(system)
+		} else {
+			addSource("/etc/gitconfig")
+		}
+	}
+	if home, homeErr := os.UserHomeDir(); homeErr == nil {
+		addSource(filepath.Join(home, ".gitconfig"))
+		if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+			addSource(filepath.Join(xdg, "git", "config"))
+		} else {
+			addSource(filepath.Join(home, ".config", "git", "config"))
+		}
+	}
+
 	output, err := runGit(ctx, target.Repository, "config", "--includes", "--show-origin", "--list")
 	if err != nil {
 
