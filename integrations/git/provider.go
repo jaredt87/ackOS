@@ -740,6 +740,20 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	if finalStatus != "" {
 		return kernel.Observation{}, fmt.Errorf("Git worktree changed at verification return boundary")
 	}
+	finalContent, err = v.read(ctx)
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("re-read Git target at verification return boundary: %w", err)
+	}
+	if finalContent != t.After {
+		return kernel.Observation{}, fmt.Errorf("Git file changed at verification return boundary")
+	}
+	finalStatus, err = v.git(ctx, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("re-read Git worktree status after verification content capture: %w", err)
+	}
+	if finalStatus != "" {
+		return kernel.Observation{}, fmt.Errorf("Git worktree changed after verification content capture")
+	}
 	return kernel.NewObservation(v.Target.Subject, finalContent, 0, time.Now().UTC())
 }
 
