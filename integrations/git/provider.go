@@ -1522,7 +1522,7 @@ func rejectConfiguredFilters(ctx context.Context, target Target) error {
 				continue
 			}
 			name = strings.TrimPrefix(name, "filter.")
-			if driver, ok := strings.Cut(name, "."); ok {
+			if driver, _, ok := strings.Cut(name, "."); ok {
 				configuredDrivers[driver] = struct{}{}
 			}
 		}
