@@ -189,7 +189,7 @@ func NewTarget(repository, path, subject string) (Target, error) {
 		return Target{}, fmt.Errorf("git target is not a regular file")
 	}
 	if targetInfo.Size() == 0 {
-		return Target{}, fmt.Errorf("empty target is unsupported")
+		return Target{}, fmt.Errorf("git target must not be empty")
 	}
 	if targetInfo.Mode()&os.ModeSetuid != 0 || targetInfo.Mode()&os.ModeSetgid != 0 || targetInfo.Mode()&os.ModeSticky != 0 {
 		return Target{}, fmt.Errorf("git target uses unsupported special permission bits")
@@ -345,7 +345,12 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err != nil {
 		return fail(err)
 	}
-	defer e.Target.lifecycle.discard(authority.ExecutionID)
+	capturedLifecycle := true
+	defer func() {
+		if capturedLifecycle {
+			e.Target.lifecycle.discard(authority.ExecutionID)
+		}
+	}()
 
 	head := expectedParent.head
 	headRef := expectedParent.ref
@@ -516,6 +521,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(fmt.Errorf("Git HEAD changed after commit verification"))
 
 	}
+	capturedLifecycle = false
 	return kernel.ExecutionResult{Success: true, Message: "git file transitioned and committed"}
 }
 
