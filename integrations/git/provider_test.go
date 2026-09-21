@@ -583,7 +583,7 @@ func TestVerifierRejectsReplacementRefs(t *testing.T) {
 	}
 }
 
-func TestNewTargetAllowsEmptyTrackedFile(t *testing.T) {
+func TestNewTargetRejectsEmptyTrackedFile(t *testing.T) {
 	dir := t.TempDir()
 	gitTest(t, dir, "init")
 	gitTest(t, dir, "config", "user.email", "ackos-test@example.invalid")
@@ -595,7 +595,7 @@ func TestNewTargetAllowsEmptyTrackedFile(t *testing.T) {
 	gitTest(t, dir, "add", "--", "target.txt")
 	gitTest(t, dir, "commit", "-m", "initial empty target")
 
-	if _, err := NewTarget(dir, "target.txt", "test-repo:target.txt"); err != nil {
-		t.Fatalf("NewTarget rejected empty tracked file: %v", err)
+	if _, err := NewTarget(dir, "target.txt", "test-repo:target.txt"); err == nil {
+		t.Fatal("NewTarget accepted an empty tracked file")
 	}
 }
