@@ -561,7 +561,6 @@ func gitTest(t *testing.T, dir string, args ...string) string {
 	return string(output)
 }
 
-
 func TestVerifierRejectsReplacementRefs(t *testing.T) {
 	target, observer, executor, verifier, _ := newTestProvider(t, "initial")
 	observation, err := observer.Observe(context.Background(), target.Subject)
