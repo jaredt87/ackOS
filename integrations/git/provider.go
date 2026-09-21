@@ -1291,9 +1291,6 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 	} else if home, homeErr := os.UserHomeDir(); homeErr == nil {
 		defaultAttrs = append(defaultAttrs, filepath.Join(home, ".config", "git", "attributes"))
 	}
-	if home, homeErr := os.UserHomeDir(); homeErr == nil && os.Getenv("XDG_CONFIG_HOME") == "" {
-		defaultAttrs = append(defaultAttrs, filepath.Join(home, ".config", "git", "attributes"))
-	}
 	for _, candidate := range defaultAttrs {
 		candidateAbs, absErr := filepath.Abs(candidate)
 		if absErr != nil {
