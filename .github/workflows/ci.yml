@@ -16,16 +16,16 @@ jobs:
       - name: Validate agent integrations
         run: |
           test -f .claude-plugin/plugin.json
-          test -f skills/control/SKILL.md
-          test -f skills/ackos-control/SKILL.md
           test -f gemini-extension.json
           test -f GEMINI.md
-          test -f integrations/chatgpt/SKILL.md
           python -m json.tool .claude-plugin/plugin.json >/dev/null
           python -m json.tool gemini-extension.json >/dev/null
-          grep -q '^description:' skills/control/SKILL.md
-          grep -q '^description:' skills/ackos-control/SKILL.md
-          grep -q '^description:' integrations/chatgpt/SKILL.md
+          while IFS= read -r skill; do
+            grep -q '^description:' "$skill" || {
+              echo "Missing description: frontmatter in $skill"
+              exit 1
+            }
+          done < <(git ls-files '*SKILL.md')
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
