@@ -63,12 +63,7 @@ func TestUpdateCapturedRefDoesNotDereferenceSymbolicBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	afterHash, err := gitBlobHash(context.Background(), target, "updated")
-	if err != nil {
-		t.Fatal(err)
-	}
 	commit := strings.TrimSpace(gitTest(t, target.Repository, "commit-tree", parent+"^{tree}", "-p", parent, "-m", "ackOS: execute ref-race"))
-	_ = afterHash
 	if err := updateCapturedRef(context.Background(), target, target.capturedHeadRef, commit, parent); err == nil {
 		t.Fatal("updateCapturedRef accepted a symbolic captured branch")
 	}
