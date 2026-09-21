@@ -224,6 +224,9 @@ func (o Observer) Observe(ctx context.Context, subject string) (kernel.Observati
 		return kernel.Observation{}, err
 
 	}
+	if err := requireWorktreeRoot(ctx, o.Target); err != nil {
+		return kernel.Observation{}, fmt.Errorf("repository identity changed during observation: %w", err)
+	}
 	return kernel.NewObservation(o.Target.Subject, content, 0, time.Now().UTC())
 }
 
@@ -1042,6 +1045,9 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("git target is not a regular file")
 	}
+	if info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+		return fmt.Errorf("git target uses unsupported special permission bits")
+	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
 	if !ok {
 		return fmt.Errorf("inspect git target identity")
@@ -1098,6 +1104,13 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	}
 	if err := syscall.Fchmod(tmpFD, uint32(mode.Perm())); err != nil {
 		return fmt.Errorf("restore git target mode: %w", err)
+	}
+	current, err = io.ReadAll(file)
+	if err != nil {
+		return fmt.Errorf("revalidate git target before atomic replacement: %w", err)
+	}
+	if !bytes.Equal(current, expected) {
+		return fmt.Errorf("git target changed during replacement preparation")
 	}
 	if err := syscall.Close(tmpFD); err != nil {
 		return fmt.Errorf("close git target replacement: %w", err)
@@ -1479,7 +1492,46 @@ func requireWorktreeRoot(ctx context.Context, target Target) error {
 	}
 	return nil
 }
+func rejectSystemAttributesTarget(ctx context.Context, target Target) error {
+	configured := filepath.Join(target.Repository, target.Path)
+	resolved, err := filepath.EvalSymlinks(configured)
+	if err != nil {
+		return nil
+	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+		return fmt.Errorf("resolve target for system attributes check: %w", err)
+	}
+	systemAttrs, err := runGitTarget(ctx, target, "var", "GIT_ATTR_SYSTEM")
+	if err != nil {
+		return fmt.Errorf("inspect system Git attributes file: %w", err)
+	}
+	systemAttrs = strings.TrimSpace(systemAttrs)
+	if systemAttrs == "" {
+		return nil
+	}
+	systemAttrs, err = filepath.Abs(systemAttrs)
+	if err != nil {
+		return fmt.Errorf("resolve system Git attributes file: %w", err)
+	}
+	systemResolved, err := filepath.EvalSymlinks(systemAttrs)
+	if err != nil {
+		return nil
+	}
+	systemResolved, err = filepath.Abs(systemResolved)
+	if err != nil {
+		return fmt.Errorf("resolve system Git attributes identity: %w", err)
+	}
+	if resolved == systemResolved {
+		return fmt.Errorf("git target is configured as the active system attributes file")
+	}
+	return nil
+}
+
 func rejectAttributesTarget(ctx context.Context, target Target) error {
+	if err := rejectSystemAttributesTarget(ctx, target); err != nil {
+		return err
+	}
 	if strings.EqualFold(filepath.Base(target.Path), ".gitattributes") {
 
 		return fmt.Errorf("git .gitattributes targets are not supported because the target can change its own filter environment")
@@ -2032,6 +2084,13 @@ func verifyLiveIndexMatchesHead(ctx context.Context, target Target, head string)
 	if err != nil {
 		return fmt.Errorf("write live Git index tree for verification: %w", err)
 	}
+	status, err = runGitTarget(ctx, target, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		return fmt.Errorf("recheck Git worktree status for verification: %w", err)
+	}
+	if status != "" {
+		return fmt.Errorf("Git worktree changed during index verification")
+	}
 	expectedTree, err := runGitTarget(ctx, target, "--no-replace-objects", "rev-parse", head+"^{tree}")
 	if err != nil {
 		return fmt.Errorf("read verified Git tree for index verification: %w", err)
@@ -2399,6 +2458,9 @@ func runGitTargetWithEnv(ctx context.Context, target Target, env map[string]stri
 }
 
 func runGitTargetWithInput(ctx context.Context, target Target, input []byte, overrides map[string]string, args ...string) (string, error) {
+	if err := requireWorktreeRoot(ctx, target); err != nil {
+		return "", err
+	}
 	rootFD, err := openRepositoryRoot(target)
 	if err != nil {
 		return "", err
