@@ -134,7 +134,10 @@ func TestRejectAttributesTargetRejectsDefaultPerUserAttributesFile(t *testing.T)
 	gitTest(t, dir, "add", "--", "attributes")
 	gitTest(t, dir, "commit", "-m", "add default attributes file")
 
-	target := Target{Repository: dir, Path: "attributes", Subject: "test-repo:attributes"}
+	target, err := NewTarget(dir, "attributes", "test-repo:attributes")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if err := rejectAttributesTarget(context.Background(), target); err == nil || !strings.Contains(err.Error(), "active attributes file") {
 		t.Fatalf("error = %v, want default attributes file rejection", err)
@@ -394,7 +397,7 @@ func TestVerifierRejectsDetachedHead(t *testing.T) {
 	}
 }
 
-func TestNewTargetRejectsEmptyFile(t *testing.T) {
+func TestNewTargetAllowsEmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	gitTest(t, dir, "init")
 	gitTest(t, dir, "config", "user.email", "ackos-test@example.invalid")
