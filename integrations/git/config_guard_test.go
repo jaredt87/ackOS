@@ -27,3 +27,23 @@ func TestRejectAttributesTargetResolvesSymlinkAlias(t *testing.T) {
 		t.Fatalf("error = %v, want symlinked active attributes file rejection", err)
 	}
 }
+
+
+func TestSanitizedGitEnvBlocksCommandScopeConfigInjection(t *testing.T) {
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "include.path")
+	t.Setenv("GIT_CONFIG_VALUE_0", "/tmp/attacker")
+	t.Setenv("GIT_CONFIG_PARAMETERS", "'include.path'='/tmp/attacker'")
+	t.Setenv("ACKOS_TEST_ENV", "preserved")
+
+	env := sanitizedGitEnv()
+	joined := "\n" + strings.Join(env, "\n") + "\n"
+	for _, key := range []string{"GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "GIT_CONFIG_PARAMETERS"} {
+		if strings.Contains(joined, "\n"+key+"=") {
+			t.Fatalf("sanitized environment retained %s", key)
+		}
+	}
+	if !strings.Contains(joined, "\nACKOS_TEST_ENV=preserved\n") {
+		t.Fatal("sanitized environment removed unrelated variables")
+	}
+}
