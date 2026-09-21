@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jaredt87/ackOS/kernel"
+	"golang.org/x/sys/unix"
 )
 
 type Target struct {
@@ -582,6 +583,9 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, err
 
 	}
+	if err := rejectReplaceRefs(ctx, v.Target); err != nil {
+		return kernel.Observation{}, err
+	}
 	if err := rejectConfiguredFilters(ctx, v.Target); err != nil {
 		return kernel.Observation{}, err
 	}
@@ -1056,8 +1060,22 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if err := syscall.Close(tmpFD); err != nil {
 		return fmt.Errorf("close git target replacement: %w", err)
 	}
-	if err := syscall.Renameat(parentFD, tmpName, parentFD, name); err != nil {
-		return fmt.Errorf("atomically replace git target: %w", err)
+	// Exchange the prepared inode with the current directory entry atomically.
+	// The exchanged-out inode is then compared with the inode we validated before
+	// the write. A concurrent replacement therefore fails without being clobbered.
+	if err := unix.Renameat2(parentFD, tmpName, parentFD, name, unix.RENAME_EXCHANGE); err != nil {
+		return fmt.Errorf("atomically compare-and-replace git target: %w", err)
+	}
+	exchangedInfo, err := os.Stat(filepath.Join(filepath.Dir(path), tmpName))
+	if err != nil {
+		return fmt.Errorf("inspect exchanged git target: %w", err)
+	}
+	exchangedStat, ok := exchangedInfo.Sys().(*syscall.Stat_t)
+	if !ok || uint64(exchangedStat.Dev) != uint64(stat.Dev) || uint64(exchangedStat.Ino) != uint64(stat.Ino) {
+		if err := unix.Renameat2(parentFD, tmpName, parentFD, name, unix.RENAME_EXCHANGE); err != nil {
+			return fmt.Errorf("restore concurrently replaced git target: %w", err)
+		}
+		return fmt.Errorf("git target changed before atomic replacement")
 	}
 	cleanup = false
 	return nil
