@@ -33,16 +33,16 @@
 
 ### Never Do
 
-* Never collapse authorization, execution dispatch, verification, and commitment into a single step, in the kernel or in any integration (`integrations/git`, `integrations/synthetic`, `integrations/mcp`) — this is the exact boundary-collapse `GEMINI.md` and `SECURITY.md` warn against.
+* Never collapse authorization, execution dispatch, verification, and commitment into a single step, in the kernel or in any integration (`integrations/synthetic`, `integrations/mcp`, `integrations/chatgpt`) — this is the exact boundary-collapse `GEMINI.md` and `SECURITY.md` warn against.
 * Never let an execution result alone (provider "success") authorize a commit — commitment requires independently captured, freshness-checked verification evidence.
 * Never weaken or bypass the CAS-oriented commit path or single-use authority consumption to "simplify" a fix.
-* Never hardcode or commit credentials, tokens, or provider secrets (relevant in `integrations/git` and `integrations/mcp`).
+* Never hardcode or commit credentials, tokens, or provider secrets (relevant where integrations handle external credentials).
 * Do not rewrite history or force-push to `main`.
 
 ### 4. Architecture & Style Pointers
 
 * **Kernel purity:** `kernel/` is the authority boundary — deterministic, in-memory, single-process for V0. It owns observation/evidence identity, normalization, reconciliation, governance, reservation, verification gating, and CAS commitment. It does not own provider SDKs, credentials, RBAC, or orchestration. See `docs/ARCHITECTURE.md` for the full "owns / does not own" split.
-* **Providers/integrations:** `integrations/git`, `integrations/synthetic`, and `integrations/mcp` implement execution and observation against a concrete backend; they call into the kernel rather than duplicating its decisions. New providers follow this same pattern.
+* **Providers/integrations:** `integrations/synthetic`, `integrations/mcp`, and `integrations/chatgpt` implement execution and observation against concrete backends; they call into the kernel rather than duplicating its decisions. New providers follow this same pattern.
 * **Error handling:** use the existing sentinel errors in `kernel/kernel.go` (`ErrStaleEvidence`, `ErrGovernanceDenied`, `ErrAuthorityExpired`, etc.) rather than introducing ad hoc error strings; wrap with `fmt.Errorf("...: %w", err)` to preserve the sentinel.
 * **Living documentation:** read `docs/ARCHITECTURE.md` and `docs/RESEARCH_BOUNDARIES.md` before guessing at intended kernel behavior — this project came out of a research program (E11–E17) with specific, deliberate non-guarantees; don't "fix" a documented boundary without flagging it.
 
