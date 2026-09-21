@@ -1515,13 +1515,16 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 			}
 			addSource(include)
 		}
-	}	return nil
+	}
+	return nil
 }
 
 func rejectSubmodules(ctx context.Context, target Target) error {
-	output, err := runGit(ctx, target.Repository, "ls-files", "-z", "--stage")	if err != nil {
-		return fmt.Errorf("inspect Git submodules: %w", err)	}
-	parts := strings.Split(strings.TrimSuffix(output, "\\x00"), "\\x00")
+	output, err := runGit(ctx, target.Repository, "ls-files", "-z", "--stage")
+	if err != nil {
+		return fmt.Errorf("inspect Git submodules: %w", err)
+	}
+	parts := strings.Split(strings.TrimSuffix(output, "\x00"), "\x00")
 	for _, record := range parts {
 		if record == "" {
 			continue
