@@ -3237,10 +3237,9 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, aft
 		return fmt.Errorf("Git HEAD branch changed before commit")
 
 	}
-	if _, err := runGit(ctx, target.Repository, "update-ref", "--no-deref", headRef, commit, parent); err != nil {
+	if err := updateCapturedRef(ctx, target, headRef, commit, parent); err != nil {
 
 		return fmt.Errorf("atomically install authorized Git commit on captured branch: %w", err)
-
 	}
 	currentRef, err = runGit(ctx, target.Repository, "symbolic-ref", "-q", "HEAD")
 	if err != nil {
@@ -3257,6 +3256,13 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, aft
 
 		return fmt.Errorf("synchronize Git index after commit: %w", err)
 
+	}
+	return nil
+}
+
+func updateCapturedRef(ctx context.Context, target Target, headRef, commit, parent string) error {
+	if _, err := runGit(ctx, target.Repository, "update-ref", "--no-deref", headRef, commit, parent); err != nil {
+		return err
 	}
 	return nil
 }
