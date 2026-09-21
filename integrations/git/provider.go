@@ -1527,7 +1527,1536 @@ func rejectConfiguredFilters(ctx context.Context, target Target) error {
 
 	}
 	configuredDrivers := make(map[string]struct{})
-	cleanDrivers, cleanErr := runGit(ctx, target.Repository, "config", "--includes", "--name-only", "--get-regexp", \`^filter\..*\.clean$\`)
+	cleanDrivers, cleanErr := runGit(ctx, target.Repository, "config", "--includes", "--name-only", "--get-regexp", `^filter\..*\.clean// Package git provides a domain-specific Git resource provider for ackOS.
+package git
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/jaredt87/ackOS/kernel"
+)
+
+type Target struct {
+	Repository string
+	Path       string
+	Subject    string
+
+	repositoryDev    uint64
+	repositoryIno    uint64
+	capturedHead     string
+	capturedHeadRef  string
+	gitDirPath       string
+	gitDirDev        uint64
+	gitDirIno        uint64
+	gitCommonDirPath string
+	gitCommonDirDev  uint64
+	gitCommonDirIno  uint64
+	lifecycle        *lifecycleState
+}
+
+type executionParent struct {
+	head string
+	ref  string
+}
+
+type lifecycleState struct {
+	mu      sync.Mutex
+	parents map[string]executionParent
+}
+
+func (s *lifecycleState) capture(ctx context.Context, target Target, executionID string) (executionParent, error) {
+	if s == nil {
+		return executionParent{}, fmt.Errorf("Git lifecycle state is unavailable")
+	}
+	head, err := runGit(ctx, target.Repository, "rev-parse", "HEAD")
+	if err != nil {
+		return executionParent{}, fmt.Errorf("capture Git execution parent: %w", err)
+	}
+	head = strings.TrimSpace(head)
+	if head == "" {
+		return executionParent{}, fmt.Errorf("capture Git execution parent: empty revision")
+	}
+	ref, err := runGit(ctx, target.Repository, "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+		return executionParent{}, fmt.Errorf("capture Git execution branch: %w", err)
+	}
+	ref = strings.TrimSpace(ref)
+	if ref == "" || !strings.HasPrefix(ref, "refs/heads/") {
+		return executionParent{}, fmt.Errorf("Git HEAD must remain attached to a branch")
+	}
+	parent := executionParent{head: head, ref: ref}
+	s.mu.Lock()
+	if s.parents == nil {
+		s.parents = make(map[string]executionParent)
+	}
+	s.parents[executionID] = parent
+	s.mu.Unlock()
+	return parent, nil
+}
+
+func (s *lifecycleState) parent(executionID string) (executionParent, error) {
+	if s == nil {
+		return executionParent{}, fmt.Errorf("Git lifecycle state is unavailable")
+	}
+	s.mu.Lock()
+	parent, ok := s.parents[executionID]
+	s.mu.Unlock()
+	if !ok {
+		return executionParent{}, fmt.Errorf("Git execution lifecycle state is unavailable")
+	}
+	return parent, nil
+}
+
+func (s *lifecycleState) discard(executionID string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	delete(s.parents, executionID)
+	s.mu.Unlock()
+}
+
+func NewTarget(repository, path, subject string) (Target, error) {
+	if repository == "" || path == "" || subject == "" {
+
+		return Target{}, fmt.Errorf("repository, path, and subject are required")
+
+	}
+	absRepo, err := filepath.Abs(repository)
+	if err != nil {
+
+		return Target{}, fmt.Errorf("resolve repository: %w", err)
+
+	}
+	info, err := os.Stat(absRepo)
+	if err != nil {
+
+		return Target{}, fmt.Errorf("stat repository: %w", err)
+
+	}
+	if !info.IsDir() {
+
+		return Target{}, fmt.Errorf("repository is not a directory")
+
+	}
+	cleanPath := filepath.Clean(path)
+	if filepath.IsAbs(cleanPath) || cleanPath == "." || cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) {
+
+		return Target{}, fmt.Errorf("path must be repository-relative")
+
+	}
+	target := Target{Repository: absRepo, Path: cleanPath, Subject: subject, lifecycle: &lifecycleState{parents: make(map[string]executionParent)}}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Dev == 0 || stat.Ino == 0 {
+
+		return Target{}, fmt.Errorf("capture configured repository identity")
+
+	}
+	target.repositoryDev = uint64(stat.Dev)
+	target.repositoryIno = uint64(stat.Ino)
+	head, err := runGit(context.Background(), target.Repository, "rev-parse", "HEAD")
+	if err != nil {
+
+		return Target{}, fmt.Errorf("capture Git HEAD: %w", err)
+
+	}
+	target.capturedHead = strings.TrimSpace(head)
+	if target.capturedHead == "" {
+
+		return Target{}, fmt.Errorf("capture Git HEAD: empty revision")
+
+	}
+	headRef, err := runGit(context.Background(), target.Repository, "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+
+		return Target{}, fmt.Errorf("capture Git HEAD branch: %w", err)
+
+	}
+	target.capturedHeadRef = strings.TrimSpace(headRef)
+	if target.capturedHeadRef == "" || !strings.HasPrefix(target.capturedHeadRef, "refs/heads/") {
+
+		return Target{}, fmt.Errorf("Git HEAD must remain attached to a branch")
+
+	}
+	metadata, err := captureGitMetadataIdentity(context.Background(), target)
+	if err != nil {
+		return Target{}, err
+	}
+	target.gitDirPath = metadata.gitDirPath
+	target.gitDirDev = metadata.gitDirDev
+	target.gitDirIno = metadata.gitDirIno
+	target.gitCommonDirPath = metadata.gitCommonDirPath
+	target.gitCommonDirDev = metadata.gitCommonDirDev
+	target.gitCommonDirIno = metadata.gitCommonDirIno
+	if err := requireWorktreeRoot(context.Background(), target); err != nil {
+
+		return Target{}, err
+
+	}
+	if err := validateNoSymlinks(target); err != nil {
+
+		return Target{}, err
+
+	}
+	return target, nil
+}
+
+type Observer struct{ Target Target }
+
+func (o Observer) Observe(ctx context.Context, subject string) (kernel.Observation, error) {
+	if subject != o.Target.Subject {
+		return kernel.Observation{}, fmt.Errorf("git subject mismatch: got %q, want %q", subject, o.Target.Subject)
+	}
+	if err := ctx.Err(); err != nil {
+
+		return kernel.Observation{}, err
+
+	}
+	if err := requireWorktreeRoot(ctx, o.Target); err != nil {
+
+		return kernel.Observation{}, err
+
+	}
+	if err := validateNoSymlinks(o.Target); err != nil {
+
+		return kernel.Observation{}, err
+
+	}
+	content, err := o.read(ctx)
+	if err != nil {
+
+		return kernel.Observation{}, err
+
+	}
+	return kernel.NewObservation(o.Target.Subject, content, 0, time.Now().UTC())
+}
+
+type Executor struct{ Target Target }
+
+func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority kernel.Authority) kernel.ExecutionResult {
+	fail := func(err error) kernel.ExecutionResult { return kernel.ExecutionResult{Message: err.Error()} }
+	if authority.ExecutionID == "" {
+
+		return fail(fmt.Errorf("execution authority ID is required"))
+
+	}
+	if t.Subject != e.Target.Subject {
+
+		return fail(fmt.Errorf("git subject mismatch: got %q, want %q", t.Subject, e.Target.Subject))
+
+	}
+	if err := ctx.Err(); err != nil {
+
+		return fail(err)
+
+	}
+	unlock, err := acquireTargetLock(ctx, e.Target)
+	if err != nil {
+
+		return fail(err)
+
+	}
+	defer unlock()
+	if err := requireWorktreeRoot(ctx, e.Target); err != nil {
+
+		return fail(err)
+
+	}
+	if err := validateNoSymlinks(e.Target); err != nil {
+
+		return fail(err)
+
+	}
+	if err := e.requireTracked(ctx); err != nil {
+
+		return fail(err)
+
+	}
+	before, err := e.read(ctx)
+	if err != nil {
+
+		return fail(err)
+
+	}
+	if before != t.Before {
+
+		return fail(fmt.Errorf("git file changed before execution"))
+
+	}
+	if err := requireNoInProgressGitOperation(ctx, e.Target); err != nil {
+
+		return fail(err)
+
+	}
+	if err := rejectReplaceRefs(ctx, e.Target); err != nil {
+
+		return fail(err)
+
+	}
+	if err := rejectConfiguredFilters(ctx, e.Target); err != nil {
+
+		return fail(err)
+
+	}
+	if err := rejectConfiguredNormalization(ctx, e.Target); err != nil {
+
+		return fail(err)
+
+	}
+	if err := rejectAttributesTarget(ctx, e.Target); err != nil {
+
+		return fail(err)
+
+	}
+	if err := rejectGitConfigTarget(ctx, e.Target); err != nil {
+
+		return fail(err)
+
+	}
+	if err := rejectGrafts(ctx, e.Target); err != nil {
+
+		return fail(err)
+
+	}
+	status, err := e.git(ctx, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+
+		return fail(fmt.Errorf("read git status: %w", err))
+
+	}
+	if status != "" {
+
+		return fail(fmt.Errorf("git worktree is not clean"))
+
+	}
+	if err := requireCommitIdentity(ctx, e.Target); err != nil {
+
+		return fail(err)
+
+	}
+	if err := requireIndexUnlocked(ctx, e.Target); err != nil {
+
+		return fail(err)
+
+	}
+	if err := validateMutationBoundary(ctx, e.Target, t.Before); err != nil {
+
+		return fail(err)
+
+	}
+	expectedParent, err := e.Target.lifecycle.capture(ctx, e.Target, authority.ExecutionID)
+	if err != nil {
+		return fail(err)
+	}
+	lifecycleComplete := false
+	defer func() {
+		if !lifecycleComplete {
+			e.Target.lifecycle.discard(authority.ExecutionID)
+		}
+	}()
+
+	head := expectedParent.head
+	headRef := expectedParent.ref
+	currentHead, err := e.git(ctx, "rev-parse", "HEAD")
+	if err != nil {
+		return fail(fmt.Errorf("re-read Git execution parent: %w", err))
+	}
+	if strings.TrimSpace(currentHead) != head {
+		return fail(fmt.Errorf("Git HEAD changed before execution"))
+	}
+	currentRef, err := e.git(ctx, "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+		return fail(fmt.Errorf("re-read Git execution branch: %w", err))
+	}
+	if strings.TrimSpace(currentRef) != headRef {
+		return fail(fmt.Errorf("Git HEAD branch changed before execution"))
+	}
+	expectedMode, err := gitTreeMode(ctx, e.Target, head)
+	if err != nil {
+
+		return fail(fmt.Errorf("read Git parent target mode: %w", err))
+
+	}
+	liveMode, err := liveTargetMode(e.Target)
+	if err != nil {
+
+		return fail(fmt.Errorf("read live Git target mode: %w", err))
+
+	}
+	if liveMode != expectedMode {
+
+		return fail(fmt.Errorf("Git target mode does not match parent before mutation"))
+
+	}
+	beforeHash, err := gitBlobHash(ctx, e.Target, t.Before)
+	if err != nil {
+
+		return fail(fmt.Errorf("normalize authorized Git parent state: %w", err))
+
+	}
+	afterHash, err := gitBlobHash(ctx, e.Target, t.After)
+	if err != nil {
+		return fail(fmt.Errorf("normalize authorized Git target state: %w", err))
+
+	}
+	if beforeHash == afterHash {
+
+		return fail(fmt.Errorf("authorized transition is not representable as a distinct Git blob"))
+
+	}
+	headHash, err := e.git(ctx, "--no-replace-objects", "rev-parse", "HEAD:./"+e.Target.Path)
+	if err != nil {
+
+		return fail(fmt.Errorf("read Git parent state: %w", err))
+
+	}
+	if headHash != beforeHash {
+
+		return fail(fmt.Errorf("Git parent does not match authorized state"))
+
+	}
+	if err := atomicWriteTarget(e.Target, []byte(t.After)); err != nil {
+
+		return fail(fmt.Errorf("write git file: %w", err))
+
+	}
+	if _, err := e.git(ctx, "add", "--", literalPathspec(e.Target.Path)); err != nil {
+
+		return fail(fmt.Errorf("git add: %w", err))
+
+	}
+	cachedPaths, err := e.git(ctx, "diff", "--cached", "--name-only", "-z")
+	if err != nil {
+
+		return fail(fmt.Errorf("inspect staged Git diff: %w", err))
+
+	}
+	if !exactNULPathList(cachedPaths, e.Target.Path) {
+
+		return fail(fmt.Errorf("staged Git diff contains an unauthorized path"))
+
+	}
+	cachedHash, err := e.git(ctx, "--no-replace-objects", "rev-parse", ":./"+e.Target.Path)
+	if err != nil {
+
+		return fail(fmt.Errorf("read staged Git target: %w", err))
+
+	}
+	if cachedHash != afterHash {
+
+		return fail(fmt.Errorf("staged Git target does not match authorized state"))
+
+	}
+	if err := requireIndexUnlocked(ctx, e.Target); err != nil {
+
+		return fail(err)
+
+	}
+	message := "ackOS: execute " + authority.ExecutionID
+	if err := commitVerifiedTree(ctx, e.Target, head, headRef, afterHash, []byte(t.After), message); err != nil {
+
+		return fail(err)
+
+	}
+	if err := verifyCommit(e, ctx, head, t, authority.ExecutionID); err != nil {
+
+		return fail(err)
+
+	}
+	verifiedHead, err := e.git(ctx, "rev-parse", "HEAD")
+	if err != nil {
+
+		return fail(fmt.Errorf("re-read Git HEAD after verification: %w", err))
+
+	}
+	finalContent, err := e.read(ctx)
+	if err != nil {
+
+		return fail(fmt.Errorf("re-read Git target after verification: %w", err))
+
+	}
+	if finalContent != t.After {
+
+		return fail(fmt.Errorf("git target changed after commit verification"))
+
+	}
+	finalInfo, err := os.Stat(filepath.Join(e.Target.Repository, e.Target.Path))
+	if err != nil {
+		return fail(fmt.Errorf("revalidate Git target metadata: %w", err))
+	}
+	if err := rejectUnpreservableMetadata(filepath.Join(e.Target.Repository, e.Target.Path), finalInfo); err != nil {
+		return fail(fmt.Errorf("Git target metadata changed after commit verification: %w", err))
+	}
+	finalHead, err := e.git(ctx, "rev-parse", "HEAD")
+	if err != nil {
+
+		return fail(fmt.Errorf("re-read Git HEAD at return boundary: %w", err))
+
+	}
+	if finalHead != verifiedHead {
+
+		return fail(fmt.Errorf("Git HEAD changed after commit verification"))
+
+	}
+	lifecycleComplete = true
+	return kernel.ExecutionResult{Success: true, Message: "git file transitioned and committed"}
+}
+
+type Verifier struct{ Target Target }
+
+func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority kernel.Authority) (kernel.Observation, error) {
+	if authority.ExecutionID == "" {
+
+		return kernel.Observation{}, fmt.Errorf("execution authority ID is required")
+
+	}
+	if t.Subject != v.Target.Subject {
+
+		return kernel.Observation{}, fmt.Errorf("git subject mismatch: got %q, want %q", t.Subject, v.Target.Subject)
+
+	}
+	if err := ctx.Err(); err != nil {
+
+		return kernel.Observation{}, err
+
+	}
+	if err := requireWorktreeRoot(ctx, v.Target); err != nil {
+
+		return kernel.Observation{}, err
+
+	}
+	expectedParent, err := v.Target.lifecycle.parent(authority.ExecutionID)
+	if err != nil {
+		return kernel.Observation{}, err
+	}
+	defer v.Target.lifecycle.discard(authority.ExecutionID)
+	currentHead, err := v.git(ctx, "rev-parse", "HEAD")
+	if err != nil {
+
+		return kernel.Observation{}, fmt.Errorf("read captured Git HEAD: %w", err)
+
+	}
+	if strings.TrimSpace(currentHead) == "" {
+
+		return kernel.Observation{}, fmt.Errorf("captured Git HEAD is unavailable")
+
+	}
+	currentRef, err := v.git(ctx, "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+
+		return kernel.Observation{}, fmt.Errorf("Git HEAD is not on the authorized branch: %w", err)
+
+	}
+	if strings.TrimSpace(currentRef) != expectedParent.ref {
+
+		return kernel.Observation{}, fmt.Errorf("Git HEAD is not on the authorized branch")
+
+	}
+	if err := validateNoSymlinks(v.Target); err != nil {
+
+		return kernel.Observation{}, err
+
+	}
+	if err := v.requireTracked(ctx); err != nil {
+
+		return kernel.Observation{}, err
+
+	}
+	if err := requireNoInProgressGitOperation(ctx, v.Target); err != nil {
+
+		return kernel.Observation{}, err
+
+	}
+	if err := rejectConfiguredFilters(ctx, v.Target); err != nil {
+		return kernel.Observation{}, err
+	}
+	if err := rejectConfiguredNormalization(ctx, v.Target); err != nil {
+		return kernel.Observation{}, err
+	}
+	if err := rejectAttributesTarget(ctx, v.Target); err != nil {
+		return kernel.Observation{}, err
+	}
+	if err := rejectGitConfigTarget(ctx, v.Target); err != nil {
+		return kernel.Observation{}, err
+	}
+	if err := rejectGrafts(ctx, v.Target); err != nil {
+		return kernel.Observation{}, err
+	}
+	status, err := v.git(ctx, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+
+		return kernel.Observation{}, fmt.Errorf("read git status during verification: %w", err)
+
+	}
+	if status != "" {
+
+		return kernel.Observation{}, fmt.Errorf("git worktree is not clean during verification")
+
+	}
+	content, err := v.read(ctx)
+	if err != nil {
+
+		return kernel.Observation{}, err
+
+	}
+	if content != t.After {
+
+		return kernel.Observation{}, fmt.Errorf("git file state mismatch")
+
+	}
+	if err := verifyLatestCommit(v, ctx, expectedParent.head, t, authority.ExecutionID); err != nil {
+
+		return kernel.Observation{}, err
+
+	}
+	verifiedHead, err := v.git(ctx, "rev-parse", "HEAD")
+	if err != nil {
+
+		return kernel.Observation{}, fmt.Errorf("re-read verified Git HEAD: %w", err)
+
+	}
+	verifiedHead = strings.TrimSpace(verifiedHead)
+	if verifiedHead == "" {
+
+		return kernel.Observation{}, fmt.Errorf("verified Git HEAD is unavailable")
+
+	}
+	finalContent, err := v.read(ctx)
+	if err != nil {
+
+		return kernel.Observation{}, err
+
+	}
+	if finalContent != t.After {
+
+		return kernel.Observation{}, fmt.Errorf("git file changed during verification")
+
+	}
+	finalInfo, err := os.Stat(filepath.Join(v.Target.Repository, v.Target.Path))
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("revalidate Git target metadata: %w", err)
+	}
+	if err := rejectUnpreservableMetadata(filepath.Join(v.Target.Repository, v.Target.Path), finalInfo); err != nil {
+		return kernel.Observation{}, fmt.Errorf("Git target metadata changed during verification: %w", err)
+	}
+	expectedMode, err := gitTreeMode(ctx, v.Target, verifiedHead)
+	if err != nil {
+
+		return kernel.Observation{}, fmt.Errorf("read verified Git target mode: %w", err)
+
+	}
+	liveMode, err := liveTargetMode(v.Target)
+	if err != nil {
+
+		return kernel.Observation{}, fmt.Errorf("read live Git target mode: %w", err)
+
+	}
+	if liveMode != expectedMode {
+
+		return kernel.Observation{}, fmt.Errorf("Git target mode changed during verification")
+
+	}
+	indexMode, err := gitIndexMode(ctx, v.Target)
+	if err != nil {
+
+		return kernel.Observation{}, fmt.Errorf("read live Git index target mode: %w", err)
+
+	}
+	if indexMode != expectedMode {
+
+		return kernel.Observation{}, fmt.Errorf("Git index target mode changed during verification")
+
+	}
+	indexHash, err := gitIndexHash(ctx, v.Target)
+	if err != nil {
+
+		return kernel.Observation{}, fmt.Errorf("read live Git index target blob: %w", err)
+
+	}
+	expectedHash, err := v.git(ctx, "--no-replace-objects", "rev-parse", verifiedHead+":./"+v.Target.Path)
+	if err != nil {
+
+		return kernel.Observation{}, fmt.Errorf("read verified Git target blob: %w", err)
+
+	}
+	if indexHash != expectedHash {
+
+		return kernel.Observation{}, fmt.Errorf("Git index target blob changed during verification")
+
+	}
+	if err := verifyLiveIndexMatchesHead(ctx, v.Target, verifiedHead); err != nil {
+
+		return kernel.Observation{}, err
+
+	}
+	finalHead, err := v.git(ctx, "rev-parse", "HEAD")
+	if err != nil {
+
+		return kernel.Observation{}, fmt.Errorf("re-read Git HEAD at verification return boundary: %w", err)
+
+	}
+	if finalHead != verifiedHead {
+
+		return kernel.Observation{}, fmt.Errorf("Git HEAD changed during verification")
+
+	}
+	finalRef, err := v.git(ctx, "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("re-read Git HEAD branch at verification return boundary: %w", err)
+	}
+	if strings.TrimSpace(finalRef) != expectedParent.ref {
+		return kernel.Observation{}, fmt.Errorf("Git HEAD branch changed during verification")
+	}
+	return kernel.NewObservation(v.Target.Subject, finalContent, 0, time.Now().UTC())
+}
+
+type RecoveryObserver struct{ Target Target }
+
+func (o RecoveryObserver) Observe(ctx context.Context, subject string) (kernel.Observation, error) {
+	if subject != o.Target.Subject {
+
+		return kernel.Observation{}, fmt.Errorf("git recovery subject mismatch: got %q, want %q", subject, o.Target.Subject)
+
+	}
+	return (Observer{Target: o.Target}).Observe(ctx, subject)
+}
+
+func (o Observer) read(ctx context.Context) (string, error) { return readFile(ctx, o.Target) }
+
+func (e Executor) read(ctx context.Context) (string, error) { return readFile(ctx, e.Target) }
+
+func (v Verifier) read(ctx context.Context) (string, error) { return readFile(ctx, v.Target) }
+
+func readFile(ctx context.Context, target Target) (string, error) {
+	if err := ctx.Err(); err != nil {
+
+		return "", err
+
+	}
+	path := filepath.Join(target.Repository, target.Path)
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+
+		return "", fmt.Errorf("open git file: %w", err)
+
+	}
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = syscall.Close(fd)
+
+		return "", fmt.Errorf("open git file: invalid file descriptor")
+
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+
+		return "", fmt.Errorf("stat git file: %w", err)
+
+	}
+	if !info.Mode().IsRegular() {
+
+		return "", fmt.Errorf("git target is not a regular file")
+
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok && stat.Nlink > 1 {
+
+		return "", fmt.Errorf("git target has multiple hard links")
+
+	}
+	readDone := make(chan struct{})
+	var content []byte
+	var readErr error
+	go func() {
+		content, readErr = io.ReadAll(file)
+		close(readDone)
+
+	}()
+	select {
+	case <-readDone:
+
+		if readErr != nil {
+
+			return "", fmt.Errorf("read git file: %w", readErr)
+
+		}
+	case <-ctx.Done():
+		_ = file.Close()
+
+		return "", ctx.Err()
+
+	}
+	if err := ctx.Err(); err != nil {
+
+		return "", err
+
+	}
+	return string(content), nil
+}
+
+func validateNoSymlinks(target Target) error {
+	if target.Repository == "" || target.Path == "" {
+
+		return fmt.Errorf("git target is incomplete")
+
+	}
+	root, err := filepath.EvalSymlinks(target.Repository)
+	if err != nil {
+
+		return fmt.Errorf("resolve git repository: %w", err)
+
+	}
+	root, err = filepath.Abs(root)
+	if err != nil {
+
+		return fmt.Errorf("resolve git repository path: %w", err)
+
+	}
+	cleanPath := filepath.Clean(target.Path)
+	if filepath.IsAbs(cleanPath) || cleanPath == "." || cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) {
+
+		return fmt.Errorf("git target path escapes repository")
+
+	}
+	current := root
+	for _, part := range strings.Split(cleanPath, string(filepath.Separator)) {
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+
+		if err != nil {
+
+			return fmt.Errorf("inspect git target path: %w", err)
+
+		}
+
+		if info.Mode()&os.ModeSymlink != 0 {
+
+			return fmt.Errorf("git target path contains a symlink: %s", current)
+
+		}
+
+	}
+	resolved, err := filepath.EvalSymlinks(filepath.Join(root, cleanPath))
+	if err != nil {
+
+		return fmt.Errorf("resolve git target: %w", err)
+
+	}
+	resolved, err = filepath.Abs(resolved)
+	if err != nil {
+
+		return fmt.Errorf("resolve git target path: %w", err)
+
+	}
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+
+		return fmt.Errorf("git target path escapes repository")
+
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+
+		return fmt.Errorf("stat git target: %w", err)
+
+	}
+	if !info.Mode().IsRegular() {
+
+		return fmt.Errorf("git target is not a regular file")
+
+	}
+	return nil
+}
+
+func acquireTargetLock(ctx context.Context, target Target) (func(), error) {
+	sum := sha256.Sum256([]byte(target.Repository + "\x00" + target.Path))
+	path := filepath.Join(os.TempDir(), fmt.Sprintf("ackos-target-%x.lock", sum))
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+
+		return nil, fmt.Errorf("open ackOS target lock: %w", err)
+
+	}
+	for {
+		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+
+		if err == nil {
+
+			return func() {
+				_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+				_ = file.Close()
+
+			}, nil
+
+		}
+
+		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
+			_ = file.Close()
+
+			return nil, fmt.Errorf("acquire ackOS target lock: %w", err)
+
+		}
+		select {
+		case <-ctx.Done():
+			_ = file.Close()
+
+			return nil, ctx.Err()
+		case <-time.After(25 * time.Millisecond):
+
+		}
+
+	}
+}
+
+func validateMutationBoundary(ctx context.Context, target Target, expected string) error {
+	content, err := readFile(ctx, target)
+	if err != nil {
+
+		return fmt.Errorf("revalidate git target: %w", err)
+
+	}
+	if content != expected {
+
+		return fmt.Errorf("git file changed at mutation boundary")
+
+	}
+	return nil
+}
+
+func openParentDirNoSymlink(target Target) (int, error) {
+	cleanPath := filepath.Clean(target.Path)
+	if filepath.IsAbs(cleanPath) || cleanPath == "." || cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) {
+
+		return -1, fmt.Errorf("git target path escapes repository")
+
+	}
+	fd, err := syscall.Open(target.Repository, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+
+		return -1, fmt.Errorf("open git repository directory: %w", err)
+
+	}
+	var rootStat syscall.Stat_t
+	if err := syscall.Fstat(fd, &rootStat); err != nil {
+		_ = syscall.Close(fd)
+		return -1, fmt.Errorf("stat opened git repository directory: %w", err)
+	}
+	if target.repositoryDev == 0 || target.repositoryIno == 0 ||
+		uint64(rootStat.Dev) != target.repositoryDev || uint64(rootStat.Ino) != target.repositoryIno {
+		_ = syscall.Close(fd)
+		return -1, fmt.Errorf("configured repository identity changed")
+	}
+	for _, part := range strings.Split(filepath.Dir(cleanPath), string(filepath.Separator)) {
+
+		if part == "." || part == "" {
+			continue
+
+		}
+		next, err := syscall.Openat(fd, part, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+
+		if err != nil {
+			_ = syscall.Close(fd)
+
+			return -1, fmt.Errorf("open git target parent directory: %w", err)
+
+		}
+		_ = syscall.Close(fd)
+		fd = next
+
+	}
+	return fd, nil
+}
+
+func atomicWriteTarget(target Target, content []byte) error {
+	path := filepath.Join(target.Repository, target.Path)
+	parentFD, err := openParentDirNoSymlink(target)
+	if err != nil {
+
+		return err
+
+	}
+	defer syscall.Close(parentFD)
+
+	mode := os.FileMode(0o644)
+	if info, err := os.Stat(path); err == nil {
+
+		if err := rejectUnpreservableMetadata(path, info); err != nil {
+
+			return err
+
+		}
+		mode = info.Mode()
+
+	}
+
+	tmpName := fmt.Sprintf(".ackos-write-%d-%d", os.Getpid(), time.Now().UnixNano())
+	tmpFD, err := syscall.Openat(parentFD, tmpName, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW, uint32(mode.Perm()))
+	if err != nil {
+
+		return fmt.Errorf("create temporary git target: %w", err)
+
+	}
+	tmp := os.NewFile(uintptr(tmpFD), filepath.Join(target.Repository, filepath.Dir(target.Path), tmpName))
+	if tmp == nil {
+		_ = syscall.Close(tmpFD)
+		_ = syscall.Unlinkat(parentFD, tmpName)
+
+		return fmt.Errorf("create temporary git target: invalid file descriptor")
+
+	}
+	defer func() {
+		_ = tmp.Close()
+		_ = syscall.Unlinkat(parentFD, tmpName)
+
+	}()
+	if err := tmp.Chmod(mode); err != nil {
+
+		return err
+
+	}
+	if _, err := tmp.Write(content); err != nil {
+
+		return err
+
+	}
+	if err := tmp.Sync(); err != nil {
+
+		return err
+
+	}
+	if err := tmp.Close(); err != nil {
+
+		return err
+
+	}
+	if err := syscall.Renameat(parentFD, tmpName, parentFD, filepath.Base(path)); err != nil {
+
+		return fmt.Errorf("replace git target: %w", err)
+
+	}
+	return nil
+}
+
+func rejectUnpreservableMetadata(path string, info os.FileInfo) error {
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+
+		if uint32(os.Geteuid()) != stat.Uid || uint32(os.Getegid()) != stat.Gid {
+
+			return fmt.Errorf("git target ownership cannot be preserved by atomic replacement")
+
+		}
+
+	}
+	for size := 256; ; size *= 2 {
+		buf := make([]byte, size)
+		n, err := syscall.Listxattr(path, buf)
+
+		if err == syscall.ENOTSUP || err == syscall.EOPNOTSUPP {
+
+			return nil
+
+		}
+
+		if err != nil {
+
+			return fmt.Errorf("inspect git target extended attributes: %w", err)
+
+		}
+
+		if n == 0 {
+
+			return nil
+
+		}
+
+		if n < len(buf) {
+
+			return fmt.Errorf("git target has extended attributes or ACLs that cannot be preserved by atomic replacement")
+
+		}
+
+	}
+}
+
+func requireCommitIdentity(ctx context.Context, target Target) error {
+	for _, identity := range []string{"GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"} {
+
+		if _, err := runGit(ctx, target.Repository, "var", identity); err != nil {
+
+			return fmt.Errorf("Git commit identity is not configured: %s: %w", identity, err)
+
+		}
+
+	}
+	return nil
+}
+
+func requireIndexUnlocked(ctx context.Context, target Target) error {
+	path, err := runGit(ctx, target.Repository, "rev-parse", "--git-path", "index.lock")
+	if err != nil {
+
+		return fmt.Errorf("inspect Git index lock: %w", err)
+
+	}
+	path = strings.TrimSpace(path)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(target.Repository, path)
+
+	}
+	if _, err := os.Stat(path); err == nil {
+
+		return fmt.Errorf("Git index is locked")
+
+	} else if !os.IsNotExist(err) {
+
+		return fmt.Errorf("inspect Git index lock: %w", err)
+
+	}
+	return nil
+}
+
+func requireNoInProgressGitOperation(ctx context.Context, target Target) error {
+	for _, marker := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD", "sequencer", "rebase-merge", "rebase-apply"} {
+		path, err := runGit(ctx, target.Repository, "rev-parse", "--git-path", marker)
+
+		if err != nil {
+
+			return fmt.Errorf("inspect Git operation state: %w", err)
+
+		}
+		path = strings.TrimSpace(path)
+
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(target.Repository, path)
+
+		}
+
+		if info, err := os.Stat(path); err == nil {
+
+			if marker == "MERGE_HEAD" || marker == "CHERRY_PICK_HEAD" || marker == "REVERT_HEAD" || marker == "REBASE_HEAD" || info.IsDir() {
+
+				return fmt.Errorf("Git operation is already in progress: %s", marker)
+
+			}
+
+		} else if !os.IsNotExist(err) {
+
+			return fmt.Errorf("inspect Git operation state %s: %w", marker, err)
+
+		}
+
+	}
+	return nil
+}
+
+type gitMetadataIdentity struct {
+	gitDirPath       string
+	gitDirDev        uint64
+	gitDirIno        uint64
+	gitCommonDirPath string
+	gitCommonDirDev  uint64
+	gitCommonDirIno  uint64
+}
+
+func captureGitMetadataIdentity(ctx context.Context, target Target) (gitMetadataIdentity, error) {
+	return readGitMetadataIdentity(ctx, target)
+}
+
+func requireGitMetadataIdentity(ctx context.Context, target Target) error {
+	if target.gitDirPath == "" || target.gitCommonDirPath == "" || target.gitDirDev == 0 || target.gitDirIno == 0 || target.gitCommonDirDev == 0 || target.gitCommonDirIno == 0 {
+		return fmt.Errorf("captured Git metadata identity is unavailable")
+	}
+	current, err := readGitMetadataIdentity(ctx, target)
+	if err != nil {
+		return err
+	}
+	if current.gitDirPath != target.gitDirPath ||
+		current.gitDirDev != target.gitDirDev ||
+		current.gitDirIno != target.gitDirIno ||
+		current.gitCommonDirPath != target.gitCommonDirPath ||
+		current.gitCommonDirDev != target.gitCommonDirDev ||
+		current.gitCommonDirIno != target.gitCommonDirIno {
+		return fmt.Errorf("Git metadata directory identity changed")
+	}
+	return nil
+}
+
+func readGitMetadataIdentity(ctx context.Context, target Target) (gitMetadataIdentity, error) {
+	resolve := func(raw string) (string, uint64, uint64, error) {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			return "", 0, 0, fmt.Errorf("Git metadata directory is empty")
+		}
+		if !filepath.IsAbs(raw) {
+			raw = filepath.Join(target.Repository, raw)
+		}
+		resolved, err := filepath.EvalSymlinks(raw)
+		if err != nil {
+			return "", 0, 0, fmt.Errorf("resolve Git metadata directory identity: %w", err)
+		}
+		resolved, err = filepath.Abs(resolved)
+		if err != nil {
+			return "", 0, 0, fmt.Errorf("resolve Git metadata directory path: %w", err)
+		}
+		info, err := os.Stat(resolved)
+		if err != nil {
+			return "", 0, 0, fmt.Errorf("stat Git metadata directory: %w", err)
+		}
+		if !info.IsDir() {
+			return "", 0, 0, fmt.Errorf("Git metadata path is not a directory")
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || stat.Dev == 0 || stat.Ino == 0 {
+			return "", 0, 0, fmt.Errorf("Git metadata directory identity is unavailable")
+		}
+		return resolved, uint64(stat.Dev), uint64(stat.Ino), nil
+	}
+	gitDir, err := runGit(ctx, target.Repository, "rev-parse", "--git-dir")
+	if err != nil {
+		return gitMetadataIdentity{}, fmt.Errorf("resolve Git metadata directory: %w", err)
+	}
+	commonDir, err := runGit(ctx, target.Repository, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return gitMetadataIdentity{}, fmt.Errorf("resolve Git common metadata directory: %w", err)
+	}
+	gitPath, gitDev, gitIno, err := resolve(gitDir)
+	if err != nil {
+		return gitMetadataIdentity{}, err
+	}
+	commonPath, commonDev, commonIno, err := resolve(commonDir)
+	if err != nil {
+		return gitMetadataIdentity{}, err
+	}
+	return gitMetadataIdentity{
+		gitDirPath: gitPath, gitDirDev: gitDev, gitDirIno: gitIno,
+		gitCommonDirPath: commonPath, gitCommonDirDev: commonDev, gitCommonDirIno: commonIno,
+	}, nil
+}
+
+func requireWorktreeRoot(ctx context.Context, target Target) error {
+	root, err := runGit(ctx, target.Repository, "rev-parse", "--show-toplevel")
+	if err != nil {
+
+		return fmt.Errorf("resolve Git worktree root: %w", err)
+
+	}
+	configured, err := filepath.Abs(target.Repository)
+	if err != nil {
+
+		return fmt.Errorf("resolve configured repository: %w", err)
+
+	}
+	gitRoot, err := filepath.Abs(strings.TrimSpace(root))
+	if err != nil {
+
+		return fmt.Errorf("resolve Git worktree root path: %w", err)
+
+	}
+	if configured != gitRoot {
+
+		return fmt.Errorf("repository must be the Git worktree root")
+
+	}
+	info, err := os.Stat(configured)
+	if err != nil {
+
+		return fmt.Errorf("revalidate configured repository identity: %w", err)
+
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || stat.Dev == 0 || stat.Ino == 0 || target.repositoryDev == 0 || target.repositoryIno == 0 {
+
+		return fmt.Errorf("configured repository identity is unavailable")
+
+	}
+	if uint64(stat.Dev) != target.repositoryDev || uint64(stat.Ino) != target.repositoryIno {
+
+		return fmt.Errorf("configured repository identity changed")
+
+	}
+	if err := requireGitMetadataIdentity(ctx, target); err != nil {
+		return err
+	}
+	return nil
+}
+
+func rejectAttributesTarget(ctx context.Context, target Target) error {
+	if strings.EqualFold(filepath.Base(target.Path), ".gitattributes") {
+
+		return fmt.Errorf("git .gitattributes targets are not supported because the target can change its own filter environment")
+
+	}
+	attrs, err := runGit(ctx, target.Repository, "config", "--path", "--get", "core.attributesFile")
+	if err != nil {
+
+		return nil
+
+	}
+	attrs = strings.TrimSpace(attrs)
+	if attrs == "" {
+
+		return nil
+
+	}
+	configured, err := filepath.Abs(filepath.Join(target.Repository, target.Path))
+	if err != nil {
+
+		return fmt.Errorf("resolve configured target path: %w", err)
+
+	}
+	if !filepath.IsAbs(attrs) {
+		attrs = filepath.Join(target.Repository, attrs)
+
+	}
+	actual, err := filepath.Abs(attrs)
+	if err != nil {
+
+		return fmt.Errorf("resolve configured attributes file: %w", err)
+
+	}
+	configuredResolved, err := filepath.EvalSymlinks(configured)
+	if err != nil {
+
+		return fmt.Errorf("resolve configured target identity: %w", err)
+
+	}
+	actualResolved, err := filepath.EvalSymlinks(actual)
+	if err != nil {
+
+		return fmt.Errorf("resolve configured attributes identity: %w", err)
+
+	}
+	configuredResolved, err = filepath.Abs(configuredResolved)
+	if err != nil {
+
+		return fmt.Errorf("resolve configured target identity path: %w", err)
+
+	}
+	actualResolved, err = filepath.Abs(actualResolved)
+	if err != nil {
+
+		return fmt.Errorf("resolve configured attributes identity path: %w", err)
+
+	}
+	if configuredResolved == actualResolved {
+
+		return fmt.Errorf("git target is configured as the active attributes file")
+
+	}
+	return nil
+}
+
+func rejectGitConfigTarget(ctx context.Context, target Target) error {
+	configured, err := filepath.Abs(filepath.Join(target.Repository, target.Path))
+	if err != nil {
+
+		return fmt.Errorf("resolve configured Git target path: %w", err)
+
+	}
+	configured, err = filepath.EvalSymlinks(configured)
+	if err != nil {
+
+		return fmt.Errorf("resolve configured Git target identity: %w", err)
+
+	}
+	configured, err = filepath.Abs(configured)
+	if err != nil {
+
+		return fmt.Errorf("resolve configured Git target identity path: %w", err)
+
+	}
+
+	queue := make([]string, 0, 8)
+	seen := make(map[string]struct{})
+	addSource := func(path string) {
+
+		if path == "" {
+
+			return
+
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(target.Repository, path)
+
+		}
+
+		if abs, absErr := filepath.Abs(path); absErr == nil {
+			path = abs
+
+		}
+
+		if _, ok := seen[path]; ok {
+
+			return
+
+		}
+		seen[path] = struct{}{}
+		queue = append(queue, path)
+
+	}
+
+	output, err := runGit(ctx, target.Repository, "config", "--includes", "--show-origin", "--list")
+	if err != nil {
+
+		return fmt.Errorf("inspect Git configuration sources: %w", err)
+
+	}
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+
+		if line == "" {
+			continue
+
+		}
+		origin, _, ok := strings.Cut(line, "\t")
+
+		if !ok || !strings.HasPrefix(origin, "file:") {
+			continue
+
+		}
+
+		addSource(strings.TrimPrefix(origin, "file:"))
+
+	}
+	gitConfig, configErr := runGit(ctx, target.Repository, "rev-parse", "--git-path", "config")
+	if configErr == nil {
+
+		addSource(strings.TrimSpace(gitConfig))
+
+	}
+
+	for len(queue) > 0 {
+		source := queue[0]
+		queue = queue[1:]
+		resolvedSource, resolveErr := filepath.EvalSymlinks(source)
+
+		if resolveErr != nil {
+			continue
+
+		}
+		resolvedSource, resolveErr = filepath.Abs(resolvedSource)
+
+		if resolveErr != nil {
+
+			return fmt.Errorf("resolve Git configuration source identity: %w", resolveErr)
+
+		}
+
+		if resolvedSource == configured {
+
+			return fmt.Errorf("git target is an active Git configuration source")
+
+		}
+
+		includeOutput, includeErr := runGit(ctx, target.Repository, "config", "--file", resolvedSource, "--path", "--get-regexp", `^include.*\.path$`)
+
+		if includeErr != nil {
+			continue
+
+		}
+		for _, line := range strings.Split(includeOutput, "\n") {
+			line = strings.TrimSpace(line)
+
+			if line == "" {
+				continue
+
+			}
+			keyEnd := strings.IndexAny(line, " \t")
+			if keyEnd < 0 {
+				continue
+
+			}
+			include := strings.TrimSpace(line[keyEnd:])
+			if include == "" {
+				continue
+
+			}
+
+			if !filepath.IsAbs(include) {
+				include = filepath.Join(filepath.Dir(resolvedSource), include)
+
+			}
+
+			addSource(include)
+
+		}
+
+	}
+	return nil
+}
+
+func rejectGrafts(ctx context.Context, target Target) error {
+	path, err := runGit(ctx, target.Repository, "rev-parse", "--git-path", "info/grafts")
+	if err != nil {
+
+		return fmt.Errorf("inspect Git graft file: %w", err)
+
+	}
+	path = strings.TrimSpace(path)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(target.Repository, path)
+
+	}
+	if _, err := os.Stat(path); err == nil {
+
+		return fmt.Errorf("Git graft file is not supported")
+
+	} else if !os.IsNotExist(err) {
+
+		return fmt.Errorf("inspect Git graft file: %w", err)
+
+	}
+	return nil
+}
+
+func rejectReplaceRefs(ctx context.Context, target Target) error {
+	output, err := runGit(ctx, target.Repository, "replace", "-l")
+	if err != nil {
+		return fmt.Errorf("inspect Git replacement refs: %w", err)
+	}
+	if strings.TrimSpace(output) != "" {
+		return fmt.Errorf("git replacement refs are active; replacement objects are not supported")
+	}
+	return nil
+}
+
+func rejectConfiguredFilters(ctx context.Context, target Target) error {
+	paths, err := runGit(ctx, target.Repository, "ls-files", "-z", "--cached")
+	if err != nil {
+
+		return fmt.Errorf("inspect tracked Git paths: %w", err)
+
+	}
+	if strings.TrimSuffix(paths, "\x00") == "" {
+
+		return nil
+
+	}
+	attrs, err := runGitInput(ctx, target.Repository, []byte(paths), "check-attr", "-z", "--stdin", "filter")
+	if err != nil {
+
+		return fmt.Errorf("inspect Git clean filters: %w", err)
+
+	}
+	parts := strings.Split(strings.TrimSuffix(attrs, "\x00"), "\x00")
+	if len(parts)%3 != 0 {
+
+		return fmt.Errorf("unexpected Git clean filter metadata")
+
+	}
+	configuredDrivers := make(map[string]struct{})
+	cleanDrivers, cleanErr := )
 	if cleanErr == nil {
 		for _, name := range strings.Split(cleanDrivers, "\n") {
 			name = strings.TrimSpace(name)
