@@ -1125,6 +1125,15 @@ func requireNoInProgressGitOperation(ctx context.Context, target Target) error {
 	return nil
 }
 
+type gitMetadataIdentity struct {
+	gitDirPath       string
+	gitDirDev        uint64
+	gitDirIno        uint64
+	gitCommonDirPath string
+	gitCommonDirDev  uint64
+	gitCommonDirIno  uint64
+}
+
 func captureGitMetadataIdentity(ctx context.Context, target Target) (gitMetadataIdentity, error) {
 	return readGitMetadataIdentity(ctx, target)
 }
