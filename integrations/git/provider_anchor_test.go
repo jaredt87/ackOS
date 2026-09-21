@@ -31,7 +31,7 @@ func TestAtomicWriteTargetRejectsNestedSymlinkParent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := atomicWriteTarget(target, []byte("updated"))
+	err := atomicWriteTarget(target, []byte("initial"), []byte("updated"))
 	if err == nil || !strings.Contains(err.Error(), "parent directory") {
 		t.Fatalf("atomicWriteTarget error = %v, want nested symlink-parent rejection", err)
 	}
