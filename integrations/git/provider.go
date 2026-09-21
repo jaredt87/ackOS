@@ -90,6 +90,7 @@ func (s *lifecycleState) parent(executionID string) (executionParent, error) {
 	return parent, nil
 }
 
+// discard releases the parent snapshot once the execution lifecycle ends.
 func (s *lifecycleState) discard(executionID string) {
 	if s == nil {
 		return
@@ -189,8 +190,9 @@ func NewTarget(repository, path, subject string) (Target, error) {
 		return Target{}, fmt.Errorf("git target is not a regular file")
 	}
 	if targetInfo.Size() == 0 {
-		return Target{}, fmt.Errorf("git target must not be empty")
+		return Target{}, fmt.Errorf("git target must not be empty: empty provider states are unsupported")
 	}
+	// Special permission bits cannot be preserved by Git's 100644/100755 model.
 	if targetInfo.Mode()&os.ModeSetuid != 0 || targetInfo.Mode()&os.ModeSetgid != 0 || targetInfo.Mode()&os.ModeSticky != 0 {
 		return Target{}, fmt.Errorf("git target uses unsupported special permission bits")
 	}
@@ -213,6 +215,7 @@ func (o Observer) Observe(ctx context.Context, subject string) (kernel.Observati
 		return kernel.Observation{}, err
 
 	}
+	// Observation is bound to the captured worktree and Git metadata identities.
 	if err := validateNoSymlinks(o.Target); err != nil {
 
 		return kernel.Observation{}, err
@@ -315,6 +318,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(err)
 
 	}
+	// Git ancestry must remain real; --no-replace-objects does not disable grafts.
 	status, err := e.git(ctx, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=all")
 	if err != nil {
 
@@ -382,7 +386,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	}
 	if liveMode != expectedMode {
 
-		return fail(fmt.Errorf("Git target mode does not match parent before mutation"))
+		return fail(fmt.Errorf("Git target mode does not match parent before mutation; refusing a mode-only drift"))
 
 	}
 	beforeHash, err := gitBlobHash(ctx, e.Target, t.Before)
@@ -610,6 +614,7 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	if err := rejectGrafts(ctx, v.Target); err != nil {
 		return kernel.Observation{}, err
 	}
+	// Verification uses the same ancestry guard as execution.
 	status, err := v.git(ctx, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 
@@ -618,7 +623,7 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	}
 	if status != "" {
 
-		return kernel.Observation{}, fmt.Errorf("git worktree is not clean during verification")
+		return kernel.Observation{}, fmt.Errorf("git worktree is not clean during verification; refusing dirty evidence")
 
 	}
 	content, err := v.read(ctx)
@@ -707,7 +712,7 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	}
 	if indexHash != expectedHash {
 
-		return kernel.Observation{}, fmt.Errorf("Git index target blob changed during verification")
+		return kernel.Observation{}, fmt.Errorf("Git index target blob changed during verification; staged content is not authorized")
 
 	}
 	if err := verifyLiveIndexMatchesHead(ctx, v.Target, verifiedHead); err != nil {
@@ -715,6 +720,7 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, err
 
 	}
+	// The complete index must still describe the verified HEAD.
 	finalHead, err := v.git(ctx, "rev-parse", "HEAD")
 	if err != nil {
 
@@ -747,6 +753,7 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	if finalContent != t.After {
 		return kernel.Observation{}, fmt.Errorf("Git file changed at verification return boundary")
 	}
+	// Revalidate after the final content capture so returned evidence is fresh.
 	finalStatus, err = v.git(ctx, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 		return kernel.Observation{}, fmt.Errorf("re-read Git worktree status after verification content capture: %w", err)
@@ -954,6 +961,7 @@ func validateMutationBoundary(ctx context.Context, target Target, expected strin
 	return nil
 }
 
+// openRepositoryRoot revalidates the captured repository identity before use.
 func openRepositoryRoot(target Target) (int, error) {
 	if target.repositoryDev == 0 || target.repositoryIno == 0 {
 		return -1, fmt.Errorf("configured repository identity is unavailable")
@@ -2412,6 +2420,7 @@ func runGitTargetWithInput(ctx context.Context, target Target, input []byte, ove
 	}
 	anchored["GIT_DIR"] = fmt.Sprintf("/proc/self/fd/%d", gitFD)
 	anchored["GIT_COMMON_DIR"] = fmt.Sprintf("/proc/self/fd/%d", commonFD)
+	// Git commands use the captured root descriptor, never the replaceable pathname.
 	anchored["GIT_WORK_TREE"] = fmt.Sprintf("/proc/self/fd/%d", rootFD)
 	// Grafts can fabricate ancestry even when --no-replace-objects is used.
 	// Disable them for every anchored Git invocation; rejectGrafts separately
