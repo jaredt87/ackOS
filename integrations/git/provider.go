@@ -1578,6 +1578,9 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 }
 
 func rejectGitConfigTarget(ctx context.Context, target Target) error {
+	if err := rejectCommandScopeConfigEnvironment(); err != nil {
+		return err
+	}
 	configured, err := filepath.Abs(filepath.Join(target.Repository, target.Path))
 	if err != nil {
 
@@ -2525,4 +2528,14 @@ func sanitizedGitEnv() []string {
 		env = append(env, entry)
 	}
 	return env
+}
+
+func rejectCommandScopeConfigEnvironment() error {
+	for _, entry := range os.Environ() {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok && strings.HasPrefix(key, "GIT_CONFIG_") {
+			return fmt.Errorf("Git command-scope configuration environment is not allowed")
+		}
+	}
+	return nil
 }
