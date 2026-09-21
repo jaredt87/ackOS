@@ -1268,23 +1268,58 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 		return fmt.Errorf("git .gitattributes targets are not supported because the target can change its own filter environment")
 
 	}
-	attrs, err := runGit(ctx, target.Repository, "config", "--path", "--get", "core.attributesFile")
-	if err != nil {
-
-		return nil
-
-	}
-	attrs = strings.TrimSpace(attrs)
-	if attrs == "" {
-
-		return nil
-
-	}
 	configured, err := filepath.Abs(filepath.Join(target.Repository, target.Path))
 	if err != nil {
 
 		return fmt.Errorf("resolve configured target path: %w", err)
 
+	}
+	configuredResolved, resolveErr := filepath.EvalSymlinks(configured)
+	if resolveErr == nil {
+		configuredResolved, resolveErr = filepath.Abs(configuredResolved)
+		if resolveErr != nil {
+			return fmt.Errorf("resolve configured target identity path: %w", resolveErr)
+		}
+	}
+
+	// Git loads a default per-user attributes file even when
+	// core.attributesFile is unset. A tracked target at either default
+	// location must therefore be rejected before mutation.
+	defaultAttrs := make([]string, 0, 2)
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		defaultAttrs = append(defaultAttrs, filepath.Join(xdg, "git", "attributes"))
+	} else if home, homeErr := os.UserHomeDir(); homeErr == nil {
+		defaultAttrs = append(defaultAttrs, filepath.Join(home, ".config", "git", "attributes"))
+	}
+	if home, homeErr := os.UserHomeDir(); homeErr == nil && os.Getenv("XDG_CONFIG_HOME") == "" {
+		defaultAttrs = append(defaultAttrs, filepath.Join(home, ".config", "git", "attributes"))
+	}
+	for _, candidate := range defaultAttrs {
+		candidateAbs, absErr := filepath.Abs(candidate)
+		if absErr != nil {
+			return fmt.Errorf("resolve default attributes file: %w", absErr)
+		}
+		candidateResolved, candidateErr := filepath.EvalSymlinks(candidateAbs)
+		if candidateErr == nil {
+			candidateResolved, candidateErr = filepath.Abs(candidateResolved)
+			if candidateErr != nil {
+				return fmt.Errorf("resolve default attributes identity path: %w", candidateErr)
+			}
+			if configuredResolved == candidateResolved {
+				return fmt.Errorf("git target is configured as the active attributes file")
+			}
+		} else if candidateAbs == configured {
+			return fmt.Errorf("git target is configured as the active attributes file")
+		}
+	}
+
+	attrs, err := runGit(ctx, target.Repository, "config", "--path", "--get", "core.attributesFile")
+	if err != nil {
+		return nil
+	}
+	attrs = strings.TrimSpace(attrs)
+	if attrs == "" {
+		return nil
 	}
 	if !filepath.IsAbs(attrs) {
 		attrs = filepath.Join(target.Repository, attrs)
