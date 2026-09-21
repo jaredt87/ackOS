@@ -24,13 +24,23 @@ jobs:
           python -m json.tool .claude-plugin/plugin.json >/dev/null
           python -m json.tool gemini-extension.json >/dev/null
           while IFS= read -r skill; do
-            awk '
-              NR == 1 && $0 != "---" { exit 1 }
-              NR > 1 && $0 == "---" { found_end = 1 }
-              !found_end && $0 ~ /^description:[[:space:]]*[^#[:space:]].*$/ { found_description = 1 }
-              END { exit !(found_description && found_end) }
-            ' "$skill" || {
-              echo "Missing YAML description frontmatter in $skill"
+            ruby -e '
+              require "yaml"
+              lines = STDIN.read.lines
+              abort unless lines.first&.strip == "---"
+              end_index = lines[1..]&.index { |line| line.strip == "---" }
+              abort unless end_index
+              frontmatter = lines[1, end_index].join
+              begin
+                metadata = YAML.safe_load(frontmatter, permitted_classes: [], aliases: false)
+              rescue Psych::Exception
+                abort
+              end
+              abort unless metadata.is_a?(Hash)
+              description = metadata["description"]
+              abort unless description.is_a?(String) && !description.strip.empty?
+            ' < "$skill" || {
+              echo "Invalid YAML description frontmatter in $skill"
               exit 1
             }
           done < <(git ls-files -- '*SKILL.md')
