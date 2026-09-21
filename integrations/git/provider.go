@@ -1437,11 +1437,12 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 
 		}
 		includeParts := strings.Split(strings.TrimSuffix(includeOutput, "\x00"), "\x00")
-		if len(includeParts)%2 != 0 {
-			return fmt.Errorf("unexpected Git include path metadata")
-		}
-		for i := 0; i < len(includeParts); i += 2 {
-			include := strings.TrimSpace(includeParts[i+1])
+		for _, record := range includeParts {
+			_, include, ok := strings.Cut(record, "\n")
+			if !ok {
+				return fmt.Errorf("unexpected Git include path metadata")
+			}
+			include = strings.TrimSpace(include)
 			if include == "" {
 				continue
 			}
