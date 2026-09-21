@@ -30,7 +30,7 @@ jobs:
               !found_end && $0 ~ /^description:/ { found_description = 1 }
               END { exit !(found_description && found_end) }
             ' "$skill" || {
-              echo "Missing description: frontmatter in $skill"
+              echo "Missing YAML description frontmatter in $skill"
               exit 1
             }
           done < <(git ls-files '*SKILL.md')
