@@ -298,7 +298,6 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 
 	}
 	if err := rejectGitConfigTarget(ctx, e.Target); err != nil {
-
 		return fail(err)
 
 	}
@@ -597,7 +596,6 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	if content != t.After {
 
 		return kernel.Observation{}, fmt.Errorf("git file state mismatch")
-
 	}
 	if err := verifyLatestCommit(v, ctx, expectedParent.head, t, authority.ExecutionID); err != nil {
 
@@ -898,7 +896,6 @@ func validateMutationBoundary(ctx context.Context, target Target, expected strin
 	if content != expected {
 
 		return fmt.Errorf("git file changed at mutation boundary")
-
 	}
 	return nil
 }
@@ -1197,8 +1194,7 @@ func readGitMetadataIdentity(ctx context.Context, target Target) (gitMetadataIde
 		return gitMetadataIdentity{}, err
 	}
 	commonPath, commonDev, commonIno, err := resolve(commonDir)
-	if err != nil {
-		return gitMetadataIdentity{}, err
+	if err != nil {		return gitMetadataIdentity{}, err
 	}
 	return gitMetadataIdentity{
 		gitDirPath: gitPath, gitDirDev: gitDev, gitDirIno: gitIno,
@@ -1497,8 +1493,7 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 			}
 			addSource(include)
 		}
-	}
-	return nil
+	}	return nil
 }
 
 func rejectSubmodules(ctx context.Context, target Target) error {
@@ -1797,8 +1792,7 @@ func updateCapturedRef(ctx context.Context, target Target, headRef, commit, pare
 	return nil
 }
 
-func verifyCommit(e Executor, ctx context.Context, parent string, t kernel.Transition, executionID string) error {
-	return verifyCommitAt(ctx, e.Target, func(args ...string) (string, error) { return e.git(ctx, args...) }, parent, t, executionID)
+func verifyCommit(e Executor, ctx context.Context, parent string, t kernel.Transition, executionID string) error {	return verifyCommitAt(ctx, e.Target, func(args ...string) (string, error) { return e.git(ctx, args...) }, parent, t, executionID)
 }
 
 func verifyLatestCommit(v Verifier, ctx context.Context, expectedParent string, t kernel.Transition, executionID string) error {
@@ -1806,22 +1800,23 @@ func verifyLatestCommit(v Verifier, ctx context.Context, expectedParent string, 
 }
 
 func verifyLiveIndexMatchesHead(ctx context.Context, target Target, head string) error {
+	status, err := runGit(ctx, target.Repository, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		return fmt.Errorf("read Git worktree status for verification: %w", err)
+	}
+	if status != "" {
+		return fmt.Errorf("Git worktree is not clean during verification")
+	}
 	indexTree, err := runGit(ctx, target.Repository, "write-tree")
 	if err != nil {
-
 		return fmt.Errorf("write live Git index tree for verification: %w", err)
-
 	}
 	expectedTree, err := runGit(ctx, target.Repository, "--no-replace-objects", "rev-parse", head+"^{tree}")
 	if err != nil {
-
 		return fmt.Errorf("read verified Git tree for index verification: %w", err)
-
 	}
 	if strings.TrimSpace(indexTree) != strings.TrimSpace(expectedTree) {
-
 		return fmt.Errorf("Git index contains unauthorized staged content")
-
 	}
 	return nil
 }
@@ -2097,8 +2092,7 @@ func gitBlobHash(ctx context.Context, target Target, content string) (string, er
 	}
 	name := tmp.Name()
 	defer os.Remove(name)
-	if _, err := tmp.WriteString(content); err != nil {
-		_ = tmp.Close()
+	if _, err := tmp.WriteString(content); err != nil {		_ = tmp.Close()
 
 		return "", fmt.Errorf("write temporary Git blob input: %w", err)
 
