@@ -1328,7 +1328,7 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 		return fmt.Errorf("resolve configured attributes file: %w", err)
 
 	}
-	configuredResolved, err := filepath.EvalSymlinks(configured)
+	configuredResolved, err = filepath.EvalSymlinks(configured)
 	if err != nil {
 
 		return fmt.Errorf("resolve configured target identity: %w", err)
