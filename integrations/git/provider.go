@@ -1626,15 +1626,46 @@ func rejectReplaceRefs(ctx context.Context, target Target) error {
 }
 
 func rejectConfiguredFilters(ctx context.Context, target Target) error {
-	output, err := runGitTarget(ctx, target, "config", "--includes", "--name-only", "--get-regexp", "^filter\\..*\\.(clean|process)$")
+	paths, err := runGitTarget(ctx, target, "ls-files", "-z", "--cached")
 	if err != nil {
-		if strings.Contains(err.Error(), "exit status 1") {
-			return nil
-		}
+		return fmt.Errorf("inspect tracked Git paths: %w", err)
+	}
+	if strings.TrimSuffix(paths, "\x00") == "" {
+		return nil
+	}
+	attrs, err := runGitTargetInput(ctx, target, []byte(paths), "check-attr", "-z", "--stdin", "filter")
+	if err != nil {
 		return fmt.Errorf("inspect Git clean filters: %w", err)
 	}
-	if strings.TrimSpace(output) != "" {
-		return fmt.Errorf("Git repository has configured clean/process filters; filtered repositories are not supported")
+	parts := strings.Split(strings.TrimSuffix(attrs, "\x00"), "\x00")
+	if len(parts)%3 != 0 {
+		return fmt.Errorf("unexpected Git clean filter metadata")
+	}
+	configuredDrivers := make(map[string]struct{})
+	filterDrivers, filterErr := runGitTarget(ctx, target, "config", "--includes", "--name-only", "--get-regexp", "^filter\\..*\\.(clean|process)$")
+	if filterErr == nil {
+		for _, name := range strings.Split(filterDrivers, "\n") {
+			name = strings.TrimSpace(name)
+			if !strings.HasPrefix(name, "filter.") {
+				continue
+			}
+			name = strings.TrimPrefix(name, "filter.")
+			if driver, _, ok := strings.Cut(name, "."); ok {
+				configuredDrivers[driver] = struct{}{}
+			}
+		}
+	}
+	for i := 0; i < len(parts); i += 3 {
+		if parts[i+1] != "filter" {
+			return fmt.Errorf("unexpected Git clean filter metadata")
+		}
+		value := parts[i+2]
+		if value == "unspecified" || value == "unset" {
+			if _, configured := configuredDrivers[value]; !configured {
+				continue
+			}
+		}
+		return fmt.Errorf("git repository uses a configured clean filter; filtered repositories are not supported")
 	}
 	return nil
 }
