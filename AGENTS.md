@@ -13,7 +13,7 @@
 * **Vet:** `go vet ./...`
 * **Unit Testing:** `go test ./...`
 * **Race Testing:** `go test -race ./...` (required — the kernel's atomicity/CAS guarantees are meaningless if this doesn't pass)
-* **Agent-integration manifest check:** if you touch `.claude-plugin/plugin.json`, `gemini-extension.json`, or any `SKILL.md`, re-run the "Validate agent integrations" block in CI locally (JSON validity + required `description:` frontmatter) before proposing a PR.
+* **Agent-integration manifest check:** if you touch `.claude-plugin/plugin.json`, `gemini-extension.json`, or any `SKILL.md`, re-run the "Validate agent integrations" block in CI locally; it validates every tracked `SKILL.md` plus the required JSON and `description:` frontmatter checks before proposing a PR.
 
 ### 3. Behavioral Boundaries
 
