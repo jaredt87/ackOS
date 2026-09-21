@@ -227,6 +227,9 @@ func (o Observer) Observe(ctx context.Context, subject string) (kernel.Observati
 	if err := requireWorktreeRoot(ctx, o.Target); err != nil {
 		return kernel.Observation{}, fmt.Errorf("repository identity changed during observation: %w", err)
 	}
+	if err := validateNoSymlinks(o.Target); err != nil {
+		return kernel.Observation{}, fmt.Errorf("repository path changed during observation: %w", err)
+	}
 	return kernel.NewObservation(o.Target.Subject, content, 0, time.Now().UTC())
 }
 
