@@ -315,7 +315,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(err)
 
 	}
-	status, err := e.git(ctx, "status", "--porcelain", "--untracked-files=all")
+	status, err := e.git(ctx, "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=all")
 	if err != nil {
 
 		return fail(fmt.Errorf("read git status: %w", err))
@@ -345,12 +345,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err != nil {
 		return fail(err)
 	}
-	lifecycleComplete := false
-	defer func() {
-		if !lifecycleComplete {
-			e.Target.lifecycle.discard(authority.ExecutionID)
-		}
-	}()
+	defer e.Target.lifecycle.discard(authority.ExecutionID)
 
 	head := expectedParent.head
 	headRef := expectedParent.ref
@@ -521,7 +516,6 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(fmt.Errorf("Git HEAD changed after commit verification"))
 
 	}
-	lifecycleComplete = true
 	return kernel.ExecutionResult{Success: true, Message: "git file transitioned and committed"}
 }
 
@@ -1632,54 +1626,15 @@ func rejectReplaceRefs(ctx context.Context, target Target) error {
 }
 
 func rejectConfiguredFilters(ctx context.Context, target Target) error {
-	paths, err := runGitTarget(ctx, target, "ls-files", "-z", "--cached")
+	output, err := runGitTarget(ctx, target, "config", "--includes", "--name-only", "--get-regexp", "^filter\\..*\\.(clean|process)$")
 	if err != nil {
-
-		return fmt.Errorf("inspect tracked Git paths: %w", err)
-
-	}
-	if strings.TrimSuffix(paths, "\x00") == "" {
-
-		return nil
-
-	}
-	attrs, err := runGitTargetInput(ctx, target, []byte(paths), "check-attr", "-z", "--stdin", "filter")
-	if err != nil {
-
+		if strings.Contains(err.Error(), "exit status 1") {
+			return nil
+		}
 		return fmt.Errorf("inspect Git clean filters: %w", err)
-
 	}
-	parts := strings.Split(strings.TrimSuffix(attrs, "\x00"), "\x00")
-	if len(parts)%3 != 0 {
-
-		return fmt.Errorf("unexpected Git clean filter metadata")
-
-	}
-	configuredDrivers := make(map[string]struct{})
-	filterDrivers, filterErr := runGitTarget(ctx, target, "config", "--includes", "--name-only", "--get-regexp", "^filter\\..*\\.(clean|process)$")
-	if filterErr == nil {
-		for _, name := range strings.Split(filterDrivers, "\n") {
-			name = strings.TrimSpace(name)
-			if !strings.HasPrefix(name, "filter.") {
-				continue
-			}
-			name = strings.TrimPrefix(name, "filter.")
-			if driver, _, ok := strings.Cut(name, "."); ok {
-				configuredDrivers[driver] = struct{}{}
-			}
-		}
-	}
-	for i := 0; i < len(parts); i += 3 {
-		if parts[i+1] != "filter" {
-			return fmt.Errorf("unexpected Git clean filter metadata")
-		}
-		value := parts[i+2]
-		if value == "unspecified" || value == "unset" {
-			if _, configured := configuredDrivers[value]; !configured {
-				continue
-			}
-		}
-		return fmt.Errorf("git repository uses a configured clean filter; filtered repositories are not supported")
+	if strings.TrimSpace(output) != "" {
+		return fmt.Errorf("Git repository has configured clean/process filters; filtered repositories are not supported")
 	}
 	return nil
 }
@@ -1960,6 +1915,9 @@ func verifyCommitAt(ctx context.Context, target Target, git func(...string) (str
 
 		return fmt.Errorf("committed Git target mode changed unexpectedly")
 
+	}
+	if targetMode != "100644" && targetMode != "100755" {
+		return fmt.Errorf("committed Git target mode is not a regular file")
 	}
 	beforeHash, err := safeGit("rev-parse", head+"^:./"+target.Path)
 	if err != nil {
