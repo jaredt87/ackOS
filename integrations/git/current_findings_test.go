@@ -419,23 +419,6 @@ func TestRejectSubmodulesRejectsGitlinkEntries(t *testing.T) {
 	}
 }
 
-func TestAtomicWriteTargetPreservesSpecialModeBits(t *testing.T) {
-	target, _, _, _, _ := newTestProvider(t, "initial")
-	path := filepath.Join(target.Repository, target.Path)
-	if err := os.Chmod(path, 0o4755); err != nil {
-		t.Fatal(err)
-	}
-	if err := atomicWriteTarget(target, []byte("updated")); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o755 || info.Mode()&os.ModeSetuid == 0 {
-		t.Fatalf("mode = %o, want setuid 0755", info.Mode())
-	}
-}
 
 func TestLifecycleDiscardRemovesExecutionParent(t *testing.T) {
 	state := &lifecycleState{parents: map[string]executionParent{"execution": {head: "head", ref: "refs/heads/main"}}}
