@@ -1096,70 +1096,33 @@ func requireCommitIdentity(ctx context.Context, target Target) error {
 }
 
 func requireIndexUnlocked(ctx context.Context, target Target) error {
-	path, err := runGitTarget(ctx, target, "rev-parse", "--git-path", "index.lock")
-	if err != nil {
-
-		return fmt.Errorf("inspect Git index lock: %w", err)
-
+	if target.gitDirPath == "" {
+		return fmt.Errorf("captured Git metadata identity is unavailable")
 	}
-	path = strings.TrimSpace(path)
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(target.Repository, path)
-
-	}
+	path := filepath.Join(target.gitDirPath, "index.lock")
 	if _, err := os.Stat(path); err == nil {
-
 		return fmt.Errorf("Git index is locked")
-
 	} else if !os.IsNotExist(err) {
-
 		return fmt.Errorf("inspect Git index lock: %w", err)
-
 	}
 	return nil
 }
 
 func requireNoInProgressGitOperation(ctx context.Context, target Target) error {
+	if target.gitDirPath == "" {
+		return fmt.Errorf("captured Git metadata identity is unavailable")
+	}
 	for _, marker := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD", "sequencer", "rebase-merge", "rebase-apply"} {
-		path, err := runGitTarget(ctx, target, "rev-parse", "--git-path", marker)
-
-		if err != nil {
-
-			return fmt.Errorf("inspect Git operation state: %w", err)
-
-		}
-		path = strings.TrimSpace(path)
-
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(target.Repository, path)
-
-		}
-
+		path := filepath.Join(target.gitDirPath, marker)
 		if info, err := os.Stat(path); err == nil {
-
 			if marker == "MERGE_HEAD" || marker == "CHERRY_PICK_HEAD" || marker == "REVERT_HEAD" || marker == "REBASE_HEAD" || info.IsDir() {
-
 				return fmt.Errorf("Git operation is already in progress: %s", marker)
-
 			}
-
 		} else if !os.IsNotExist(err) {
-
 			return fmt.Errorf("inspect Git operation state %s: %w", marker, err)
-
 		}
-
 	}
 	return nil
-}
-
-type gitMetadataIdentity struct {
-	gitDirPath       string
-	gitDirDev        uint64
-	gitDirIno        uint64
-	gitCommonDirPath string
-	gitCommonDirDev  uint64
-	gitCommonDirIno  uint64
 }
 
 func captureGitMetadataIdentity(ctx context.Context, target Target) (gitMetadataIdentity, error) {
