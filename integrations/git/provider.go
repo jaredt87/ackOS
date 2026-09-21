@@ -2862,7 +2862,7 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 
 		}
 
-		includeOutput, includeErr := )
+		)
 
 		if includeErr != nil {
 			continue
@@ -2947,7 +2947,7 @@ func rejectConfiguredFilters(ctx context.Context, target Target) error {
 
 	}
 	configuredDrivers := make(map[string]struct{})
-	cleanDrivers, cleanErr := runGit(ctx, target.Repository, "config", "--includes", "--name-only", "--get-regexp", "^filter\\..*\\.clean$")
+	filterDrivers, filterErr := runGit(ctx, target.Repository, "config", "--includes", "--name-only", "--get-regexp", `^filter\..*\.(clean|process)$`)
 	if filterErr == nil {
 		for _, name := range strings.Split(filterDrivers, "\n") {
 			name = strings.TrimSpace(name)
@@ -2960,12 +2960,6 @@ func rejectConfiguredFilters(ctx context.Context, target Target) error {
 			}
 		}
 	}
-	for i := 0; i < len(parts); i += 3 {
-		if parts[i+1] != "filter" {
-			return fmt.Errorf("unexpected Git clean filter metadata")
-		}
-		value := parts[i+2]
-		if value == "unspecified" || value == "unset" {
 			if _, configured := configuredDrivers[value]; !configured {
 				continue
 			}
