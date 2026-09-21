@@ -185,8 +185,11 @@ func NewTarget(repository, path, subject string) (Target, error) {
 	if err != nil {
 		return Target{}, fmt.Errorf("stat git target: %w", err)
 	}
-	if targetInfo.Size() == 0 {
-		return Target{}, fmt.Errorf("git target must not be empty")
+	if !targetInfo.Mode().IsRegular() {
+		return Target{}, fmt.Errorf("git target is not a regular file")
+	}
+	if targetInfo.Mode()&os.ModeSetuid != 0 || targetInfo.Mode()&os.ModeSetgid != 0 || targetInfo.Mode()&os.ModeSticky != 0 {
+		return Target{}, fmt.Errorf("git target uses unsupported special permission bits")
 	}
 	return target, nil
 }
@@ -1083,6 +1086,29 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 			return fmt.Errorf("restore concurrently replaced git target: %w", err)
 		}
 		return fmt.Errorf("git target changed before atomic replacement")
+	}
+	exchangedFD, err := syscall.Openat(parentFD, tmpName, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return fmt.Errorf("open exchanged git target: %w", err)
+	}
+	exchangedFile := os.NewFile(uintptr(exchangedFD), filepath.Join(filepath.Dir(path), tmpName))
+	if exchangedFile == nil {
+		_ = syscall.Close(exchangedFD)
+		return fmt.Errorf("open exchanged git target: invalid file descriptor")
+	}
+	exchangedContent, readErr := io.ReadAll(exchangedFile)
+	closeErr := exchangedFile.Close()
+	if readErr != nil {
+		return fmt.Errorf("read exchanged git target: %w", readErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close exchanged git target: %w", closeErr)
+	}
+	if !bytes.Equal(exchangedContent, expected) {
+		if err := unix.Renameat2(parentFD, tmpName, parentFD, name, unix.RENAME_EXCHANGE); err != nil {
+			return fmt.Errorf("restore concurrently modified git target: %w", err)
+		}
+		return fmt.Errorf("git target content changed before atomic replacement")
 	}
 	if err := syscall.Unlinkat(parentFD, tmpName); err != nil {
 		return fmt.Errorf("remove exchanged git target: %w", err)
@@ -2189,6 +2215,26 @@ func (v Verifier) git(ctx context.Context, args ...string) (string, error) {
 	return runGit(ctx, v.Target.Repository, args...)
 }
 
+func openRepositoryRoot(target Target) (int, error) {
+	if target.Repository == "" || target.repositoryDev == 0 || target.repositoryIno == 0 {
+		return -1, fmt.Errorf("captured repository identity is unavailable")
+	}
+	fd, err := syscall.Open(target.Repository, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return -1, fmt.Errorf("open captured repository root: %w", err)
+	}
+	var stat syscall.Stat_t
+	if err := syscall.Fstat(fd, &stat); err != nil {
+		_ = syscall.Close(fd)
+		return -1, fmt.Errorf("stat captured repository root: %w", err)
+	}
+	if uint64(stat.Dev) != target.repositoryDev || uint64(stat.Ino) != target.repositoryIno {
+		_ = syscall.Close(fd)
+		return -1, fmt.Errorf("Git repository root identity changed")
+	}
+	return fd, nil
+}
+
 func openGitMetadataDir(path string, expectedDev, expectedIno uint64) (int, error) {
 	if path == "" || expectedDev == 0 || expectedIno == 0 {
 		return -1, fmt.Errorf("captured Git metadata identity is unavailable")
@@ -2222,6 +2268,11 @@ func runGitTargetWithEnv(ctx context.Context, target Target, env map[string]stri
 }
 
 func runGitTargetWithInput(ctx context.Context, target Target, input []byte, overrides map[string]string, args ...string) (string, error) {
+	rootFD, err := openRepositoryRoot(target)
+	if err != nil {
+		return "", err
+	}
+	defer syscall.Close(rootFD)
 	gitFD, err := openGitMetadataDir(target.gitDirPath, target.gitDirDev, target.gitDirIno)
 	if err != nil {
 		return "", err
@@ -2238,7 +2289,8 @@ func runGitTargetWithInput(ctx context.Context, target Target, input []byte, ove
 	}
 	anchored["GIT_DIR"] = fmt.Sprintf("/proc/self/fd/%d", gitFD)
 	anchored["GIT_COMMON_DIR"] = fmt.Sprintf("/proc/self/fd/%d", commonFD)
-	return runGitWithInput(ctx, target.Repository, input, anchored, args...)
+	anchored["GIT_WORK_TREE"] = fmt.Sprintf("/proc/self/fd/%d", rootFD)
+	return runGitWithInput(ctx, fmt.Sprintf("/proc/self/fd/%d", rootFD), input, anchored, args...)
 }
 
 func runGit(ctx context.Context, repository string, args ...string) (string, error) {
