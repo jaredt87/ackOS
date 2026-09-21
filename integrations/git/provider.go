@@ -1079,7 +1079,8 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if err := unix.Renameat2(parentFD, tmpName, parentFD, name, unix.RENAME_EXCHANGE); err != nil {
 		return fmt.Errorf("atomically compare-and-replace git target: %w", err)
 	}
-	exchangedInfo, err := os.Stat(filepath.Join(filepath.Dir(path), tmpName))
+	exchangedPath := filepath.Join(filepath.Dir(path), tmpName)
+	exchangedInfo, err := os.Stat(exchangedPath)
 	if err != nil {
 		return fmt.Errorf("inspect exchanged git target: %w", err)
 	}
@@ -1089,6 +1090,12 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 			return fmt.Errorf("restore concurrently replaced git target: %w", err)
 		}
 		return fmt.Errorf("git target changed before atomic replacement")
+	}
+	if err := verifyExchangedTargetMetadata(exchangedPath, exchangedInfo, info); err != nil {
+		if rollbackErr := unix.Renameat2(parentFD, tmpName, parentFD, name, unix.RENAME_EXCHANGE); rollbackErr != nil {
+			return fmt.Errorf("restore concurrently modified git target: %w (metadata check: %v)", rollbackErr, err)
+		}
+		return err
 	}
 	exchangedFD, err := syscall.Openat(parentFD, tmpName, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
@@ -1123,6 +1130,45 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	return nil
 }
 
+func verifyExchangedTargetMetadata(path string, exchanged, original os.FileInfo) error {
+	if !exchanged.Mode().IsRegular() {
+		return fmt.Errorf("git target type changed before atomic replacement")
+	}
+	if exchanged.Mode().Perm() != original.Mode().Perm() ||
+		exchanged.Mode()&os.ModeSetuid != original.Mode()&os.ModeSetuid ||
+		exchanged.Mode()&os.ModeSetgid != original.Mode()&os.ModeSetgid ||
+		exchanged.Mode()&os.ModeSticky != original.Mode()&os.ModeSticky {
+		return fmt.Errorf("git target permissions changed before atomic replacement")
+	}
+	exchangedStat, exchangedOK := exchanged.Sys().(*syscall.Stat_t)
+	originalStat, originalOK := original.Sys().(*syscall.Stat_t)
+	if !exchangedOK || !originalOK {
+		return fmt.Errorf("inspect git target metadata during atomic replacement")
+	}
+	if exchangedStat.Uid != originalStat.Uid || exchangedStat.Gid != originalStat.Gid {
+		return fmt.Errorf("git target ownership changed before atomic replacement")
+	}
+	if exchangedStat.Nlink != originalStat.Nlink {
+		return fmt.Errorf("git target link count changed before atomic replacement")
+	}
+	for size := 256; ; size *= 2 {
+		buf := make([]byte, size)
+		n, err := syscall.Listxattr(path, buf)
+		if err == syscall.ENOTSUP || err == syscall.EOPNOTSUPP {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("inspect exchanged git target extended attributes: %w", err)
+		}
+		if n == 0 {
+			return nil
+		}
+		if n < len(buf) {
+			return fmt.Errorf("git target extended attributes changed before atomic replacement")
+		}
+	}
+}
+
 func rejectUnpreservableMetadata(path string, info os.FileInfo) error {
 	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
 
@@ -1130,6 +1176,9 @@ func rejectUnpreservableMetadata(path string, info os.FileInfo) error {
 
 			return fmt.Errorf("git target ownership cannot be preserved by atomic replacement")
 
+		}
+		if info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 {
+			return fmt.Errorf("git target uses unsupported special permission bits")
 		}
 
 	}
