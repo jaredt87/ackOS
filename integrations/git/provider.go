@@ -297,8 +297,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(err)
 
 	}
-	if err := rejectGitConfigTarget(ctx, e.Target); err != nil {
-		return fail(err)
+	if err := rejectGitConfigTarget(ctx, e.Target); err != nil {		return fail(err)
 
 	}
 	if err := rejectSubmodules(ctx, e.Target); err != nil {
@@ -406,7 +405,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(fmt.Errorf("Git parent does not match authorized state"))
 
 	}
-	if err := atomicWriteTarget(e.Target, []byte(t.After)); err != nil {
+	if err := atomicWriteTarget(e.Target, []byte(t.Before), []byte(t.After)); err != nil {
 
 		return fail(fmt.Errorf("write git file: %w", err))
 
@@ -598,7 +597,6 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, fmt.Errorf("git file state mismatch")
 	}
 	if err := verifyLatestCommit(v, ctx, expectedParent.head, t, authority.ExecutionID); err != nil {
-
 		return kernel.Observation{}, err
 
 	}
@@ -897,8 +895,7 @@ func validateMutationBoundary(ctx context.Context, target Target, expected strin
 
 		return fmt.Errorf("git file changed at mutation boundary")
 	}
-	return nil
-}
+	return nil}
 
 func openParentDirNoSymlink(target Target) (int, error) {
 	cleanPath := filepath.Clean(target.Path)
@@ -944,7 +941,7 @@ func openParentDirNoSymlink(target Target) (int, error) {
 	return fd, nil
 }
 
-func atomicWriteTarget(target Target, content []byte) error {
+func atomicWriteTarget(target Target, expected, content []byte) error {
 	path := filepath.Join(target.Repository, target.Path)
 	parentFD, err := openParentDirNoSymlink(target)
 	if err != nil {
@@ -986,7 +983,10 @@ func atomicWriteTarget(target Target, content []byte) error {
 	if err != nil {
 		return fmt.Errorf("read git target before replacement: %w", err)
 	}
-	if string(current) == string(content) {
+	if !bytes.Equal(current, expected) {
+		return fmt.Errorf("git target changed before replacement")
+	}
+	if bytes.Equal(current, content) {
 		return fmt.Errorf("git target already contains requested state")
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
@@ -1197,8 +1197,7 @@ func readGitMetadataIdentity(ctx context.Context, target Target) (gitMetadataIde
 	if err != nil {		return gitMetadataIdentity{}, err
 	}
 	return gitMetadataIdentity{
-		gitDirPath: gitPath, gitDirDev: gitDev, gitDirIno: gitIno,
-		gitCommonDirPath: commonPath, gitCommonDirDev: commonDev, gitCommonDirIno: commonIno,
+		gitDirPath: gitPath, gitDirDev: gitDev, gitDirIno: gitIno,		gitCommonDirPath: commonPath, gitCommonDirDev: commonDev, gitCommonDirIno: commonIno,
 	}, nil
 }
 
@@ -1497,8 +1496,7 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 }
 
 func rejectSubmodules(ctx context.Context, target Target) error {
-	output, err := runGit(ctx, target.Repository, "ls-files", "-z", "--stage")
-	if err != nil {
+	output, err := runGit(ctx, target.Repository, "ls-files", "-z", "--stage")	if err != nil {
 		return fmt.Errorf("inspect Git submodules: %w", err)
 	}
 	parts := strings.Split(strings.TrimSuffix(output, "\\x00"), "\\x00")
@@ -1798,7 +1796,6 @@ func verifyCommit(e Executor, ctx context.Context, parent string, t kernel.Trans
 func verifyLatestCommit(v Verifier, ctx context.Context, expectedParent string, t kernel.Transition, executionID string) error {
 	return verifyCommitAt(ctx, v.Target, func(args ...string) (string, error) { return v.git(ctx, args...) }, expectedParent, t, executionID)
 }
-
 func verifyLiveIndexMatchesHead(ctx context.Context, target Target, head string) error {
 	status, err := runGit(ctx, target.Repository, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
@@ -2098,7 +2095,6 @@ func gitBlobHash(ctx context.Context, target Target, content string) (string, er
 
 	}
 	if err := tmp.Close(); err != nil {
-
 		return "", fmt.Errorf("close temporary Git blob input: %w", err)
 
 	}
