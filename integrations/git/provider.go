@@ -2215,26 +2215,6 @@ func (v Verifier) git(ctx context.Context, args ...string) (string, error) {
 	return runGit(ctx, v.Target.Repository, args...)
 }
 
-func openRepositoryRoot(target Target) (int, error) {
-	if target.Repository == "" || target.repositoryDev == 0 || target.repositoryIno == 0 {
-		return -1, fmt.Errorf("captured repository identity is unavailable")
-	}
-	fd, err := syscall.Open(target.Repository, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
-	if err != nil {
-		return -1, fmt.Errorf("open captured repository root: %w", err)
-	}
-	var stat syscall.Stat_t
-	if err := syscall.Fstat(fd, &stat); err != nil {
-		_ = syscall.Close(fd)
-		return -1, fmt.Errorf("stat captured repository root: %w", err)
-	}
-	if uint64(stat.Dev) != target.repositoryDev || uint64(stat.Ino) != target.repositoryIno {
-		_ = syscall.Close(fd)
-		return -1, fmt.Errorf("Git repository root identity changed")
-	}
-	return fd, nil
-}
-
 func openGitMetadataDir(path string, expectedDev, expectedIno uint64) (int, error) {
 	if path == "" || expectedDev == 0 || expectedIno == 0 {
 		return -1, fmt.Errorf("captured Git metadata identity is unavailable")
