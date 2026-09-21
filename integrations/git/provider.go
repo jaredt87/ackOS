@@ -1430,7 +1430,7 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 
 		}
 
-		includeOutput, includeErr := runGit(ctx, target.Repository, "config", "--file", resolvedSource, "--path", "--get-regexp", `^include.*\.path// Package git provides a domain-specific Git resource provider for ackOS.
+		includeOutput, includeErr := runGit(ctx, target.Repository, "config", "--file", resolvedSource, "--path", "--null", "--get-regexp", `^include.*\.path// Package git provides a domain-specific Git resource provider for ackOS.
 package git
 
 import (
@@ -2862,7 +2862,7 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 
 		}
 
-		includeOutput, includeErr := runGit(ctx, target.Repository, "config", "--file", resolvedSource, "--path", "--get-regexp", )
+		includeOutput, includeErr := )
 
 		if includeErr != nil {
 			continue
