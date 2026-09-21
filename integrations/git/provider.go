@@ -977,38 +977,81 @@ func openParentDirNoSymlink(target Target) (int, error) {
 
 func atomicWriteTarget(target Target, expected, content []byte) error {
 	parentFD, err := openParentDirNoSymlink(target)
-	if err != nil { return err }
+	if err != nil {
+		return err
+	}
 	defer syscall.Close(parentFD)
+
 	name := filepath.Base(filepath.Clean(target.Path))
 	fd, err := syscall.Openat(parentFD, name, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
-	if err != nil { return fmt.Errorf("open git target for update: %w", err) }
+	if err != nil {
+		return fmt.Errorf("open git target for update: %w", err)
+	}
 	file := os.NewFile(uintptr(fd), filepath.Join(target.Repository, target.Path))
-	if file == nil { _ = syscall.Close(fd); return fmt.Errorf("open git target for update: invalid file descriptor") }
+	if file == nil {
+		_ = syscall.Close(fd)
+		return fmt.Errorf("open git target for update: invalid file descriptor")
+	}
 	defer file.Close()
-	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil { return fmt.Errorf("lock git target for update: %w", err) }
+
+	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return fmt.Errorf("lock git target for update: %w", err)
+	}
 	defer syscall.Flock(fd, syscall.LOCK_UN)
+
 	info, err := file.Stat()
-	if err != nil { return fmt.Errorf("stat git target for update: %w", err) }
-	if !info.Mode().IsRegular() { return fmt.Errorf("git target is not a regular file") }
-	if stat, ok := info.Sys().(*syscall.Stat_t); ok && stat.Nlink > 1 { return fmt.Errorf("git target has multiple hard links") }
+	if err != nil {
+		return fmt.Errorf("stat git target for update: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("git target is not a regular file")
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok && stat.Nlink > 1 {
+		return fmt.Errorf("git target has multiple hard links")
+	}
 	path := filepath.Join(target.Repository, target.Path)
-	if err := rejectUnpreservableMetadata(path, info); err != nil { return err }
+	if err := rejectUnpreservableMetadata(path, info); err != nil {
+		return err
+	}
 	mode := info.Mode()
 	current, err := io.ReadAll(file)
-	if err != nil { return fmt.Errorf("read git target before replacement: %w", err) }
-	if !bytes.Equal(current, expected) { return fmt.Errorf("git target changed before replacement") }
-	if bytes.Equal(current, content) { return fmt.Errorf("git target already contains requested state") }
+	if err != nil {
+		return fmt.Errorf("read git target before replacement: %w", err)
+	}
+	if !bytes.Equal(current, expected) {
+		return fmt.Errorf("git target changed before replacement")
+	}
+	if bytes.Equal(current, content) {
+		return fmt.Errorf("git target already contains requested state")
+	}
 
 	tmpName := "." + name + ".ackos-tmp"
 	tmpFD, err := syscall.Openat(parentFD, tmpName, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW, 0600)
-	if err != nil { return fmt.Errorf("create git target replacement: %w", err) }
+	if err != nil {
+		return fmt.Errorf("create git target replacement: %w", err)
+	}
 	cleanup := true
-	defer func() { _ = syscall.Close(tmpFD); if cleanup { _ = syscall.Unlinkat(parentFD, tmpName, 0) } }()
-	if _, err := syscall.Write(tmpFD, content); err != nil { return fmt.Errorf("write git target replacement: %w", err) }
-	if err := syscall.Fsync(tmpFD); err != nil { return fmt.Errorf("sync git target replacement: %w", err) }
-	if err := syscall.Fchmod(tmpFD, uint32(mode.Perm())); err != nil { return fmt.Errorf("restore git target mode: %w", err) }
-	if err := syscall.Close(tmpFD); err != nil { return fmt.Errorf("close git target replacement: %w", err) }
-	if err := syscall.Renameat(parentFD, tmpName, parentFD, name); err != nil { return fmt.Errorf("atomically replace git target: %w", err) }
+	defer func() {
+		_ = syscall.Close(tmpFD)
+		if cleanup {
+			_ = syscall.Unlinkat(parentFD, tmpName, 0)
+		}
+	}()
+	if _, err := syscall.Write(tmpFD, content); err != nil {
+		return fmt.Errorf("write git target replacement: %w", err)
+	}
+	if err := syscall.Fsync(tmpFD); err != nil {
+		return fmt.Errorf("sync git target replacement: %w", err)
+	}
+	if err := syscall.Fchmod(tmpFD, uint32(mode.Perm())); err != nil {
+		return fmt.Errorf("restore git target mode: %w", err)
+	}
+	if err := syscall.Close(tmpFD); err != nil {
+		return fmt.Errorf("close git target replacement: %w", err)
+	}
+	if err := syscall.Renameat(parentFD, tmpName, parentFD, name); err != nil {
+		return fmt.Errorf("atomically replace git target: %w", err)
+	}
 	cleanup = false
 	return nil
 }
