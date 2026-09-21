@@ -1081,7 +1081,6 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		}
 		return fmt.Errorf("git target changed before atomic replacement")
 	}
-	cleanup = false
 	return nil
 }
 
