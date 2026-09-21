@@ -2002,6 +2002,37 @@ func rejectConfiguredNormalization(ctx context.Context, target Target) error {
 		return fmt.Errorf("git target uses working-tree-encoding; encoded targets are not supported")
 
 	}
+	if err := rejectLiteralWorkingTreeEncodingSentinels(ctx, target); err != nil {
+		return err
+	}
+	return nil
+}
+
+func rejectLiteralWorkingTreeEncodingSentinels(ctx context.Context, target Target) error {
+	paths, err := runGitTarget(ctx, target, "ls-files", "-z", "--cached")
+	if err != nil {
+		return fmt.Errorf("inspect Git attribute files: %w", err)
+	}
+	paths = strings.TrimSuffix(paths, "\x00")
+	if paths == "" {
+		return nil
+	}
+	for _, path := range strings.Split(paths, "\x00") {
+		if filepath.Base(path) != ".gitattributes" {
+			continue
+		}
+		content, err := runGitTarget(ctx, target, "show", "HEAD:./"+path)
+		if err != nil {
+			return fmt.Errorf("read Git attribute file %q: %w", path, err)
+		}
+		for _, line := range strings.Split(content, "\n") {
+			for _, field := range strings.Fields(line) {
+				if field == "working-tree-encoding=unset" || field == "working-tree-encoding=unspecified" {
+					return fmt.Errorf("Git attributes contain a literal working-tree-encoding sentinel")
+				}
+			}
+		}
+	}
 	return nil
 }
 
