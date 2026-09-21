@@ -63,12 +63,16 @@ func TestUpdateCapturedRefDoesNotDereferenceSymbolicBranch(t *testing.T) {
 	}
 
 	commit := strings.TrimSpace(gitTest(t, target.Repository, "commit-tree", parent+"^{tree}", "-p", parent, "-m", "ackOS: execute ref-race"))
-	if err := updateCapturedRef(context.Background(), target, target.capturedHeadRef, commit, parent); err == nil {
-		t.Fatal("updateCapturedRef accepted a symbolic captured branch")
+	if err := updateCapturedRef(context.Background(), target, target.capturedHeadRef, commit, parent); err != nil {
+		t.Fatalf("updateCapturedRef failed: %v", err)
 	}
 	otherHead := strings.TrimSpace(gitTest(t, target.Repository, "rev-parse", "refs/heads/other"))
 	if otherHead != parent {
 		t.Fatalf("symbolic target branch advanced: got %s, want %s", otherHead, parent)
+	}
+	capturedHead := strings.TrimSpace(gitTest(t, target.Repository, "rev-parse", target.capturedHeadRef))
+	if capturedHead != commit {
+		t.Fatalf("captured ref was not updated directly: got %s, want %s", capturedHead, commit)
 	}
 }
 
