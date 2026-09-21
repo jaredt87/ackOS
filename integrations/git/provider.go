@@ -1123,6 +1123,9 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if err := syscall.Fchmod(tmpFD, uint32(mode.Perm())); err != nil {
 		return fmt.Errorf("restore git target mode: %w", err)
 	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("rewind git target before atomic replacement revalidation: %w", err)
+	}
 	current, err = io.ReadAll(file)
 	if err != nil {
 		return fmt.Errorf("revalidate git target before atomic replacement: %w", err)
