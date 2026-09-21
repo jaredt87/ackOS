@@ -42,7 +42,7 @@
 ### 4. Architecture & Style Pointers
 
 * **Kernel purity:** `kernel/` is the authority boundary — deterministic, in-memory, single-process for V0. It owns observation/evidence identity, normalization, reconciliation, governance, reservation, verification gating, and CAS commitment. It does not own provider SDKs, credentials, RBAC, or orchestration. See `docs/ARCHITECTURE.md` for the full "owns / does not own" split.
-* **Providers/integrations:** `integrations/synthetic`, `integrations/mcp`, and `integrations/chatgpt` implement execution and observation against concrete backends; they call into the kernel rather than duplicating its decisions. New providers follow this same pattern.
+* **Providers/integrations:** `integrations/synthetic` and `integrations/mcp` implement executable integration behavior against concrete backends; they call into the kernel rather than duplicating its decisions. `integrations/chatgpt` is a model-facing skill bundle, not an executable backend. New providers follow the executable integration pattern.
 * **Error handling:** use the existing sentinel errors in `kernel/kernel.go` (`ErrStaleEvidence`, `ErrGovernanceDenied`, `ErrAuthorityExpired`, etc.) rather than introducing ad hoc error strings; wrap with `fmt.Errorf("...: %w", err)` to preserve the sentinel.
 * **Living documentation:** read `docs/ARCHITECTURE.md` and `docs/RESEARCH_BOUNDARIES.md` before guessing at intended kernel behavior — this project came out of a research program (E11–E17) with specific, deliberate non-guarantees; don't "fix" a documented boundary without flagging it.
 
