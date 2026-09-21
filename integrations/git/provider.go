@@ -296,7 +296,8 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(err)
 
 	}
-	if err := rejectGitConfigTarget(ctx, e.Target); err != nil {		return fail(err)
+	if err := rejectGitConfigTarget(ctx, e.Target); err != nil {
+		return fail(err)
 
 	}
 	if err := rejectSubmodules(ctx, e.Target); err != nil {
@@ -1218,7 +1219,8 @@ func readGitMetadataIdentity(ctx context.Context, target Target) (gitMetadataIde
 		return gitMetadataIdentity{}, err
 	}
 	commonPath, commonDev, commonIno, err := resolve(commonDir)
-	if err != nil {		return gitMetadataIdentity{}, err
+	if err != nil {
+		return gitMetadataIdentity{}, err
 	}
 	return gitMetadataIdentity{
 		gitDirPath: gitPath, gitDirDev: gitDev, gitDirIno: gitIno,		gitCommonDirPath: commonPath, gitCommonDirDev: commonDev, gitCommonDirIno: commonIno,
@@ -1814,7 +1816,8 @@ func updateCapturedRef(ctx context.Context, target Target, headRef, commit, pare
 	return nil
 }
 
-func verifyCommit(e Executor, ctx context.Context, parent string, t kernel.Transition, executionID string) error {	return verifyCommitAt(ctx, e.Target, func(args ...string) (string, error) { return e.git(ctx, args...) }, parent, t, executionID)
+func verifyCommit(e Executor, ctx context.Context, parent string, t kernel.Transition, executionID string) error {
+	return verifyCommitAt(ctx, e.Target, func(args ...string) (string, error) { return e.git(ctx, args...) }, parent, t, executionID)
 }
 
 func verifyLatestCommit(v Verifier, ctx context.Context, expectedParent string, t kernel.Transition, executionID string) error {
@@ -2112,7 +2115,8 @@ func gitBlobHash(ctx context.Context, target Target, content string) (string, er
 	}
 	name := tmp.Name()
 	defer os.Remove(name)
-	if _, err := tmp.WriteString(content); err != nil {		_ = tmp.Close()
+	if _, err := tmp.WriteString(content); err != nil {
+		_ = tmp.Close()
 
 		return "", fmt.Errorf("write temporary Git blob input: %w", err)
 
