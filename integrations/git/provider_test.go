@@ -184,7 +184,7 @@ func TestAtomicWriteTargetRejectsSymlinkedParent(t *testing.T) {
 	if err := os.Symlink(externalDir, docs); err != nil {
 		t.Fatal(err)
 	}
-	err := atomicWriteTarget(target, []byte("updated"))
+	err := atomicWriteTarget(target, []byte("initial"), []byte("updated"))
 	if err == nil || !strings.Contains(err.Error(), "parent directory") {
 		t.Fatalf("atomicWriteTarget error = %v, want symlinked-parent rejection", err)
 	}
