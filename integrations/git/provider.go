@@ -1030,7 +1030,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if stat.Nlink > 1 {
 		return fmt.Errorf("git target has multiple hard links")
 	}
-	path := filepath.Join(filepath.Dir(target.Repository), target.Path)
+	path := filepath.Join(target.Repository, target.Path)
 	if err := rejectUnpreservableMetadata(path, info); err != nil {
 		return err
 	}
