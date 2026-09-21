@@ -119,6 +119,34 @@ func TestRejectConfiguredNormalizationRejectsEOLAttribute(t *testing.T) {
 	}
 }
 
+func TestRejectAttributesTargetRejectsDefaultPerUserAttributesFile(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	dir := filepath.Join(xdg, "git")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	gitTest(t, dir, "init")
+	gitTest(t, dir, "config", "user.email", "ackos-test@example.invalid")
+	gitTest(t, dir, "config", "user.name", "ackOS test")
+	path := filepath.Join(dir, "attributes")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, dir, "add", "--", "attributes")
+	gitTest(t, dir, "commit", "-m", "add default attributes file")
+
+	target, err := NewTarget(dir, "attributes", "test-repo:attributes")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := rejectAttributesTarget(context.Background(), target); err == nil || !strings.Contains(err.Error(), "active attributes file") {
+		t.Fatalf("error = %v, want default attributes file rejection", err)
+	}
+}
+
 func TestRejectAttributesTargetResolvesGitPathname(t *testing.T) {
 	home := os.Getenv("HOME")
 	if home == "" {
