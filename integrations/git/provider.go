@@ -1034,11 +1034,18 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	defer func() {
 		_ = syscall.Close(tmpFD)
 		if cleanup {
-			_ = syscall.Unlinkat(parentFD, tmpName, 0)
+			_ = syscall.Unlinkat(parentFD, tmpName)
 		}
 	}()
-	if _, err := syscall.Write(tmpFD, content); err != nil {
-		return fmt.Errorf("write git target replacement: %w", err)
+	for len(content) > 0 {
+		n, err := syscall.Write(tmpFD, content)
+		if err != nil {
+			return fmt.Errorf("write git target replacement: %w", err)
+		}
+		if n == 0 {
+			return fmt.Errorf("write git target replacement: short write")
+		}
+		content = content[n:]
 	}
 	if err := syscall.Fsync(tmpFD); err != nil {
 		return fmt.Errorf("sync git target replacement: %w", err)
