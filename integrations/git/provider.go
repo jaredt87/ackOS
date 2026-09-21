@@ -920,7 +920,8 @@ func validateMutationBoundary(ctx context.Context, target Target, expected strin
 
 		return fmt.Errorf("git file changed at mutation boundary")
 	}
-	return nil}
+	return nil
+}
 
 func openParentDirNoSymlink(target Target) (int, error) {
 	cleanPath := filepath.Clean(target.Path)
@@ -1223,7 +1224,7 @@ func readGitMetadataIdentity(ctx context.Context, target Target) (gitMetadataIde
 		return gitMetadataIdentity{}, err
 	}
 	return gitMetadataIdentity{
-		gitDirPath: gitPath, gitDirDev: gitDev, gitDirIno: gitIno,		gitCommonDirPath: commonPath, gitCommonDirDev: commonDev, gitCommonDirIno: commonIno,
+		gitDirPath: gitPath, gitDirDev: gitDev, gitDirIno: gitIno, gitCommonDirPath: commonPath, gitCommonDirDev: commonDev, gitCommonDirIno: commonIno,
 	}, nil
 }
 
