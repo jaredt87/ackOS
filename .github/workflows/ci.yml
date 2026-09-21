@@ -33,7 +33,7 @@ jobs:
               echo "Missing YAML description frontmatter in $skill"
               exit 1
             }
-          done < <(git ls-files '*SKILL.md')
+          done < <(git ls-files -- '*SKILL.md')
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
