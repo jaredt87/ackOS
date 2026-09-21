@@ -180,8 +180,14 @@ func NewTarget(repository, path, subject string) (Target, error) {
 		return Target{}, err
 
 	}
+	targetInfo, err := os.Stat(filepath.Join(target.Repository, target.Path))
+	if err != nil {
+		return Target{}, fmt.Errorf("stat git target: %w", err)
+	}
+	if targetInfo.Size() == 0 {
+		return Target{}, fmt.Errorf("git target must not be empty")
+	}
 	return target, nil
-}	return target, nil
 }
 
 type Observer struct{ Target Target }
