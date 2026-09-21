@@ -50,7 +50,7 @@ func (s *lifecycleState) capture(ctx context.Context, target Target, executionID
 	if s == nil {
 		return executionParent{}, fmt.Errorf("Git lifecycle state is unavailable")
 	}
-	head, err := runGit(ctx, target.Repository, "rev-parse", "HEAD")
+	head, err := runGitTarget(ctx, target, "rev-parse", "HEAD")
 	if err != nil {
 		return executionParent{}, fmt.Errorf("capture Git execution parent: %w", err)
 	}
@@ -58,7 +58,7 @@ func (s *lifecycleState) capture(ctx context.Context, target Target, executionID
 	if head == "" {
 		return executionParent{}, fmt.Errorf("capture Git execution parent: empty revision")
 	}
-	ref, err := runGit(ctx, target.Repository, "symbolic-ref", "-q", "HEAD")
+	ref, err := runGitTarget(ctx, target, "symbolic-ref", "-q", "HEAD")
 	if err != nil {
 		return executionParent{}, fmt.Errorf("capture Git execution branch: %w", err)
 	}
@@ -1085,7 +1085,7 @@ func rejectUnpreservableMetadata(path string, info os.FileInfo) error {
 func requireCommitIdentity(ctx context.Context, target Target) error {
 	for _, identity := range []string{"GIT_AUTHOR_IDENT", "GIT_COMMITTER_IDENT"} {
 
-		if _, err := runGit(ctx, target.Repository, "var", identity); err != nil {
+		if _, err := runGitTarget(ctx, target, "var", identity); err != nil {
 
 			return fmt.Errorf("Git commit identity is not configured: %s: %w", identity, err)
 
@@ -1096,7 +1096,7 @@ func requireCommitIdentity(ctx context.Context, target Target) error {
 }
 
 func requireIndexUnlocked(ctx context.Context, target Target) error {
-	path, err := runGit(ctx, target.Repository, "rev-parse", "--git-path", "index.lock")
+	path, err := runGitTarget(ctx, target, "rev-parse", "--git-path", "index.lock")
 	if err != nil {
 
 		return fmt.Errorf("inspect Git index lock: %w", err)
@@ -1121,7 +1121,7 @@ func requireIndexUnlocked(ctx context.Context, target Target) error {
 
 func requireNoInProgressGitOperation(ctx context.Context, target Target) error {
 	for _, marker := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "REBASE_HEAD", "sequencer", "rebase-merge", "rebase-apply"} {
-		path, err := runGit(ctx, target.Repository, "rev-parse", "--git-path", marker)
+		path, err := runGitTarget(ctx, target, "rev-parse", "--git-path", marker)
 
 		if err != nil {
 
@@ -1215,11 +1215,11 @@ func readGitMetadataIdentity(ctx context.Context, target Target) (gitMetadataIde
 		}
 		return resolved, uint64(stat.Dev), uint64(stat.Ino), nil
 	}
-	gitDir, err := runGit(ctx, target.Repository, "rev-parse", "--git-dir")
+	gitDir, err := runGit(ctx, target, "rev-parse", "--git-dir")
 	if err != nil {
 		return gitMetadataIdentity{}, fmt.Errorf("resolve Git metadata directory: %w", err)
 	}
-	commonDir, err := runGit(ctx, target.Repository, "rev-parse", "--git-common-dir")
+	commonDir, err := runGit(ctx, target, "rev-parse", "--git-common-dir")
 	if err != nil {
 		return gitMetadataIdentity{}, fmt.Errorf("resolve Git common metadata directory: %w", err)
 	}
@@ -1237,7 +1237,7 @@ func readGitMetadataIdentity(ctx context.Context, target Target) (gitMetadataIde
 }
 
 func requireWorktreeRoot(ctx context.Context, target Target) error {
-	root, err := runGit(ctx, target.Repository, "rev-parse", "--show-toplevel")
+	root, err := runGitTarget(ctx, target, "rev-parse", "--show-toplevel")
 	if err != nil {
 
 		return fmt.Errorf("resolve Git worktree root: %w", err)
@@ -1330,7 +1330,7 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 		}
 	}
 
-	attrs, err := runGit(ctx, target.Repository, "config", "--path", "--get", "core.attributesFile")
+	attrs, err := runGitTarget(ctx, target, "config", "--path", "--get", "core.attributesFile")
 	if err != nil {
 		return nil
 	}
@@ -1452,7 +1452,7 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 		}
 	}
 
-	output, err := runGit(ctx, target.Repository, "config", "--includes", "--show-origin", "--list")
+	output, err := runGitTarget(ctx, target, "config", "--includes", "--show-origin", "--list")
 	if err != nil {
 
 		return fmt.Errorf("inspect Git configuration sources: %w", err)
@@ -1475,7 +1475,7 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 		addSource(strings.TrimPrefix(origin, "file:"))
 
 	}
-	gitConfig, configErr := runGit(ctx, target.Repository, "rev-parse", "--git-path", "config")
+	gitConfig, configErr := runGitTarget(ctx, target, "rev-parse", "--git-path", "config")
 	if configErr == nil {
 
 		addSource(strings.TrimSpace(gitConfig))
@@ -1505,7 +1505,7 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 
 		}
 
-		includeOutput, includeErr := runGit(ctx, target.Repository, "config", "--file", resolvedSource, "--path", "--null", "--get-regexp", `^include.*\.path$`)
+		includeOutput, includeErr := runGitTarget(ctx, target, "config", "--file", resolvedSource, "--path", "--null", "--get-regexp", `^include.*\.path$`)
 
 		if includeErr != nil {
 			continue
@@ -1531,7 +1531,7 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 }
 
 func rejectSubmodules(ctx context.Context, target Target) error {
-	output, err := runGit(ctx, target.Repository, "ls-files", "-z", "--stage")
+	output, err := runGitTarget(ctx, target, "ls-files", "-z", "--stage")
 	if err != nil {
 		return fmt.Errorf("inspect Git submodules: %w", err)
 	}
@@ -1554,7 +1554,7 @@ func rejectSubmodules(ctx context.Context, target Target) error {
 }
 
 func rejectGrafts(ctx context.Context, target Target) error {
-	path, err := runGit(ctx, target.Repository, "rev-parse", "--git-path", "info/grafts")
+	path, err := runGitTarget(ctx, target, "rev-parse", "--git-path", "info/grafts")
 	if err != nil {
 
 		return fmt.Errorf("inspect Git graft file: %w", err)
@@ -1578,7 +1578,7 @@ func rejectGrafts(ctx context.Context, target Target) error {
 }
 
 func rejectReplaceRefs(ctx context.Context, target Target) error {
-	output, err := runGit(ctx, target.Repository, "replace", "-l")
+	output, err := runGitTarget(ctx, target, "replace", "-l")
 	if err != nil {
 		return fmt.Errorf("inspect Git replacement refs: %w", err)
 	}
@@ -1589,7 +1589,7 @@ func rejectReplaceRefs(ctx context.Context, target Target) error {
 }
 
 func rejectConfiguredFilters(ctx context.Context, target Target) error {
-	paths, err := runGit(ctx, target.Repository, "ls-files", "-z", "--cached")
+	paths, err := runGitTarget(ctx, target, "ls-files", "-z", "--cached")
 	if err != nil {
 
 		return fmt.Errorf("inspect tracked Git paths: %w", err)
@@ -1600,7 +1600,7 @@ func rejectConfiguredFilters(ctx context.Context, target Target) error {
 		return nil
 
 	}
-	attrs, err := runGitInput(ctx, target.Repository, []byte(paths), "check-attr", "-z", "--stdin", "filter")
+	attrs, err := runGitTargetInput(ctx, target, []byte(paths), "check-attr", "-z", "--stdin", "filter")
 	if err != nil {
 
 		return fmt.Errorf("inspect Git clean filters: %w", err)
@@ -1613,7 +1613,7 @@ func rejectConfiguredFilters(ctx context.Context, target Target) error {
 
 	}
 	configuredDrivers := make(map[string]struct{})
-	filterDrivers, filterErr := runGit(ctx, target.Repository, "config", "--includes", "--name-only", "--get-regexp", "^filter\\..*\\.(clean|process)$")
+	filterDrivers, filterErr := runGitTarget(ctx, target, "config", "--includes", "--name-only", "--get-regexp", "^filter\\..*\\.(clean|process)$")
 	if filterErr == nil {
 		for _, name := range strings.Split(filterDrivers, "\n") {
 			name = strings.TrimSpace(name)
@@ -1642,7 +1642,7 @@ func rejectConfiguredFilters(ctx context.Context, target Target) error {
 }
 
 func targetGitAttr(ctx context.Context, target Target) (string, error) {
-	output, err := runGit(ctx, target.Repository, "check-attr", "-z", "filter", "--", target.Path)
+	output, err := runGitTarget(ctx, target, "check-attr", "-z", "filter", "--", target.Path)
 	if err != nil {
 
 		return "", fmt.Errorf("inspect Git clean filter: %w", err)
@@ -1658,7 +1658,7 @@ func targetGitAttr(ctx context.Context, target Target) (string, error) {
 }
 
 func rejectConfiguredNormalization(ctx context.Context, target Target) error {
-	autocrlf, err := runGit(ctx, target.Repository, "config", "--get", "core.autocrlf")
+	autocrlf, err := runGitTarget(ctx, target, "config", "--get", "core.autocrlf")
 	if err == nil {
 		raw := strings.ToLower(strings.TrimSpace(autocrlf))
 
@@ -1667,7 +1667,7 @@ func rejectConfiguredNormalization(ctx context.Context, target Target) error {
 			return fmt.Errorf("git target uses core.autocrlf normalization; normalized targets are not supported")
 
 		}
-		parsed, boolErr := runGit(ctx, target.Repository, "config", "--bool", "--get", "core.autocrlf")
+		parsed, boolErr := runGitTarget(ctx, target, "config", "--bool", "--get", "core.autocrlf")
 
 		if boolErr == nil && strings.EqualFold(strings.TrimSpace(parsed), "true") {
 
@@ -1676,7 +1676,7 @@ func rejectConfiguredNormalization(ctx context.Context, target Target) error {
 		}
 
 	}
-	output, err := runGit(ctx, target.Repository, "check-attr", "-z", "text", "eol", "crlf", "ident", "working-tree-encoding", "--", target.Path)
+	output, err := runGitTarget(ctx, target, "check-attr", "-z", "text", "eol", "crlf", "ident", "working-tree-encoding", "--", target.Path)
 	if err != nil {
 
 		return fmt.Errorf("inspect Git text normalization: %w", err)
@@ -1724,7 +1724,7 @@ func rejectConfiguredNormalization(ctx context.Context, target Target) error {
 }
 
 func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, afterHash string, content []byte, message string) error {
-	blob, err := runGitInput(ctx, target.Repository, content, "hash-object", "-w", "--stdin")
+	blob, err := runGitTargetInput(ctx, target, content, "hash-object", "-w", "--stdin")
 	if err != nil {
 
 		return fmt.Errorf("store authorized Git blob: %w", err)
@@ -1757,23 +1757,23 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, aft
 	}
 	defer os.Remove(indexPath)
 	env := map[string]string{"GIT_INDEX_FILE": indexPath}
-	if _, err := runGitWithEnv(ctx, target.Repository, env, "--no-replace-objects", "read-tree", parent); err != nil {
+	if _, err := runGitTargetWithEnv(ctx, target, env, "--no-replace-objects", "read-tree", parent); err != nil {
 
 		return fmt.Errorf("capture Git parent index: %w", err)
 
 	}
-	if _, err := runGitWithEnv(ctx, target.Repository, env, "update-index", "--add", "--cacheinfo", mode, blob, target.Path); err != nil {
+	if _, err := runGitTargetWithEnv(ctx, target, env, "update-index", "--add", "--cacheinfo", mode, blob, target.Path); err != nil {
 
 		return fmt.Errorf("install authorized target in temporary Git index: %w", err)
 
 	}
-	tree, err := runGitWithEnv(ctx, target.Repository, env, "write-tree")
+	tree, err := runGitTargetWithEnv(ctx, target, env, "write-tree")
 	if err != nil {
 
 		return fmt.Errorf("write authorized Git tree: %w", err)
 
 	}
-	commit, err := runGit(ctx, target.Repository, "commit-tree", strings.TrimSpace(tree), "-p", parent, "-m", message, "--no-gpg-sign")
+	commit, err := runGitTarget(ctx, target, "commit-tree", strings.TrimSpace(tree), "-p", parent, "-m", message, "--no-gpg-sign")
 	if err != nil {
 
 		return fmt.Errorf("create authorized Git commit: %w", err)
@@ -1784,7 +1784,7 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, aft
 
 		return fmt.Errorf("Git commit object is missing")
 	}
-	currentRef, err := runGit(ctx, target.Repository, "symbolic-ref", "-q", "HEAD")
+	currentRef, err := runGitTarget(ctx, target, "symbolic-ref", "-q", "HEAD")
 	if err != nil {
 
 		return fmt.Errorf("re-read Git HEAD branch before commit: %w", err)
@@ -1799,7 +1799,7 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, aft
 
 		return fmt.Errorf("atomically install authorized Git commit on captured branch: %w", err)
 	}
-	currentRef, err = runGit(ctx, target.Repository, "symbolic-ref", "-q", "HEAD")
+	currentRef, err = runGitTarget(ctx, target, "symbolic-ref", "-q", "HEAD")
 	if err != nil {
 
 		return fmt.Errorf("re-read Git HEAD branch after commit: %w", err)
@@ -1810,7 +1810,7 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, aft
 		return fmt.Errorf("Git HEAD branch changed during commit")
 
 	}
-	if _, err := runGit(ctx, target.Repository, "add", "--", literalPathspec(target.Path)); err != nil {
+	if _, err := runGitTarget(ctx, target, "add", "--", literalPathspec(target.Path)); err != nil {
 
 		return fmt.Errorf("synchronize Git index after commit: %w", err)
 
@@ -1819,7 +1819,7 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, aft
 }
 
 func updateCapturedRef(ctx context.Context, target Target, headRef, commit, parent string) error {
-	if _, err := runGit(ctx, target.Repository, "update-ref", "--no-deref", headRef, commit, parent); err != nil {
+	if _, err := runGitTarget(ctx, target, "update-ref", "--no-deref", headRef, commit, parent); err != nil {
 		return err
 	}
 	return nil
@@ -1833,18 +1833,18 @@ func verifyLatestCommit(v Verifier, ctx context.Context, expectedParent string, 
 	return verifyCommitAt(ctx, v.Target, func(args ...string) (string, error) { return v.git(ctx, args...) }, expectedParent, t, executionID)
 }
 func verifyLiveIndexMatchesHead(ctx context.Context, target Target, head string) error {
-	status, err := runGit(ctx, target.Repository, "status", "--porcelain", "--untracked-files=all")
+	status, err := runGitTarget(ctx, target, "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
 		return fmt.Errorf("read Git worktree status for verification: %w", err)
 	}
 	if status != "" {
 		return fmt.Errorf("Git worktree is not clean during verification")
 	}
-	indexTree, err := runGit(ctx, target.Repository, "write-tree")
+	indexTree, err := runGitTarget(ctx, target, "write-tree")
 	if err != nil {
 		return fmt.Errorf("write live Git index tree for verification: %w", err)
 	}
-	expectedTree, err := runGit(ctx, target.Repository, "--no-replace-objects", "rev-parse", head+"^{tree}")
+	expectedTree, err := runGitTarget(ctx, target, "--no-replace-objects", "rev-parse", head+"^{tree}")
 	if err != nil {
 		return fmt.Errorf("read verified Git tree for index verification: %w", err)
 	}
@@ -2048,7 +2048,7 @@ func liveTargetMode(target Target) (string, error) {
 }
 
 func gitIndexMode(ctx context.Context, target Target) (string, error) {
-	output, err := runGit(ctx, target.Repository, "ls-files", "--stage", "-z", "--", literalPathspec(target.Path))
+	output, err := runGitTarget(ctx, target, "ls-files", "--stage", "-z", "--", literalPathspec(target.Path))
 	if err != nil {
 
 		return "", err
@@ -2077,7 +2077,7 @@ func gitIndexMode(ctx context.Context, target Target) (string, error) {
 }
 
 func gitIndexHash(ctx context.Context, target Target) (string, error) {
-	output, err := runGit(ctx, target.Repository, "ls-files", "--stage", "-z", "--", literalPathspec(target.Path))
+	output, err := runGitTarget(ctx, target, "ls-files", "--stage", "-z", "--", literalPathspec(target.Path))
 	if err != nil {
 
 		return "", err
@@ -2100,7 +2100,7 @@ func gitIndexHash(ctx context.Context, target Target) (string, error) {
 }
 
 func gitTreeMode(ctx context.Context, target Target, tree string) (string, error) {
-	output, err := runGit(ctx, target.Repository, "--no-replace-objects", "ls-tree", "--format=%(objectmode)", tree, "--", literalPathspec(target.Path))
+	output, err := runGitTarget(ctx, target, "--no-replace-objects", "ls-tree", "--format=%(objectmode)", tree, "--", literalPathspec(target.Path))
 	if err != nil {
 
 		return "", err
@@ -2134,7 +2134,7 @@ func gitBlobHash(ctx context.Context, target Target, content string) (string, er
 		return "", fmt.Errorf("close temporary Git blob input: %w", err)
 
 	}
-	hash, err := runGit(ctx, target.Repository, "hash-object", "--no-filters", name)
+	hash, err := runGitTarget(ctx, target, "hash-object", "--no-filters", name)
 	if err != nil {
 
 		return "", fmt.Errorf("hash Git blob content: %w", err)
@@ -2173,6 +2173,58 @@ func (e Executor) git(ctx context.Context, args ...string) (string, error) {
 }
 func (v Verifier) git(ctx context.Context, args ...string) (string, error) {
 	return runGit(ctx, v.Target.Repository, args...)
+}
+
+func openGitMetadataDir(path string, expectedDev, expectedIno uint64) (int, error) {
+	if path == "" || expectedDev == 0 || expectedIno == 0 {
+		return -1, fmt.Errorf("captured Git metadata identity is unavailable")
+	}
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return -1, fmt.Errorf("open captured Git metadata directory: %w", err)
+	}
+	var stat syscall.Stat_t
+	if err := syscall.Fstat(fd, &stat); err != nil {
+		_ = syscall.Close(fd)
+		return -1, fmt.Errorf("stat captured Git metadata directory: %w", err)
+	}
+	if uint64(stat.Dev) != expectedDev || uint64(stat.Ino) != expectedIno {
+		_ = syscall.Close(fd)
+		return -1, fmt.Errorf("Git metadata directory identity changed")
+	}
+	return fd, nil
+}
+
+func runGitTarget(ctx context.Context, target Target, args ...string) (string, error) {
+	return runGitTargetInput(ctx, target, nil, nil, args...)
+}
+
+func runGitTargetInput(ctx context.Context, target Target, input []byte, args ...string) (string, error) {
+	return runGitTargetWithInput(ctx, target, input, nil, args...)
+}
+
+func runGitTargetWithEnv(ctx context.Context, target Target, env map[string]string, args ...string) (string, error) {
+	return runGitTargetWithInput(ctx, target, nil, env, args...)
+}
+
+func runGitTargetWithInput(ctx context.Context, target Target, input []byte, overrides map[string]string, args ...string) (string, error) {
+	gitFD, err := openGitMetadataDir(target.gitDirPath, target.gitDirDev, target.gitDirIno)
+	if err != nil {
+		return "", err
+	}
+	defer syscall.Close(gitFD)
+	commonFD, err := openGitMetadataDir(target.gitCommonDirPath, target.gitCommonDirDev, target.gitCommonDirIno)
+	if err != nil {
+		return "", err
+	}
+	defer syscall.Close(commonFD)
+	anchored := make(map[string]string, len(overrides)+2)
+	for key, value := range overrides {
+		anchored[key] = value
+	}
+	anchored["GIT_DIR"] = fmt.Sprintf("/proc/self/fd/%d", gitFD)
+	anchored["GIT_COMMON_DIR"] = fmt.Sprintf("/proc/self/fd/%d", commonFD)
+	return runGitWithInput(ctx, target.Repository, input, anchored, args...)
 }
 
 func runGit(ctx context.Context, repository string, args ...string) (string, error) {
