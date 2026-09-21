@@ -1438,12 +1438,8 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 		addSource(strings.TrimPrefix(origin, "file:"))
 
 	}
-	gitConfig, configErr := runGitTarget(ctx, target, "rev-parse", "--git-path", "config")
-	if configErr == nil {
-
-		addSource(strings.TrimSpace(gitConfig))
-
-	}
+	addSource(filepath.Join(target.gitDirPath, "config"))
+	addSource(filepath.Join(target.gitCommonDirPath, "config"))
 
 	for len(queue) > 0 {
 		source := queue[0]
@@ -1517,7 +1513,8 @@ func rejectSubmodules(ctx context.Context, target Target) error {
 }
 
 func rejectGrafts(ctx context.Context, target Target) error {
-	path, err := runGitTarget(ctx, target, "rev-parse", "--git-path", "info/grafts")
+	path := filepath.Join(target.gitCommonDirPath, "info", "grafts")
+	err := error(nil)
 	if err != nil {
 
 		return fmt.Errorf("inspect Git graft file: %w", err)
