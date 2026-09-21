@@ -1040,7 +1040,9 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	}
 	cleanup := true
 	defer func() {
-		_ = syscall.Close(tmpFD)
+		if tmpFD >= 0 {
+			_ = syscall.Close(tmpFD)
+		}
 		if cleanup {
 			_ = syscall.Unlinkat(parentFD, tmpName)
 		}
@@ -1064,6 +1066,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if err := syscall.Close(tmpFD); err != nil {
 		return fmt.Errorf("close git target replacement: %w", err)
 	}
+	tmpFD = -1
 	// Exchange the prepared inode with the current directory entry atomically.
 	// The exchanged-out inode is then compared with the inode we validated before
 	// the write. A concurrent replacement therefore fails without being clobbered.
@@ -1080,6 +1083,13 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 			return fmt.Errorf("restore concurrently replaced git target: %w", err)
 		}
 		return fmt.Errorf("git target changed before atomic replacement")
+	}
+	if err := syscall.Unlinkat(parentFD, tmpName); err != nil {
+		return fmt.Errorf("remove exchanged git target: %w", err)
+	}
+	cleanup = false
+	if err := syscall.Fsync(parentFD); err != nil {
+		return fmt.Errorf("sync git target directory: %w", err)
 	}
 	return nil
 }
