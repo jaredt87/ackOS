@@ -1237,7 +1237,7 @@ func readGitMetadataIdentity(ctx context.Context, target Target) (gitMetadataIde
 }
 
 func requireWorktreeRoot(ctx context.Context, target Target) error {
-	root, err := runGitTarget(ctx, target, "rev-parse", "--show-toplevel")
+	root, err := runGit(ctx, target.Repository, "rev-parse", "--show-toplevel")
 	if err != nil {
 
 		return fmt.Errorf("resolve Git worktree root: %w", err)
