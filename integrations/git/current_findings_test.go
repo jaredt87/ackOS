@@ -400,7 +400,6 @@ func TestVerifierRejectsDetachedHead(t *testing.T) {
 	}
 }
 
-
 func TestNewTargetRejectsEmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	gitTest(t, dir, "init")
