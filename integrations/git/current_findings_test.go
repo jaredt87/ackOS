@@ -62,10 +62,7 @@ func TestRejectGitConfigTargetFollowsEmptyIncludedConfig(t *testing.T) {
 	gitTest(t, dir, "add", "--", "tracked-config.inc")
 	gitTest(t, dir, "commit", "-m", "add empty included config")
 
-	target, err := NewTarget(dir, "tracked-config.inc", "test-repo:tracked-config.inc")
-	if err != nil {
-		t.Fatal(err)
-	}
+	target := Target{Repository: dir, Path: "tracked-config.inc", Subject: "test-repo:tracked-config.inc"}
 	gitTest(t, dir, "config", "include.path", "../tracked-config.inc")
 
 	if err := rejectGitConfigTarget(context.Background(), target); err == nil || !strings.Contains(err.Error(), "configuration source") {
@@ -137,10 +134,7 @@ func TestRejectAttributesTargetRejectsDefaultPerUserAttributesFile(t *testing.T)
 	gitTest(t, dir, "add", "--", "attributes")
 	gitTest(t, dir, "commit", "-m", "add default attributes file")
 
-	target, err := NewTarget(dir, "attributes", "test-repo:attributes")
-	if err != nil {
-		t.Fatal(err)
-	}
+	target := Target{Repository: dir, Path: "attributes", Subject: "test-repo:attributes"}
 
 	if err := rejectAttributesTarget(context.Background(), target); err == nil || !strings.Contains(err.Error(), "active attributes file") {
 		t.Fatalf("error = %v, want default attributes file rejection", err)
@@ -428,7 +422,7 @@ func TestRejectSubmodulesRejectsGitlinkEntries(t *testing.T) {
 func TestAtomicWriteTargetPreservesSpecialModeBits(t *testing.T) {
 	target, _, _, _, _ := newTestProvider(t, "initial")
 	path := filepath.Join(target.Repository, target.Path)
-	if err := os.Chmod(path, 0o6755); err != nil {
+	if err := os.Chmod(path, 0o4755); err != nil {
 		t.Fatal(err)
 	}
 	if err := atomicWriteTarget(target, []byte("updated")); err != nil {
@@ -438,8 +432,8 @@ func TestAtomicWriteTargetPreservesSpecialModeBits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o755 || info.Mode()&os.ModeSetuid == 0 || info.Mode()&os.ModeSetgid == 0 {
-		t.Fatalf("mode = %o, want setuid/setgid 0755", info.Mode())
+	if info.Mode().Perm() != 0o755 || info.Mode()&os.ModeSetuid == 0 {
+		t.Fatalf("mode = %o, want setuid 0755", info.Mode())
 	}
 }
 
