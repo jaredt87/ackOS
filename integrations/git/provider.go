@@ -247,7 +247,6 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	}
 	defer unlock()
 	if err := requireWorktreeRoot(ctx, e.Target); err != nil {
-
 		return fail(err)
 
 	}
@@ -401,14 +400,40 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 
 	}
 	if headHash != beforeHash {
-
 		return fail(fmt.Errorf("Git parent does not match authorized state"))
-
+	}
+	indexHashBefore, err := gitIndexHash(ctx, e.Target)
+	if err != nil {
+		return fail(fmt.Errorf("read Git target index before mutation: %w", err))
+	}
+	if indexHashBefore != beforeHash {
+		return fail(fmt.Errorf("Git target index changed before mutation"))
+	}
+	indexModeBefore, err := gitIndexMode(ctx, e.Target)
+	if err != nil {
+		return fail(fmt.Errorf("read Git target index mode before mutation: %w", err))
+	}
+	if indexModeBefore != expectedMode {
+		return fail(fmt.Errorf("Git target index mode changed before mutation"))
 	}
 	if err := atomicWriteTarget(e.Target, []byte(t.Before), []byte(t.After)); err != nil {
 
 		return fail(fmt.Errorf("write git file: %w", err))
 
+	}
+	currentIndexHash, err := gitIndexHash(ctx, e.Target)
+	if err != nil {
+		return fail(fmt.Errorf("re-read Git target index before staging: %w", err))
+	}
+	if currentIndexHash != indexHashBefore {
+		return fail(fmt.Errorf("Git target index changed during mutation"))
+	}
+	currentIndexMode, err := gitIndexMode(ctx, e.Target)
+	if err != nil {
+		return fail(fmt.Errorf("re-read Git target index mode before staging: %w", err))
+	}
+	if currentIndexMode != indexModeBefore {
+		return fail(fmt.Errorf("Git target index mode changed during mutation"))
 	}
 	if _, err := e.git(ctx, "add", "--", literalPathspec(e.Target.Path)); err != nil {
 
@@ -498,7 +523,6 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	if authority.ExecutionID == "" {
 
 		return kernel.Observation{}, fmt.Errorf("execution authority ID is required")
-
 	}
 	if t.Subject != v.Target.Subject {
 
@@ -747,8 +771,7 @@ func readFile(ctx context.Context, target Target) (string, error) {
 	}
 	if stat, ok := info.Sys().(*syscall.Stat_t); ok && stat.Nlink > 1 {
 		return "", fmt.Errorf("git target has multiple hard links")
-	}
-	readDone := make(chan struct{})
+	}	readDone := make(chan struct{})
 	var content []byte
 	var readErr error
 	go func() {
@@ -997,8 +1020,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	}
 	if _, err := file.Write(content); err != nil {
 		return fmt.Errorf("write git target: %w", err)
-	}
-	if err := file.Sync(); err != nil {
+	}	if err := file.Sync(); err != nil {
 		return fmt.Errorf("sync git target: %w", err)
 	}
 	if err := file.Chmod(mode); err != nil {
@@ -1247,7 +1269,6 @@ func requireWorktreeRoot(ctx context.Context, target Target) error {
 	}
 	return nil
 }
-
 func rejectAttributesTarget(ctx context.Context, target Target) error {
 	if strings.EqualFold(filepath.Base(target.Path), ".gitattributes") {
 
@@ -1497,8 +1518,7 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 
 func rejectSubmodules(ctx context.Context, target Target) error {
 	output, err := runGit(ctx, target.Repository, "ls-files", "-z", "--stage")	if err != nil {
-		return fmt.Errorf("inspect Git submodules: %w", err)
-	}
+		return fmt.Errorf("inspect Git submodules: %w", err)	}
 	parts := strings.Split(strings.TrimSuffix(output, "\\x00"), "\\x00")
 	for _, record := range parts {
 		if record == "" {
@@ -1747,7 +1767,6 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, aft
 	if commit == "" {
 
 		return fmt.Errorf("Git commit object is missing")
-
 	}
 	currentRef, err := runGit(ctx, target.Repository, "symbolic-ref", "-q", "HEAD")
 	if err != nil {
@@ -1997,7 +2016,6 @@ func liveTargetMode(target Target) (string, error) {
 	if err != nil {
 
 		return "", fmt.Errorf("stat Git target for mode check: %w", err)
-
 	}
 	if !info.Mode().IsRegular() {
 
