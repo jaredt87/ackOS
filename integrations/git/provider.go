@@ -1215,11 +1215,11 @@ func readGitMetadataIdentity(ctx context.Context, target Target) (gitMetadataIde
 		}
 		return resolved, uint64(stat.Dev), uint64(stat.Ino), nil
 	}
-	gitDir, err := runGit(ctx, target, "rev-parse", "--git-dir")
+	gitDir, err := runGit(ctx, target.Repository, "rev-parse", "--git-dir")
 	if err != nil {
 		return gitMetadataIdentity{}, fmt.Errorf("resolve Git metadata directory: %w", err)
 	}
-	commonDir, err := runGit(ctx, target, "rev-parse", "--git-common-dir")
+	commonDir, err := runGit(ctx, target.Repository, "rev-parse", "--git-common-dir")
 	if err != nil {
 		return gitMetadataIdentity{}, fmt.Errorf("resolve Git common metadata directory: %w", err)
 	}
@@ -2196,7 +2196,7 @@ func openGitMetadataDir(path string, expectedDev, expectedIno uint64) (int, erro
 }
 
 func runGitTarget(ctx context.Context, target Target, args ...string) (string, error) {
-	return runGitTargetInput(ctx, target, nil, nil, args...)
+	return runGitTargetWithInput(ctx, target, nil, nil, args...)
 }
 
 func runGitTargetInput(ctx context.Context, target Target, input []byte, args ...string) (string, error) {
