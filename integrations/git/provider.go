@@ -1021,7 +1021,8 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	}
 	if _, err := file.Write(content); err != nil {
 		return fmt.Errorf("write git target: %w", err)
-	}	if err := file.Sync(); err != nil {
+	}
+	if err := file.Sync(); err != nil {
 		return fmt.Errorf("sync git target: %w", err)
 	}
 	if err := file.Chmod(mode); err != nil {
