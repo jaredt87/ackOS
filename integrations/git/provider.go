@@ -923,6 +923,26 @@ func validateMutationBoundary(ctx context.Context, target Target, expected strin
 	return nil
 }
 
+func openRepositoryRoot(target Target) (int, error) {
+	if target.repositoryDev == 0 || target.repositoryIno == 0 {
+		return -1, fmt.Errorf("configured repository identity is unavailable")
+	}
+	fd, err := syscall.Open(target.Repository, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return -1, fmt.Errorf("open git repository directory: %w", err)
+	}
+	var rootStat syscall.Stat_t
+	if err := syscall.Fstat(fd, &rootStat); err != nil {
+		_ = syscall.Close(fd)
+		return -1, fmt.Errorf("stat opened git repository directory: %w", err)
+	}
+	if uint64(rootStat.Dev) != target.repositoryDev || uint64(rootStat.Ino) != target.repositoryIno {
+		_ = syscall.Close(fd)
+		return -1, fmt.Errorf("configured repository identity changed")
+	}
+	return fd, nil
+}
+
 func openParentDirNoSymlink(target Target) (int, error) {
 	cleanPath := filepath.Clean(target.Path)
 	if filepath.IsAbs(cleanPath) || cleanPath == "." || cleanPath == ".." || strings.HasPrefix(cleanPath, ".."+string(filepath.Separator)) {
@@ -930,21 +950,9 @@ func openParentDirNoSymlink(target Target) (int, error) {
 		return -1, fmt.Errorf("git target path escapes repository")
 
 	}
-	fd, err := syscall.Open(target.Repository, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	fd, err := openRepositoryRoot(target)
 	if err != nil {
-
-		return -1, fmt.Errorf("open git repository directory: %w", err)
-
-	}
-	var rootStat syscall.Stat_t
-	if err := syscall.Fstat(fd, &rootStat); err != nil {
-		_ = syscall.Close(fd)
-		return -1, fmt.Errorf("stat opened git repository directory: %w", err)
-	}
-	if target.repositoryDev == 0 || target.repositoryIno == 0 ||
-		uint64(rootStat.Dev) != target.repositoryDev || uint64(rootStat.Ino) != target.repositoryIno {
-		_ = syscall.Close(fd)
-		return -1, fmt.Errorf("configured repository identity changed")
+		return -1, err
 	}
 	for _, part := range strings.Split(filepath.Dir(cleanPath), string(filepath.Separator)) {
 
