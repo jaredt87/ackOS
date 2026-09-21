@@ -233,7 +233,23 @@ func (o Observer) Observe(ctx context.Context, subject string) (kernel.Observati
 	if err := validateNoSymlinks(o.Target); err != nil {
 		return kernel.Observation{}, fmt.Errorf("repository path changed during observation: %w", err)
 	}
-	return kernel.NewObservation(o.Target.Subject, content, 0, time.Now().UTC())
+	// Keep the observed content valid through the evidence timestamp. A final
+	// read makes a concurrent target mutation fail closed instead of returning
+	// an observation for state that no longer exists.
+	finalContent, err := o.read(ctx)
+	if err != nil {
+		return kernel.Observation{}, fmt.Errorf("re-read Git target at evidence boundary: %w", err)
+	}
+	if finalContent != content {
+		return kernel.Observation{}, fmt.Errorf("git target changed at evidence boundary")
+	}
+	if err := requireWorktreeRoot(ctx, o.Target); err != nil {
+		return kernel.Observation{}, fmt.Errorf("repository identity changed at evidence boundary: %w", err)
+	}
+	if err := validateNoSymlinks(o.Target); err != nil {
+		return kernel.Observation{}, fmt.Errorf("repository path changed at evidence boundary: %w", err)
+	}
+	return kernel.NewObservation(o.Target.Subject, finalContent, 0, time.Now().UTC())
 }
 
 type Executor struct{ Target Target }
@@ -1096,19 +1112,18 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		return fmt.Errorf("git target already contains requested state")
 	}
 
-	tmpName := "." + name + ".ackos-tmp"
-	tmpFD, err := syscall.Openat(parentFD, tmpName, syscall.O_WRONLY|syscall.O_CREAT|syscall.O_EXCL|syscall.O_NOFOLLOW, 0600)
+	tmpFile, err := os.CreateTemp(filepath.Dir(path), "."+name+".ackos-tmp-*")
 	if err != nil {
 		return fmt.Errorf("create git target replacement: %w", err)
 	}
+	tmpName := filepath.Base(tmpFile.Name())
+	tmpFD := int(tmpFile.Fd())
 	cleanup := true
 	defer func() {
-		if tmpFD >= 0 {
-			_ = syscall.Close(tmpFD)
-		}
 		if cleanup {
 			_ = syscall.Unlinkat(parentFD, tmpName)
 		}
+		_ = tmpFile.Close()
 	}()
 	for len(content) > 0 {
 		n, err := syscall.Write(tmpFD, content)
@@ -1126,6 +1141,9 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if err := syscall.Fchmod(tmpFD, uint32(mode.Perm())); err != nil {
 		return fmt.Errorf("restore git target mode: %w", err)
 	}
+	if err := syscall.Fsync(tmpFD); err != nil {
+		return fmt.Errorf("sync git target replacement metadata: %w", err)
+	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("rewind git target before atomic replacement revalidation: %w", err)
 	}
@@ -1136,7 +1154,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if !bytes.Equal(current, expected) {
 		return fmt.Errorf("git target changed during replacement preparation")
 	}
-	if err := syscall.Close(tmpFD); err != nil {
+	if err := tmpFile.Close(); err != nil {
 		return fmt.Errorf("close git target replacement: %w", err)
 	}
 	tmpFD = -1
