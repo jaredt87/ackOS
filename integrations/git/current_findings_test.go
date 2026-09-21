@@ -419,7 +419,6 @@ func TestRejectSubmodulesRejectsGitlinkEntries(t *testing.T) {
 	}
 }
 
-
 func TestLifecycleDiscardRemovesExecutionParent(t *testing.T) {
 	state := &lifecycleState{parents: map[string]executionParent{"execution": {head: "head", ref: "refs/heads/main"}}}
 	state.discard("execution")
