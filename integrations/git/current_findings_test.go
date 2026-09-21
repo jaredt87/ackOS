@@ -12,7 +12,6 @@ import (
 
 // Current findings regression coverage is kept separate from the provider's integration tests.
 
-
 func TestRejectConfiguredFiltersRejectsSentinelNamedDrivers(t *testing.T) {
 	for _, driver := range []string{"unspecified", "unset"} {
 		t.Run(driver, func(t *testing.T) {
