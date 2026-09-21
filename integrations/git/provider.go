@@ -189,6 +189,9 @@ func NewTarget(repository, path, subject string) (Target, error) {
 	if !targetInfo.Mode().IsRegular() {
 		return Target{}, fmt.Errorf("git target is not a regular file")
 	}
+	if targetInfo.Size() == 0 {
+		return Target{}, fmt.Errorf("git target is empty; empty provider states are unsupported")
+	}
 	// Special permission bits cannot be preserved by Git's 100644/100755 model.
 	if targetInfo.Mode()&os.ModeSetuid != 0 || targetInfo.Mode()&os.ModeSetgid != 0 || targetInfo.Mode()&os.ModeSticky != 0 {
 		return Target{}, fmt.Errorf("git target uses unsupported special permission bits")
