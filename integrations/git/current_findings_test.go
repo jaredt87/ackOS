@@ -12,6 +12,25 @@ import (
 
 // Current findings regression coverage is kept separate from the provider's integration tests.
 
+func TestRejectConfiguredFiltersRejectsSentinelNamedProcessDrivers(t *testing.T) {
+	for _, driver := range []string{"unspecified", "unset"} {
+		t.Run(driver, func(t *testing.T) {
+			target, _, _, _, _ := newTestProvider(t, "initial")
+			if err := os.WriteFile(filepath.Join(target.Repository, ".gitattributes"), []byte(target.Path+" filter="+driver+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			gitTest(t, target.Repository, "config", "filter."+driver+".process", "cat")
+			gitTest(t, target.Repository, "add", "--", ".gitattributes")
+			gitTest(t, target.Repository, "commit", "-m", "configure sentinel-named process filter")
+
+			err := rejectConfiguredFilters(context.Background(), target)
+			if err == nil || !strings.Contains(err.Error(), "configured clean filter") {
+				t.Fatalf("error = %v, want sentinel-named process filter rejection", err)
+			}
+		})
+	}
+}
+
 func TestRejectConfiguredFiltersRejectsSentinelNamedDrivers(t *testing.T) {
 	for _, driver := range []string{"unspecified", "unset"} {
 		t.Run(driver, func(t *testing.T) {
