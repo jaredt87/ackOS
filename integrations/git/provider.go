@@ -1513,18 +1513,10 @@ func rejectSubmodules(ctx context.Context, target Target) error {
 }
 
 func rejectGrafts(ctx context.Context, target Target) error {
+	if target.gitCommonDirPath == "" {
+		return fmt.Errorf("captured Git metadata identity is unavailable")
+	}
 	path := filepath.Join(target.gitCommonDirPath, "info", "grafts")
-	err := error(nil)
-	if err != nil {
-
-		return fmt.Errorf("inspect Git graft file: %w", err)
-
-	}
-	path = strings.TrimSpace(path)
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(target.Repository, path)
-
-	}
 	if _, err := os.Stat(path); err == nil {
 
 		return fmt.Errorf("Git graft file is not supported")
