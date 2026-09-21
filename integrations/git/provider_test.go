@@ -217,6 +217,26 @@ func TestProviderLifecyclePreservesBlobWhitespace(t *testing.T) {
 	}
 }
 
+func TestExecutorRejectsGitMetadataSubstitution(t *testing.T) {
+	target, _, executor, _, _ := newTestProvider(t, "initial")
+	replacement := filepath.Join(t.TempDir(), "replacement")
+	gitTest(t, target.Repository, "clone", target.Repository, replacement)
+	originalGit := filepath.Join(target.Repository, ".git")
+	movedGit := filepath.Join(target.Repository, ".git-original")
+	if err := os.Rename(originalGit, movedGit); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(filepath.Join(replacement, ".git"), originalGit); err != nil {
+		t.Fatal(err)
+	}
+	result := executor.Execute(context.Background(), kernel.Transition{Subject: target.Subject, Before: "initial", After: "updated"}, kernel.Authority{ExecutionID: "attempt-git-metadata-substitution"})
+	if result.Success || !strings.Contains(result.Message, "Git metadata directory identity changed") {
+		t.Fatalf("result = %+v, want Git metadata identity rejection", result)
+	}
+	if got := readTestFile(t, target); got != "initial" {
+		t.Fatalf("target changed during Git metadata substitution rejection: %q", got)
+	}
+}
 func TestExecutorRejectsRepositorySubstitution(t *testing.T) {
 	target, _, executor, _, _ := newTestProvider(t, "initial")
 	moved := target.Repository + "-moved"
