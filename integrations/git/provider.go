@@ -962,6 +962,21 @@ func validateMutationBoundary(ctx context.Context, target Target, expected strin
 }
 
 // openRepositoryRoot revalidates the captured repository identity before use.
+func validateCapturedRepositoryIdentity(target Target) error {
+	if target.repositoryDev == 0 || target.repositoryIno == 0 {
+		return fmt.Errorf("configured repository identity is unavailable")
+	}
+	info, err := os.Stat(target.Repository)
+	if err != nil {
+		return fmt.Errorf("revalidate configured repository identity: %w", err)
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || uint64(stat.Dev) != target.repositoryDev || uint64(stat.Ino) != target.repositoryIno {
+		return fmt.Errorf("configured repository identity changed")
+	}
+	return nil
+}
+
 func openRepositoryRoot(target Target) (int, error) {
 	if target.repositoryDev == 0 || target.repositoryIno == 0 {
 		return -1, fmt.Errorf("configured repository identity is unavailable")
@@ -2458,7 +2473,7 @@ func runGitTargetWithEnv(ctx context.Context, target Target, env map[string]stri
 }
 
 func runGitTargetWithInput(ctx context.Context, target Target, input []byte, overrides map[string]string, args ...string) (string, error) {
-	if err := requireWorktreeRoot(ctx, target); err != nil {
+	if err := validateCapturedRepositoryIdentity(target); err != nil {
 		return "", err
 	}
 	rootFD, err := openRepositoryRoot(target)
