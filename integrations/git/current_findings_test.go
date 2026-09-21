@@ -12,6 +12,72 @@ import (
 
 // Current findings regression coverage is kept separate from the provider's integration tests.
 
+
+func TestRejectConfiguredFiltersRejectsSentinelNamedDrivers(t *testing.T) {
+	for _, driver := range []string{"unspecified", "unset"} {
+		t.Run(driver, func(t *testing.T) {
+			target, _, _, _, _ := newTestProvider(t, "initial")
+			if err := os.WriteFile(filepath.Join(target.Repository, ".gitattributes"), []byte(target.Path+" filter="+driver+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			gitTest(t, target.Repository, "config", "filter."+driver+".clean", "cat")
+			gitTest(t, target.Repository, "add", "--", ".gitattributes")
+			gitTest(t, target.Repository, "commit", "-m", "configure sentinel-named filter")
+
+			err := rejectConfiguredFilters(context.Background(), target)
+			if err == nil || !strings.Contains(err.Error(), "configured clean filter") {
+				t.Fatalf("error = %v, want sentinel-named clean filter rejection", err)
+			}
+		})
+	}
+}
+
+func TestRejectGitConfigTargetFollowsEmptyIncludedConfig(t *testing.T) {
+	dir := t.TempDir()
+	gitTest(t, dir, "init")
+	gitTest(t, dir, "config", "user.email", "ackos-test@example.invalid")
+	gitTest(t, dir, "config", "user.name", "ackOS test")
+	path := filepath.Join(dir, "tracked-config.inc")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, dir, "add", "--", "tracked-config.inc")
+	gitTest(t, dir, "commit", "-m", "add empty included config")
+
+	target, err := NewTarget(dir, "tracked-config.inc", "test-repo:tracked-config.inc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitTest(t, dir, "config", "include.path", "../tracked-config.inc")
+
+	if err := rejectGitConfigTarget(context.Background(), target); err == nil || !strings.Contains(err.Error(), "configuration source") {
+		t.Fatalf("error = %v, want empty included configuration source rejection", err)
+	}
+}
+
+func TestUpdateCapturedRefDoesNotDereferenceSymbolicBranch(t *testing.T) {
+	target, _, _, _, _ := newTestProvider(t, "initial")
+	parent := target.capturedHead
+	gitTest(t, target.Repository, "branch", "other", parent)
+	if _, err := runGit(context.Background(), target.Repository, "symbolic-ref", target.capturedHeadRef, "refs/heads/other"); err != nil {
+		t.Fatal(err)
+	}
+
+	afterHash, err := gitBlobHash(context.Background(), target, "updated")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit := strings.TrimSpace(gitTest(t, target.Repository, "commit-tree", parent+"^{tree}", "-p", parent, "-m", "ackOS: execute ref-race"))
+	_ = afterHash
+	if err := updateCapturedRef(context.Background(), target, target.capturedHeadRef, commit, parent); err == nil {
+		t.Fatal("updateCapturedRef accepted a symbolic captured branch")
+	}
+	otherHead := strings.TrimSpace(gitTest(t, target.Repository, "rev-parse", "refs/heads/other"))
+	if otherHead != parent {
+		t.Fatalf("symbolic target branch advanced: got %s, want %s", otherHead, parent)
+	}
+}
+
 func TestRejectConfiguredNormalizationRejectsAutocrlf(t *testing.T) {
 	target, _, _, _, _ := newTestProvider(t, "initial")
 	gitTest(t, target.Repository, "config", "core.autocrlf", "true")
