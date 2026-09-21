@@ -408,8 +408,8 @@ func TestNewTargetAllowsEmptyFile(t *testing.T) {
 	}
 	gitTest(t, dir, "add", "--", "empty.txt")
 	gitTest(t, dir, "commit", "-m", "empty target")
-	if _, err := NewTarget(dir, "empty.txt", "test-repo:empty.txt"); err == nil || !strings.Contains(err.Error(), "must not be empty") {
-		t.Fatalf("error = %v, want empty-target rejection", err)
+	if _, err := NewTarget(dir, "empty.txt", "test-repo:empty.txt"); err != nil {
+		t.Fatalf("NewTarget rejected empty tracked file: %v", err)
 	}
 }
 
