@@ -18,10 +18,18 @@ jobs:
           test -f .claude-plugin/plugin.json
           test -f gemini-extension.json
           test -f GEMINI.md
+          test -f skills/control/SKILL.md
+          test -f skills/ackos-control/SKILL.md
+          test -f integrations/chatgpt/SKILL.md
           python -m json.tool .claude-plugin/plugin.json >/dev/null
           python -m json.tool gemini-extension.json >/dev/null
           while IFS= read -r skill; do
-            grep -q '^description:' "$skill" || {
+            awk '
+              NR == 1 && $0 != "---" { exit 1 }
+              NR > 1 && $0 == "---" { found_end = 1 }
+              !found_end && $0 ~ /^description:/ { found_description = 1 }
+              END { exit !(found_description && found_end) }
+            ' "$skill" || {
               echo "Missing description: frontmatter in $skill"
               exit 1
             }
