@@ -1515,7 +1515,7 @@ func rejectConfiguredFilters(ctx context.Context, target Target) error {
 
 	}
 	configuredDrivers := make(map[string]struct{})
-	filterDrivers, filterErr := runGit(ctx, target.Repository, "config", "--includes", "--name-only", "--get-regexp", "^filter\\..*\\.clean$")
+	filterDrivers, filterErr := runGit(ctx, target.Repository, "config", "--includes", "--name-only", "--get-regexp", `^filter\..*\.(clean|process)$`)
 	if filterErr == nil {
 		for _, name := range strings.Split(filterDrivers, "\n") {
 			name = strings.TrimSpace(name)
