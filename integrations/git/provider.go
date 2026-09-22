@@ -1315,7 +1315,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	}
 	cleanup = false
 	if err := syscall.Fsync(parentFD); err != nil {
-		return fmt.Errorf("sync git target directory: %w", err)
+		return rollback(fmt.Errorf("sync git target directory: %w", err))
 	}
 	return nil
 }
@@ -1769,6 +1769,12 @@ func requireWorktreeRoot(ctx context.Context, target Target) error {
 	return nil
 }
 func rejectSystemAttributesTarget(ctx context.Context, target Target) error {
+	// Git_ATTR_NOSYSTEM disables the system attributes source. In that mode
+	// `git var GIT_ATTR_SYSTEM` exits non-zero without a pathname; that is an
+	// intentional inactive source, not a provider configuration failure.
+	if _, disabled := os.LookupEnv("GIT_ATTR_NOSYSTEM"); disabled {
+		return nil
+	}
 	configured := filepath.Join(target.Repository, target.Path)
 	resolved, err := filepath.EvalSymlinks(configured)
 	if err != nil {
