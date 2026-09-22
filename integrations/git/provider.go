@@ -1422,7 +1422,7 @@ func rollbackExchangedTarget(parentFD int, tmpName, name string, originalFD int,
 		return fmt.Errorf("live git target changed before rollback")
 	}
 
-	if err := exchangeRollbackAtValidatedDestination(parentFD, rollbackName, name); err != nil {
+	if err := exchangeRollbackAtValidatedDestination(parentFD, originalAnchorName, name); err != nil {
 		return fmt.Errorf("exchange original git target back: %w", err)
 	}
 	if err := syscall.Fsync(parentFD); err != nil {
