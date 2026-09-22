@@ -1299,10 +1299,10 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	exchangedContent, readErr := io.ReadAll(exchangedFile)
 	closeErr := exchangedFile.Close()
 	if readErr != nil {
-		return fmt.Errorf("read exchanged git target: %w", readErr)
+		return rollback(fmt.Errorf("read exchanged git target: %w", readErr))
 	}
 	if closeErr != nil {
-		return fmt.Errorf("close exchanged git target: %w", closeErr)
+		return rollback(fmt.Errorf("close exchanged git target: %w", closeErr))
 	}
 	if !bytes.Equal(exchangedContent, expected) {
 		if err := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat); err != nil {
@@ -1311,7 +1311,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		return fmt.Errorf("git target content changed before atomic replacement")
 	}
 	if err := syscall.Unlinkat(parentFD, tmpName); err != nil {
-		return fmt.Errorf("remove exchanged git target: %w", err)
+		return rollback(fmt.Errorf("remove exchanged git target: %w", err))
 	}
 	cleanup = false
 	if err := syscall.Fsync(parentFD); err != nil {
