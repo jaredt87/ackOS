@@ -1283,7 +1283,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		}
 		return fmt.Errorf("git target changed before atomic replacement")
 	}
-	if err := verifyExchangedTargetMetadata(exchangedPath, exchangedInfo, info, capturedXattrs); err != nil {
+	if err := verifyExchangedTargetMetadata(exchangedPath, exchangedInfo, info, capturedXattrs, true); err != nil {
 		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat, originalAnchorName); rollbackErr != nil {
 			return fmt.Errorf("restore concurrently modified git target: %w (metadata check: %v)", rollbackErr, err)
 		}
@@ -1455,7 +1455,7 @@ func removeReplacementXattrs(path string) error {
 	return nil
 }
 
-func verifyExchangedTargetMetadata(path string, exchanged, original os.FileInfo, originalXattrs map[string][]byte) error {
+func verifyExchangedTargetMetadata(path string, exchanged, original os.FileInfo, originalXattrs map[string][]byte, retainedOriginalAnchor bool) error {
 	if !exchanged.Mode().IsRegular() {
 		return fmt.Errorf("git target type changed before atomic replacement")
 	}
@@ -1473,7 +1473,11 @@ func verifyExchangedTargetMetadata(path string, exchanged, original os.FileInfo,
 	if exchangedStat.Uid != originalStat.Uid || exchangedStat.Gid != originalStat.Gid {
 		return fmt.Errorf("git target ownership changed before atomic replacement")
 	}
-	if exchangedStat.Nlink != originalStat.Nlink {
+	expectedNlink := originalStat.Nlink
+	if retainedOriginalAnchor {
+		expectedNlink++
+	}
+	if exchangedStat.Nlink != expectedNlink {
 		return fmt.Errorf("git target link count changed before atomic replacement")
 	}
 	exchangedXattrs, err := captureXattrs(path)
