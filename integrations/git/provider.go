@@ -1402,7 +1402,7 @@ func rollbackExchangedTarget(parentFD int, tmpName, name string, originalFD int,
 	if preparedStat == nil {
 		return fmt.Errorf("prepared git target identity is unavailable for rollback")
 	}
-	currentStat := &syscall.Stat_t{}
+	currentStat := &unix.Stat_t{}
 	if err := unix.Fstatat(parentFD, name, currentStat, 0); err != nil {
 		return fmt.Errorf("inspect live git target before rollback: %w", err)
 	}
