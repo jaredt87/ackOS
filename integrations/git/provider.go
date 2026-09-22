@@ -997,8 +997,7 @@ func validateMutationBoundary(ctx context.Context, target Target, expected strin
 
 // openRepositoryRoot revalidates the captured repository identity before use.
 func validateCapturedRepositoryIdentity(target Target) error {
-	if target.repositoryDev == 0 || target.repositoryIno == 0 {
-		return fmt.Errorf("configured repository identity is unavailable")	}
+	if target.repositoryDev == 0 || target.repositoryIno == 0 {		return fmt.Errorf("configured repository identity is unavailable")	}
 	info, err := os.Stat(target.Repository)
 	if err != nil {
 		return fmt.Errorf("revalidate configured repository identity: %w", err)
@@ -1997,8 +1996,7 @@ func rejectConfiguredFilters(ctx context.Context, target Target) error {
 	attrs, err := runGitTargetInput(ctx, target, []byte(paths), "check-attr", "-z", "--stdin", "filter")
 	if err != nil {
 		return fmt.Errorf("inspect Git clean filters: %w", err)
-	}	parts := strings.Split(strings.TrimSuffix(attrs, "\x00"), "\x00")
-	if len(parts)%3 != 0 {
+	}	parts := strings.Split(strings.TrimSuffix(attrs, "\x00"), "\x00")	if len(parts)%3 != 0 {
 		return fmt.Errorf("unexpected Git clean filter metadata")
 	}
 	configuredDrivers := make(map[string]struct{})
@@ -2153,10 +2151,8 @@ func rejectLiteralWorkingTreeEncodingSentinels(ctx context.Context, target Targe
 		return fmt.Errorf("inspect Git attribute files: %w", err)
 	}
 	paths = strings.TrimSuffix(paths, "\x00")
-	if paths == "" {
-		return nil
-	}
-	for _, path := range strings.Split(paths, "\x00") {
+	if paths != "" {
+		for _, path := range strings.Split(paths, "\x00") {
 		if filepath.Base(path) == ".gitattributes" {
 			content, err := runGitTarget(ctx, target, "show", "HEAD:./"+path)
 			if err != nil {
