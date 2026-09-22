@@ -289,11 +289,15 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 
 	}
 	capturedLifecycle := false
+	executionSucceeded := false
 	defer func() {
 		if capturedLifecycle {
-			// Every execution, successful or failed, must evict its parent snapshot
-			// and release the repository lock at lifecycle completion.
-			e.Target.lifecycle.discard(authority.ExecutionID)
+			// A successful execution hands its lifecycle parent to Verify, which
+			// owns the final lifecycle cleanup. Failed executions have no verifier
+			// phase, so they must evict the snapshot and release the lock here.
+			if !executionSucceeded {
+				e.Target.lifecycle.discard(authority.ExecutionID)
+			}
 			return
 		}
 		unlock()
@@ -565,6 +569,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(fmt.Errorf("Git HEAD changed after commit verification"))
 
 	}
+	executionSucceeded = true
 	return kernel.ExecutionResult{Success: true, Message: "git file transitioned and committed"}
 }
 
