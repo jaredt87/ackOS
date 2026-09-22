@@ -1643,7 +1643,7 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 			if infoErr != nil {
 				return fmt.Errorf("resolve repository attributes file: %w", infoErr)
 			}
-			infoResolved, infoResolveErr := filepath.EvalSymlinks(infoAttrs)
+			infoResolved, infoResolveErr = filepath.EvalSymlinks(infoAttrs)
 			if infoResolveErr == nil {
 				infoResolved, infoResolveErr = filepath.Abs(infoResolved)
 				if infoResolveErr != nil {
