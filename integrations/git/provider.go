@@ -77,9 +77,47 @@ func (s *lifecycleState) capture(ctx context.Context, target Target, executionID
 	if s.parents == nil {
 		s.parents = make(map[string]executionParent)
 	}
-	s.parents[executionID] = parent
+	if err := s.storeParent(executionID, parent); err != nil {
+		return executionParent{}, err
+	}
 	s.mu.Unlock()
 	return parent, nil
+}
+
+func (s *lifecycleState) storeParent(executionID string, parent executionParent) error {
+	if executionID == "" {
+		return fmt.Errorf("Git execution ID is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.parents == nil {
+		s.parents = make(map[string]executionParent)
+	}
+	s.parents[executionID] = parent
+	return nil
+}
+
+func validateObservedTarget(target Target) error {
+	return validateNoSymlinks(target)
+}
+
+func requireExpectedGitMode(actual, expected string) error {
+	if actual != expected {
+		return fmt.Errorf("Git target mode changed")
+	}
+	return nil
+}
+
+func revalidateMutationBoundary(ctx context.Context, target Target, expected string) error {
+	return validateMutationBoundary(ctx, target, expected)
+}
+
+func gitIndexTargetBlob(ctx context.Context, target Target) (string, error) {
+	return gitIndexHash(ctx, target)
+}
+
+func verifyLiveWorktreeState(ctx context.Context, target Target, head string) error {
+	return verifyLiveIndexMatchesHead(ctx, target, head)
 }
 
 func (s *lifecycleState) parent(executionID string) (executionParent, error) {
@@ -227,7 +265,7 @@ func (o Observer) Observe(ctx context.Context, subject string) (kernel.Observati
 
 	}
 	// Observation is bound to the captured worktree and Git metadata identities.
-	if err := validateNoSymlinks(o.Target); err != nil {
+	if err := validateObservedTarget(o.Target); err != nil {
 
 		return kernel.Observation{}, err
 
@@ -389,7 +427,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(err)
 
 	}
-	if err := validateMutationBoundary(ctx, e.Target, t.Before); err != nil {
+	if err := revalidateMutationBoundary(ctx, e.Target, t.Before); err != nil {
 
 		return fail(err)
 
@@ -740,12 +778,12 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, fmt.Errorf("read live Git index target mode: %w", err)
 
 	}
-	if indexMode != expectedMode {
+	if err := requireExpectedGitMode(indexMode, expectedMode); err != nil {
 
 		return kernel.Observation{}, fmt.Errorf("Git index target mode changed during verification")
 
 	}
-	indexHash, err := gitIndexHash(ctx, v.Target)
+	indexHash, err := gitIndexTargetBlob(ctx, v.Target)
 	if err != nil {
 
 		return kernel.Observation{}, fmt.Errorf("read live Git index target blob: %w", err)
@@ -762,7 +800,7 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, fmt.Errorf("Git index target blob changed during verification; staged content is not authorized")
 
 	}
-	if err := verifyLiveIndexMatchesHead(ctx, v.Target, verifiedHead); err != nil {
+	if err := verifyLiveWorktreeState(ctx, v.Target, verifiedHead); err != nil {
 
 		return kernel.Observation{}, err
 
