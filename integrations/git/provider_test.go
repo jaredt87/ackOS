@@ -458,7 +458,7 @@ func TestVerifierRejectsPendingGitMerge(t *testing.T) {
 	gitTest(t, target.Repository, "merge", "--no-commit", "merge-test")
 	transition := kernel.Transition{Subject: target.Subject, Before: observation.State, After: "updated"}
 	authority := kernel.Authority{ExecutionID: "attempt-verifier-pending-merge"}
-	if _, err := target.lifecycle.capture(context.Background(), target, authority.ExecutionID); err != nil {
+	if _, err := target.lifecycle.capture(context.Background(), target, authority.ExecutionID, func() {}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil || !strings.Contains(err.Error(), "MERGE_HEAD") {
