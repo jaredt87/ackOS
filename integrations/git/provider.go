@@ -1193,11 +1193,11 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	// Exchange the anchored prepared inode with the current directory entry atomically.
 	// The exchanged-out inode is then compared with the inode we validated before
 	// the write. A concurrent replacement therefore fails without being clobbered.
-	if err := unix.Renameat2(parentFD, tmpName, parentFD, name, unix.RENAME_EXCHANGE); err != nil {
+	if err := exchangePreparedTarget(parentFD, tmpName, name); err != nil {
 		return fmt.Errorf("atomically compare-and-replace git target: %w", err)
 	}
 	exchangedPath := filepath.Join(filepath.Dir(path), tmpName)
-	exchangedInfo, err := os.Stat(exchangedPath)
+	exchangedInfo, err := os.Lstat(exchangedPath)
 	if err != nil {
 		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat); rollbackErr != nil {
 			return fmt.Errorf("restore git target after exchanged inode inspection failure: %w (inspection: %v)", rollbackErr, err)
@@ -1248,6 +1248,10 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		return fmt.Errorf("sync git target directory: %w", err)
 	}
 	return nil
+}
+
+func exchangePreparedTarget(parentFD int, preparedName, targetName string) error {
+	return unix.Renameat2(parentFD, preparedName, parentFD, targetName, unix.RENAME_EXCHANGE)
 }
 
 func rollbackExchangedTarget(parentFD int, tmpName, name string, originalFD int, originalStat *syscall.Stat_t) error {
