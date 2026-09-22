@@ -11,6 +11,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: feat/phase2-git-provider
+          fetch-depth: 0
       - name: Restore provider and apply rollback fix
         shell: python
         run: |
