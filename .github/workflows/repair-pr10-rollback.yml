@@ -1,0 +1,53 @@
+name: Repair PR10 rollback
+
+on:
+  push:
+    branches:
+      - feat/phase2-git-provider
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.ref == 'refs/heads/feat/phase2-git-provider'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: feat/phase2-git-provider
+
+      - name: Patch rollback error paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('integrations/git/provider.go')
+          s = p.read_text()
+          replacements = {
+              '''\tif readErr != nil {\n\t\treturn fmt.Errorf("read exchanged git target: %w", readErr)\n\t}''': '''\tif readErr != nil {\n\t\treturn rollback(fmt.Errorf("read exchanged git target: %w", readErr))\n\t}''',
+              '''\tif closeErr != nil {\n\t\treturn fmt.Errorf("close exchanged git target: %w", closeErr)\n\t}''': '''\tif closeErr != nil {\n\t\treturn rollback(fmt.Errorf("close exchanged git target: %w", closeErr))\n\t}''',
+              '''\tif err := syscall.Unlinkat(parentFD, tmpName); err != nil {\n\t\treturn fmt.Errorf("remove exchanged git target: %w", err)\n\t}''': '''\tif err := syscall.Unlinkat(parentFD, tmpName); err != nil {\n\t\treturn rollback(fmt.Errorf("remove exchanged git target: %w", err))\n\t}''',
+          }
+          for old, new in replacements.items():
+              if old not in s:
+                  raise SystemExit(f'missing expected text: {old}')
+              s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+          gofmt -w integrations/git/provider.go
+          git diff --check
+          grep -n -A2 -B1 'remove exchanged git target' integrations/git/provider.go
+
+      - name: Commit fix and remove repair workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/repair-pr10-rollback.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add integrations/git/provider.go .github/workflows/repair-pr10-rollback.yml
+          git commit -m 'fix: route exchanged-target cleanup failures through rollback'
+          git push origin HEAD:feat/phase2-git-provider
