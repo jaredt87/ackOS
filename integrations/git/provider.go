@@ -314,6 +314,9 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(err)
 
 	}
+	if err := requireWorktreeRoot(ctx, e.Target); err != nil {
+		return fail(err)
+	}
 	unlock, err := acquireTargetLock(ctx, e.Target)
 	if err != nil {
 
