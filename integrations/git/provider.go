@@ -1186,7 +1186,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		return fmt.Errorf("git target changed before atomic replacement")
 	}
 	if err := verifyExchangedTargetMetadata(exchangedPath, exchangedInfo, info, capturedXattrs); err != nil {
-		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, stat); rollbackErr != nil {
+		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat); rollbackErr != nil {
 			return fmt.Errorf("restore concurrently modified git target: %w (metadata check: %v)", rollbackErr, err)
 		}
 		return err
@@ -1209,7 +1209,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		return fmt.Errorf("close exchanged git target: %w", closeErr)
 	}
 	if !bytes.Equal(exchangedContent, expected) {
-		if err := rollbackExchangedTarget(parentFD, tmpName, name, stat); err != nil {
+		if err := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat); err != nil {
 			return fmt.Errorf("restore concurrently modified git target: %w", err)
 		}
 		return fmt.Errorf("git target content changed before atomic replacement")
