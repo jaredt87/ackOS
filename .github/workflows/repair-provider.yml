@@ -19,3 +19,4 @@ jobs:
             git commit -m 'fix: use matching unix stat type'
             git push
           }
+          # retrigger after workflow installation
