@@ -1769,12 +1769,13 @@ func requireWorktreeRoot(ctx context.Context, target Target) error {
 	return nil
 }
 func rejectSystemAttributesTarget(ctx context.Context, target Target) error {
-	// Git_ATTR_NOSYSTEM disables the system attributes source. In that mode
-	// `git var GIT_ATTR_SYSTEM` exits non-zero without a pathname; that is an
-	// intentional inactive source, not a provider configuration failure.
 	if _, disabled := os.LookupEnv("GIT_ATTR_NOSYSTEM"); disabled {
 		return nil
 	}
+	return rejectActiveSystemAttributesTarget(ctx, target)
+}
+
+func rejectActiveSystemAttributesTarget(ctx context.Context, target Target) error {
 	resolved, err := filepath.EvalSymlinks(filepath.Join(target.Repository, target.Path))
 	if err != nil {
 		return nil
