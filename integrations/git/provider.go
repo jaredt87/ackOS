@@ -1180,7 +1180,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		return fmt.Errorf("git target changed before atomic replacement")
 	}
 	if err := verifyExchangedTargetMetadata(exchangedPath, exchangedInfo, info, capturedXattrs); err != nil {
-		if rollbackErr := unix.Renameat2(parentFD, tmpName, parentFD, name, unix.RENAME_EXCHANGE); rollbackErr != nil {
+		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, stat); rollbackErr != nil {
 			return fmt.Errorf("restore concurrently modified git target: %w (metadata check: %v)", rollbackErr, err)
 		}
 		return err
@@ -1203,7 +1203,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		return fmt.Errorf("close exchanged git target: %w", closeErr)
 	}
 	if !bytes.Equal(exchangedContent, expected) {
-		if err := unix.Renameat2(parentFD, tmpName, parentFD, name, unix.RENAME_EXCHANGE); err != nil {
+		if err := rollbackExchangedTarget(parentFD, tmpName, name, stat); err != nil {
 			return fmt.Errorf("restore concurrently modified git target: %w", err)
 		}
 		return fmt.Errorf("git target content changed before atomic replacement")
@@ -1214,6 +1214,25 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	cleanup = false
 	if err := syscall.Fsync(parentFD); err != nil {
 		return fmt.Errorf("sync git target directory: %w", err)
+	}
+	return nil
+}
+
+func rollbackExchangedTarget(parentFD int, tmpName, name string, originalStat *syscall.Stat_t) error {
+	fd, err := syscall.Openat(parentFD, tmpName, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return fmt.Errorf("anchor exchanged git target for rollback: %w", err)
+	}
+	defer syscall.Close(fd)
+	anchored := &syscall.Stat_t{}
+	if err := syscall.Fstat(fd, anchored); err != nil {
+		return fmt.Errorf("inspect anchored exchanged git target: %w", err)
+	}
+	if uint64(anchored.Dev) != uint64(originalStat.Dev) || uint64(anchored.Ino) != uint64(originalStat.Ino) {
+		return fmt.Errorf("exchanged git target was replaced before rollback")
+	}
+	if err := unix.Renameat2(parentFD, tmpName, parentFD, name, unix.RENAME_EXCHANGE); err != nil {
+		return fmt.Errorf("exchange original git target back: %w", err)
 	}
 	return nil
 }
@@ -1774,6 +1793,13 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 	}
 	addSource(filepath.Join(target.gitDirPath, "config"))
 	addSource(filepath.Join(target.gitCommonDirPath, "config"))
+	if worktreeConfig, worktreeErr := runGitTarget(ctx, target, "config", "--bool", "--get", "extensions.worktreeConfig"); worktreeErr == nil && strings.EqualFold(strings.TrimSpace(worktreeConfig), "true") {
+		worktreePath, pathErr := runGitTarget(ctx, target, "rev-parse", "--git-path", "config.worktree")
+		if pathErr != nil {
+			return fmt.Errorf("resolve Git worktree configuration path: %w", pathErr)
+		}
+		addSource(strings.TrimSpace(worktreePath))
+	}
 
 	// Git also loads a system-wide attributes file independently of the
 	// repository and per-user attributes sources. Resolve the active path
