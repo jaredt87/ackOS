@@ -997,8 +997,7 @@ func validateMutationBoundary(ctx context.Context, target Target, expected strin
 
 // openRepositoryRoot revalidates the captured repository identity before use.
 func validateCapturedRepositoryIdentity(target Target) error {
-	if target.repositoryDev == 0 || target.repositoryIno == 0 {		return fmt.Errorf("configured repository identity is unavailable")	}
-	info, err := os.Stat(target.Repository)
+	if target.repositoryDev == 0 || target.repositoryIno == 0 {		return fmt.Errorf("configured repository identity is unavailable")	}	info, err := os.Stat(target.Repository)
 	if err != nil {
 		return fmt.Errorf("revalidate configured repository identity: %w", err)
 	}
@@ -1997,8 +1996,7 @@ func rejectConfiguredFilters(ctx context.Context, target Target) error {
 	if err != nil {
 		return fmt.Errorf("inspect Git clean filters: %w", err)
 	}	parts := strings.Split(strings.TrimSuffix(attrs, "\x00"), "\x00")	if len(parts)%3 != 0 {
-		return fmt.Errorf("unexpected Git clean filter metadata")
-	}
+		return fmt.Errorf("unexpected Git clean filter metadata")	}
 	configuredDrivers := make(map[string]struct{})
 	filterDrivers, filterErr := runGitTarget(ctx, target, "config", "--includes", "--name-only", "--get-regexp", "^filter\\..*\\.(clean|process)$")
 	if filterErr == nil {
@@ -2161,6 +2159,7 @@ func rejectLiteralWorkingTreeEncodingSentinels(ctx context.Context, target Targe
 			if hasLiteralWorkingTreeEncodingSentinel(content) {
 				return fmt.Errorf("Git attributes contain a literal working-tree-encoding sentinel")
 			}
+		}
 		}
 	}
 	for _, path := range sources {
