@@ -572,22 +572,22 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 
 		return kernel.Observation{}, fmt.Errorf("execution authority ID is required")
 	}
-	expectedParent, err := v.Target.lifecycle.parent(authority.ExecutionID)
-	if err != nil {
-		return kernel.Observation{}, err
-	}
-	defer v.Target.lifecycle.discard(authority.ExecutionID)
 	if t.Subject != v.Target.Subject {
 
 		return kernel.Observation{}, fmt.Errorf("git subject mismatch: got %q, want %q", t.Subject, v.Target.Subject)
 
 	}
-	if err := ctx.Err(); err != nil {
+	if err := requireWorktreeRoot(ctx, v.Target); err != nil {
 
 		return kernel.Observation{}, err
 
 	}
-	if err := requireWorktreeRoot(ctx, v.Target); err != nil {
+	expectedParent, err := v.Target.lifecycle.parent(authority.ExecutionID)
+	if err != nil {
+		return kernel.Observation{}, err
+	}
+	defer v.Target.lifecycle.discard(authority.ExecutionID)
+	if err := ctx.Err(); err != nil {
 
 		return kernel.Observation{}, err
 
