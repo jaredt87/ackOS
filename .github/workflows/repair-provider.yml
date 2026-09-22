@@ -1,7 +1,7 @@
 name: repair-provider
 on:
-  push:
-    branches: [feat/phase2-git-provider]
+  pull_request:
+    types: [synchronize]
 permissions:
   contents: write
 jobs:
@@ -19,4 +19,3 @@ jobs:
             git commit -m 'fix: use matching unix stat type'
             git push
           }
-          # retrigger after workflow installation
