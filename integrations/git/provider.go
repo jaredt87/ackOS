@@ -1643,7 +1643,7 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 			if infoErr != nil {
 				return fmt.Errorf("resolve repository attributes file: %w", infoErr)
 			}
-			infoResolved, infoResolveErr = filepath.EvalSymlinks(infoAttrs)
+			infoResolved, infoResolveErr := filepath.EvalSymlinks(infoAttrs)
 			if infoResolveErr == nil {
 				infoResolved, infoResolveErr = filepath.Abs(infoResolved)
 				if infoResolveErr != nil {
@@ -1660,20 +1660,6 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 		return fmt.Errorf("git .gitattributes targets are not supported because the target can change its own filter environment")
 
 	}
-	configured, err := filepath.Abs(filepath.Join(target.Repository, target.Path))
-	if err != nil {
-
-		return fmt.Errorf("resolve configured target path: %w", err)
-
-	}
-	configuredResolved, resolveErr := filepath.EvalSymlinks(configured)
-	if resolveErr == nil {
-		configuredResolved, resolveErr = filepath.Abs(configuredResolved)
-		if resolveErr != nil {
-			return fmt.Errorf("resolve configured target identity path: %w", resolveErr)
-		}
-	}
-
 	// Git loads a default per-user attributes file even when
 	// core.attributesFile is unset. A tracked target at either default
 	// location must therefore be rejected before mutation.
