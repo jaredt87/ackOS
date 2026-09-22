@@ -1265,15 +1265,16 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	// succeeds. After Unlinkat removes the exchanged-out name, the open FD alone
 	// is not enough to recreate a directory entry with linkat(AT_EMPTY_PATH).
 	originalAnchorName := fmt.Sprintf(".%s.ackos-original-%d", name, time.Now().UnixNano())
-	if err := unix.Linkat(fd, "", parentFD, originalAnchorName, unix.AT_EMPTY_PATH); err != nil {
+	anchorErr := unix.Linkat(fd, "", parentFD, originalAnchorName, unix.AT_EMPTY_PATH)
+	if anchorErr != nil {
 		// RENAME_EXCHANGE has already installed the prepared inode. If the
 		// rollback anchor cannot be created, the still-present tmpName entry is
 		// the original inode, so exchange it back before returning.
 		if rollbackErr := rollbackExchangedTargetViaName(parentFD, tmpName, name, stat, &preparedStat); rollbackErr != nil {
 			cleanup = false
-			return fmt.Errorf("anchor original git target: %w (rollback: %v)", err, rollbackErr)
+			return fmt.Errorf("anchor original git target: %w (rollback: %v)", anchorErr, rollbackErr)
 		}
-		return fmt.Errorf("anchor original git target: %w", err)
+		return fmt.Errorf("anchor original git target: %w", anchorErr)
 	}
 	anchorRemoved := false
 	defer func() {
@@ -1345,8 +1346,9 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		return rollback(fmt.Errorf("remove exchanged git target: %w", err))
 	}
 	cleanup = false
-	if err := syscall.Fsync(parentFD); err != nil {
-		return rollback(fmt.Errorf("sync git target directory: %w", err))
+	syncErr := syscall.Fsync(parentFD)
+	if syncErr != nil {
+		return rollback(fmt.Errorf("sync git target directory: %w", syncErr))
 	}
 	// The exchange is durable now, so remove the rollback-only anchor and
 	// durably synchronize that removal before reporting success.
