@@ -2554,29 +2554,9 @@ func gitTreeMode(ctx context.Context, target Target, tree string) (string, error
 }
 
 func gitBlobHash(ctx context.Context, target Target, content string) (string, error) {
-	tmp, err := os.CreateTemp("", "ackos-git-blob-*")
+	hash, err := runGitTargetInput(ctx, target, []byte(content), "hash-object", "--no-filters", "--stdin")
 	if err != nil {
-
-		return "", fmt.Errorf("create temporary Git blob input: %w", err)
-
-	}
-	name := tmp.Name()
-	defer os.Remove(name)
-	if _, err := tmp.WriteString(content); err != nil {
-		_ = tmp.Close()
-
-		return "", fmt.Errorf("write temporary Git blob input: %w", err)
-
-	}
-	if err := tmp.Close(); err != nil {
-		return "", fmt.Errorf("close temporary Git blob input: %w", err)
-
-	}
-	hash, err := runGitTarget(ctx, target, "hash-object", "--no-filters", name)
-	if err != nil {
-
 		return "", fmt.Errorf("hash Git blob content: %w", err)
-
 	}
 	return strings.TrimSpace(hash), nil
 }
