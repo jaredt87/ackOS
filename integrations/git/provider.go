@@ -38,8 +38,9 @@ type Target struct {
 }
 
 type executionParent struct {
-	head string
-	ref  string
+	head   string
+	ref    string
+	unlock func()
 }
 
 type lifecycleState struct {
@@ -47,7 +48,7 @@ type lifecycleState struct {
 	parents map[string]executionParent
 }
 
-func (s *lifecycleState) capture(ctx context.Context, target Target, executionID string) (executionParent, error) {
+func (s *lifecycleState) capture(ctx context.Context, target Target, executionID string, unlock func()) (executionParent, error) {
 	if s == nil {
 		return executionParent{}, fmt.Errorf("Git lifecycle state is unavailable")
 	}
@@ -67,7 +68,10 @@ func (s *lifecycleState) capture(ctx context.Context, target Target, executionID
 	if ref == "" || !strings.HasPrefix(ref, "refs/heads/") {
 		return executionParent{}, fmt.Errorf("Git HEAD must remain attached to a branch")
 	}
-	parent := executionParent{head: head, ref: ref}
+	if unlock == nil {
+		return executionParent{}, fmt.Errorf("Git repository lock is unavailable")
+	}
+	parent := executionParent{head: head, ref: ref, unlock: unlock}
 	s.mu.Lock()
 	if s.parents == nil {
 		s.parents = make(map[string]executionParent)
@@ -96,8 +100,14 @@ func (s *lifecycleState) discard(executionID string) {
 		return
 	}
 	s.mu.Lock()
-	delete(s.parents, executionID)
+	parent, ok := s.parents[executionID]
+	if ok {
+		delete(s.parents, executionID)
+	}
 	s.mu.Unlock()
+	if ok && parent.unlock != nil {
+		parent.unlock()
+	}
 }
 
 func NewTarget(repository, path, subject string) (Target, error) {
@@ -277,7 +287,14 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(err)
 
 	}
-	defer unlock()
+	capturedLifecycle := false
+	defer func() {
+		if capturedLifecycle {
+			e.Target.lifecycle.discard(authority.ExecutionID)
+		} else {
+			unlock()
+		}
+	}()
 	if err := requireWorktreeRoot(ctx, e.Target); err != nil {
 		return fail(err)
 
@@ -367,16 +384,11 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(err)
 
 	}
-	expectedParent, err := e.Target.lifecycle.capture(ctx, e.Target, authority.ExecutionID)
+	expectedParent, err := e.Target.lifecycle.capture(ctx, e.Target, authority.ExecutionID, unlock)
 	if err != nil {
 		return fail(err)
 	}
-	capturedLifecycle := true
-	defer func() {
-		if capturedLifecycle {
-			e.Target.lifecycle.discard(authority.ExecutionID)
-		}
-	}()
+	capturedLifecycle = true
 
 	head := expectedParent.head
 	headRef := expectedParent.ref
@@ -547,7 +559,6 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(fmt.Errorf("Git HEAD changed after commit verification"))
 
 	}
-	capturedLifecycle = false
 	return kernel.ExecutionResult{Success: true, Message: "git file transitioned and committed"}
 }
 
@@ -998,7 +1009,6 @@ func validateCapturedRepositoryIdentity(target Target) error {
 	}
 	return nil
 }
-
 func openRepositoryRoot(target Target) (int, error) {
 	if target.repositoryDev == 0 || target.repositoryIno == 0 {
 		return -1, fmt.Errorf("configured repository identity is unavailable")
@@ -1176,6 +1186,9 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	exchangedPath := filepath.Join(filepath.Dir(path), tmpName)
 	exchangedInfo, err := os.Stat(exchangedPath)
 	if err != nil {
+		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat); rollbackErr != nil {
+			return fmt.Errorf("restore git target after exchanged inode inspection failure: %w (inspection: %v)", rollbackErr, err)
+		}
 		return fmt.Errorf("inspect exchanged git target: %w", err)
 	}
 	exchangedStat, ok := exchangedInfo.Sys().(*syscall.Stat_t)
@@ -1709,11 +1722,11 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 		}
 	}
 
-	attrs, err := runGitTarget(ctx, target, "config", "--path", "--get", "core.attributesFile")
+	attrs, err := runGitTarget(ctx, target, "config", "--path", "--null", "--get", "core.attributesFile")
 	if err != nil {
 		return nil
 	}
-	attrs = strings.TrimSpace(attrs)
+	attrs = strings.TrimSuffix(attrs, "\x00")
 	if attrs == "" {
 		return nil
 	}
@@ -1997,8 +2010,7 @@ func rejectConfiguredFilters(ctx context.Context, target Target) error {
 			if !strings.HasPrefix(name, "filter.") {
 				continue
 			}
-			name = strings.TrimPrefix(name, "filter.")
-			if driver, _, ok := strings.Cut(name, "."); ok {
+			name = strings.TrimPrefix(name, "filter.")			if driver, _, ok := strings.Cut(name, "."); ok {
 				configuredDrivers[driver] = struct{}{}
 			}
 		}
@@ -2104,6 +2116,39 @@ func rejectConfiguredNormalization(ctx context.Context, target Target) error {
 }
 
 func rejectLiteralWorkingTreeEncodingSentinels(ctx context.Context, target Target) error {
+	sources := make([]string, 0, 16)
+	seen := make(map[string]struct{})
+	addSource := func(path string) {
+		if path == "" {
+			return
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(target.Repository, path)
+		}
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return
+		}
+		if _, ok := seen[abs]; ok {
+			return
+		}
+		seen[abs] = struct{}{}
+		sources = append(sources, abs)
+	}
+	if infoAttrs, err := runGitTarget(ctx, target, "rev-parse", "--git-path", "info/attributes"); err == nil {
+		addSource(strings.TrimSpace(infoAttrs))
+	}
+	if attrs, err := runGitTarget(ctx, target, "config", "--path", "--null", "--get", "core.attributesFile"); err == nil {
+		addSource(strings.TrimSuffix(attrs, "\x00"))
+	}
+	if systemAttrs, err := runGitTarget(ctx, target, "var", "GIT_ATTR_SYSTEM"); err == nil {
+		addSource(strings.TrimSpace(systemAttrs))
+	}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		addSource(filepath.Join(xdg, "git", "attributes"))
+	} else if home, err := os.UserHomeDir(); err == nil {
+		addSource(filepath.Join(home, ".config", "git", "attributes"))
+	}
 	paths, err := runGitTarget(ctx, target, "ls-files", "-z", "--cached")
 	if err != nil {
 		return fmt.Errorf("inspect Git attribute files: %w", err)
@@ -2113,22 +2158,61 @@ func rejectLiteralWorkingTreeEncodingSentinels(ctx context.Context, target Targe
 		return nil
 	}
 	for _, path := range strings.Split(paths, "\x00") {
-		if filepath.Base(path) != ".gitattributes" {
-			continue
-		}
-		content, err := runGitTarget(ctx, target, "show", "HEAD:./"+path)
-		if err != nil {
-			return fmt.Errorf("read Git attribute file %q: %w", path, err)
-		}
-		for _, line := range strings.Split(content, "\n") {
-			for _, field := range strings.Fields(line) {
-				if field == "working-tree-encoding=unset" || field == "working-tree-encoding=unspecified" {
-					return fmt.Errorf("Git attributes contain a literal working-tree-encoding sentinel")
-				}
+		if filepath.Base(path) == ".gitattributes" {
+			content, err := runGitTarget(ctx, target, "show", "HEAD:./"+path)
+			if err != nil {
+				return fmt.Errorf("read Git attribute file %q: %w", path, err)
+			}
+			if hasLiteralWorkingTreeEncodingSentinel(content) {
+				return fmt.Errorf("Git attributes contain a literal working-tree-encoding sentinel")
 			}
 		}
 	}
+	for _, path := range sources {
+		content, err := readGitAttributeSource(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return fmt.Errorf("read active Git attribute source %q: %w", path, err)
+		}
+		if hasLiteralWorkingTreeEncodingSentinel(string(content)) {
+			return fmt.Errorf("Git attributes contain a literal working-tree-encoding sentinel")
+		}
+	}
 	return nil
+}
+
+func hasLiteralWorkingTreeEncodingSentinel(content string) bool {
+	for _, line := range strings.Split(content, "\n") {
+		for _, field := range strings.Fields(line) {
+			if field == "working-tree-encoding=unset" || field == "working-tree-encoding=unspecified" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func readGitAttributeSource(path string) ([]byte, error) {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), path)
+	if file == nil {
+		_ = syscall.Close(fd)
+		return nil, fmt.Errorf("open Git attribute source: invalid file descriptor")
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("Git attribute source is not a regular file")
+	}
+	return io.ReadAll(file)
 }
 
 func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, afterHash string, content []byte, message string) error {
@@ -2718,7 +2802,7 @@ func runGitWithInput(ctx context.Context, repository string, input []byte, overr
 	output := stdout.String()
 	for _, arg := range args {
 
-		if arg == "-z" {
+		if arg == "-z" || arg == "--null" {
 
 			return output, nil
 
