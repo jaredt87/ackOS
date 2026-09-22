@@ -1180,7 +1180,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	}
 	exchangedStat, ok := exchangedInfo.Sys().(*syscall.Stat_t)
 	if !ok || uint64(exchangedStat.Dev) != uint64(stat.Dev) || uint64(exchangedStat.Ino) != uint64(stat.Ino) {
-		if err := rollbackExchangedTarget(parentFD, tmpName, name, stat); err != nil {
+		if err := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat); err != nil {
 			return fmt.Errorf("restore concurrently replaced git target: %w", err)
 		}
 		return fmt.Errorf("git target changed before atomic replacement")
@@ -1224,21 +1224,42 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	return nil
 }
 
-func rollbackExchangedTarget(parentFD int, tmpName, name string, originalStat *syscall.Stat_t) error {
-	fd, err := syscall.Openat(parentFD, tmpName, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
-	if err != nil {
-		return fmt.Errorf("anchor exchanged git target for rollback: %w", err)
-	}
-	defer syscall.Close(fd)
+func rollbackExchangedTarget(parentFD int, tmpName, name string, originalFD int, originalStat *syscall.Stat_t) error {
+	// Anchor rollback to the already-open original inode. Do not trust tmpName:
+	// after RENAME_EXCHANGE another writer can replace that directory entry.
 	anchored := &syscall.Stat_t{}
-	if err := syscall.Fstat(fd, anchored); err != nil {
-		return fmt.Errorf("inspect anchored exchanged git target: %w", err)
+	if err := syscall.Fstat(originalFD, anchored); err != nil {
+		return fmt.Errorf("inspect anchored original git target: %w", err)
 	}
 	if uint64(anchored.Dev) != uint64(originalStat.Dev) || uint64(anchored.Ino) != uint64(originalStat.Ino) {
-		return fmt.Errorf("exchanged git target was replaced before rollback")
+		return fmt.Errorf("original git target inode changed before rollback")
 	}
-	if err := unix.Renameat2(parentFD, tmpName, parentFD, name, unix.RENAME_EXCHANGE); err != nil {
+
+	rollbackName := fmt.Sprintf(".%s.ackos-rollback-%d", name, time.Now().UnixNano())
+	if err := unix.Linkat(originalFD, "", parentFD, rollbackName, unix.AT_EMPTY_PATH); err != nil {
+		return fmt.Errorf("anchor original git target for rollback: %w", err)
+	}
+	defer syscall.Unlinkat(parentFD, rollbackName)
+
+	rollbackFD, err := syscall.Openat(parentFD, rollbackName, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return fmt.Errorf("reopen anchored original git target: %w", err)
+	}
+	rollbackStat := &syscall.Stat_t{}
+	statErr := syscall.Fstat(rollbackFD, rollbackStat)
+	_ = syscall.Close(rollbackFD)
+	if statErr != nil {
+		return fmt.Errorf("inspect anchored rollback target: %w", statErr)
+	}
+	if uint64(rollbackStat.Dev) != uint64(originalStat.Dev) || uint64(rollbackStat.Ino) != uint64(originalStat.Ino) {
+		return fmt.Errorf("anchored rollback target changed before rollback")
+	}
+
+	if err := unix.Renameat2(parentFD, rollbackName, parentFD, name, unix.RENAME_EXCHANGE); err != nil {
 		return fmt.Errorf("exchange original git target back: %w", err)
+	}
+	if err := syscall.Fsync(parentFD); err != nil {
+		return fmt.Errorf("sync Git target directory after rollback: %w", err)
 	}
 	return nil
 }
