@@ -376,7 +376,7 @@ func TestVerifierRejectsCommitWithWrongPreExecutionParent(t *testing.T) {
 func TestVerifierRejectsDetachedHead(t *testing.T) {
 	target, _, _, _, _ := newTestProvider(t, "initial")
 	parent := target.capturedHead
-	if _, err := target.lifecycle.capture(context.Background(), target, "detached-test"); err != nil {
+	if _, err := target.lifecycle.capture(context.Background(), target, "detached-test", func() {}); err != nil {
 		t.Fatal(err)
 	}
 	afterHash, err := gitBlobHash(context.Background(), target, "updated")
