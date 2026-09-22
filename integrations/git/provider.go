@@ -1096,11 +1096,11 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if err := rejectUnpreservableMetadata(path, info); err != nil {
 		return err
 	}
-	originalXattrs, err := captureXattrs(path)
+	capturedXattrs, err := captureXattrs(path)
 	if err != nil {
 		return fmt.Errorf("capture git target extended attributes: %w", err)
 	}
-	if len(originalXattrs) != 0 {
+	if len(capturedXattrs) != 0 {
 		return fmt.Errorf("git target has extended attributes or ACLs that cannot be preserved by atomic replacement")
 	}
 	mode := info.Mode()
