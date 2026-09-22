@@ -997,7 +997,11 @@ func validateMutationBoundary(ctx context.Context, target Target, expected strin
 
 // openRepositoryRoot revalidates the captured repository identity before use.
 func validateCapturedRepositoryIdentity(target Target) error {
-	if target.repositoryDev == 0 || target.repositoryIno == 0 {		return fmt.Errorf("configured repository identity is unavailable")	}	info, err := os.Stat(target.Repository)	if err != nil {
+	if target.repositoryDev == 0 || target.repositoryIno == 0 {
+		return fmt.Errorf("configured repository identity is unavailable")
+	}
+	info, err := os.Stat(target.Repository)
+	if err != nil {
 		return fmt.Errorf("revalidate configured repository identity: %w", err)
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
@@ -1006,6 +1010,7 @@ func validateCapturedRepositoryIdentity(target Target) error {
 	}
 	return nil
 }
+
 func openRepositoryRoot(target Target) (int, error) {
 	if target.repositoryDev == 0 || target.repositoryIno == 0 {
 		return -1, fmt.Errorf("configured repository identity is unavailable")
@@ -1994,16 +1999,21 @@ func rejectConfiguredFilters(ctx context.Context, target Target) error {
 	attrs, err := runGitTargetInput(ctx, target, []byte(paths), "check-attr", "-z", "--stdin", "filter")
 	if err != nil {
 		return fmt.Errorf("inspect Git clean filters: %w", err)
-	}	parts := strings.Split(strings.TrimSuffix(attrs, "\x00"), "\x00")	if len(parts)%3 != 0 {
-		return fmt.Errorf("unexpected Git clean filter metadata")	}
-	configuredDrivers := make(map[string]struct{})	filterDrivers, filterErr := runGitTarget(ctx, target, "config", "--includes", "--name-only", "--get-regexp", "^filter\\..*\\.(clean|process)$")
+	}
+	parts := strings.Split(strings.TrimSuffix(attrs, "\x00"), "\x00")
+	if len(parts)%3 != 0 {
+		return fmt.Errorf("unexpected Git clean filter metadata")
+	}
+	configuredDrivers := make(map[string]struct{})
+	filterDrivers, filterErr := runGitTarget(ctx, target, "config", "--includes", "--name-only", "--get-regexp", "^filter\\..*\\.(clean|process)$")
 	if filterErr == nil {
 		for _, name := range strings.Split(filterDrivers, "\n") {
 			name = strings.TrimSpace(name)
 			if !strings.HasPrefix(name, "filter.") {
 				continue
 			}
-			name = strings.TrimPrefix(name, "filter.")			if driver, _, ok := strings.Cut(name, "."); ok {
+			name = strings.TrimPrefix(name, "filter.")
+			if driver, _, ok := strings.Cut(name, "."); ok {
 				configuredDrivers[driver] = struct{}{}
 			}
 		}
@@ -2112,36 +2122,18 @@ func rejectLiteralWorkingTreeEncodingSentinels(ctx context.Context, target Targe
 	sources := make([]string, 0, 16)
 	seen := make(map[string]struct{})
 	addSource := func(path string) {
-		if path == "" {
-			return
-		}
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(target.Repository, path)
-		}
+		if path == "" { return }
+		if !filepath.IsAbs(path) { path = filepath.Join(target.Repository, path) }
 		abs, err := filepath.Abs(path)
-		if err != nil {
-			return
-		}
-		if _, ok := seen[abs]; ok {
-			return
-		}
+		if err != nil { return }
+		if _, ok := seen[abs]; ok { return }
 		seen[abs] = struct{}{}
 		sources = append(sources, abs)
 	}
-	if infoAttrs, err := runGitTarget(ctx, target, "rev-parse", "--git-path", "info/attributes"); err == nil {
-		addSource(strings.TrimSpace(infoAttrs))
-	}
-	if attrs, err := runGitTarget(ctx, target, "config", "--path", "--null", "--get", "core.attributesFile"); err == nil {
-		addSource(strings.TrimSuffix(attrs, "\x00"))
-	}
-	if systemAttrs, err := runGitTarget(ctx, target, "var", "GIT_ATTR_SYSTEM"); err == nil {
-		addSource(strings.TrimSpace(systemAttrs))
-	}
-	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		addSource(filepath.Join(xdg, "git", "attributes"))
-	} else if home, err := os.UserHomeDir(); err == nil {
-		addSource(filepath.Join(home, ".config", "git", "attributes"))
-	}
+	if infoAttrs, err := runGitTarget(ctx, target, "rev-parse", "--git-path", "info/attributes"); err == nil { addSource(strings.TrimSpace(infoAttrs)) }
+	if attrs, err := runGitTarget(ctx, target, "config", "--path", "--null", "--get", "core.attributesFile"); err == nil { addSource(strings.TrimSuffix(attrs, "\x00")) }
+	if systemAttrs, err := runGitTarget(ctx, target, "var", "GIT_ATTR_SYSTEM"); err == nil { addSource(strings.TrimSpace(systemAttrs)) }
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" { addSource(filepath.Join(xdg, "git", "attributes")) } else if home, err := os.UserHomeDir(); err == nil { addSource(filepath.Join(home, ".config", "git", "attributes")) }
 	paths, err := runGitTarget(ctx, target, "ls-files", "-z", "--cached")
 	if err != nil {
 		return fmt.Errorf("inspect Git attribute files: %w", err)
@@ -2149,28 +2141,19 @@ func rejectLiteralWorkingTreeEncodingSentinels(ctx context.Context, target Targe
 	paths = strings.TrimSuffix(paths, "\x00")
 	if paths != "" {
 		for _, path := range strings.Split(paths, "\x00") {
-		if filepath.Base(path) == ".gitattributes" {
+			if filepath.Base(path) != ".gitattributes" { continue }
 			content, err := runGitTarget(ctx, target, "show", "HEAD:./"+path)
-			if err != nil {
-				return fmt.Errorf("read Git attribute file %q: %w", path, err)
-			}
-			if hasLiteralWorkingTreeEncodingSentinel(content) {
-				return fmt.Errorf("Git attributes contain a literal working-tree-encoding sentinel")
-			}
-		}
+			if err != nil { return fmt.Errorf("read Git attribute file %q: %w", path, err) }
+			if hasLiteralWorkingTreeEncodingSentinel(content) { return fmt.Errorf("Git attributes contain a literal working-tree-encoding sentinel") }
 		}
 	}
 	for _, path := range sources {
 		content, err := readGitAttributeSource(path)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
+			if errors.Is(err, os.ErrNotExist) { continue }
 			return fmt.Errorf("read active Git attribute source %q: %w", path, err)
 		}
-		if hasLiteralWorkingTreeEncodingSentinel(string(content)) {
-			return fmt.Errorf("Git attributes contain a literal working-tree-encoding sentinel")
-		}
+		if hasLiteralWorkingTreeEncodingSentinel(string(content)) { return fmt.Errorf("Git attributes contain a literal working-tree-encoding sentinel") }
 	}
 	return nil
 }
@@ -2178,9 +2161,7 @@ func rejectLiteralWorkingTreeEncodingSentinels(ctx context.Context, target Targe
 func hasLiteralWorkingTreeEncodingSentinel(content string) bool {
 	for _, line := range strings.Split(content, "\n") {
 		for _, field := range strings.Fields(line) {
-			if field == "working-tree-encoding=unset" || field == "working-tree-encoding=unspecified" {
-				return true
-			}
+			if field == "working-tree-encoding=unset" || field == "working-tree-encoding=unspecified" { return true }
 		}
 	}
 	return false
@@ -2188,22 +2169,13 @@ func hasLiteralWorkingTreeEncodingSentinel(content string) bool {
 
 func readGitAttributeSource(path string) ([]byte, error) {
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	file := os.NewFile(uintptr(fd), path)
-	if file == nil {
-		_ = syscall.Close(fd)
-		return nil, fmt.Errorf("open Git attribute source: invalid file descriptor")
-	}
+	if file == nil { _ = syscall.Close(fd); return nil, fmt.Errorf("open Git attribute source: invalid file descriptor") }
 	defer file.Close()
 	info, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("Git attribute source is not a regular file")
-	}
+	if err != nil { return nil, err }
+	if !info.Mode().IsRegular() { return nil, fmt.Errorf("Git attribute source is not a regular file") }
 	return io.ReadAll(file)
 }
 
@@ -2840,3 +2812,8 @@ func rejectCommandScopeConfigEnvironment() error {
 	for _, entry := range os.Environ() {
 		key, _, ok := strings.Cut(entry, "=")
 		if ok && strings.HasPrefix(key, "GIT_CONFIG_") {
+			return fmt.Errorf("Git command-scope configuration environment is not allowed")
+		}
+	}
+	return nil
+}
