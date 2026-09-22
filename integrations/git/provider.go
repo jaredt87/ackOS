@@ -1366,9 +1366,6 @@ func exchangePreparedTargetAtValidatedParent(target Target, parentFD int, prepar
 	if err := exchangePreparedTarget(parentFD, preparedName, targetName); err != nil {
 		return err
 	}
-	if err := validateOpenedParentDir(target, parentFD); err != nil {
-		return fmt.Errorf("git target parent changed during exchange: %w", err)
-	}
 	return nil
 }
 
@@ -1413,13 +1410,17 @@ func rollbackExchangedTarget(parentFD int, tmpName, name string, originalFD int,
 		return fmt.Errorf("live git target changed before rollback")
 	}
 
-	if err := unix.Renameat2(parentFD, rollbackName, parentFD, name, unix.RENAME_EXCHANGE); err != nil {
+	if err := exchangeRollbackAtValidatedDestination(parentFD, rollbackName, name); err != nil {
 		return fmt.Errorf("exchange original git target back: %w", err)
 	}
 	if err := syscall.Fsync(parentFD); err != nil {
 		return fmt.Errorf("sync Git target directory after rollback: %w", err)
 	}
 	return nil
+}
+
+func exchangeRollbackAtValidatedDestination(parentFD int, rollbackName, name string) error {
+	return unix.Renameat2(parentFD, rollbackName, parentFD, name, unix.RENAME_EXCHANGE)
 }
 
 func removeReplacementXattrs(path string) error {
