@@ -572,6 +572,11 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 
 		return kernel.Observation{}, fmt.Errorf("execution authority ID is required")
 	}
+	expectedParent, err := v.Target.lifecycle.parent(authority.ExecutionID)
+	if err != nil {
+		return kernel.Observation{}, err
+	}
+	defer v.Target.lifecycle.discard(authority.ExecutionID)
 	if t.Subject != v.Target.Subject {
 
 		return kernel.Observation{}, fmt.Errorf("git subject mismatch: got %q, want %q", t.Subject, v.Target.Subject)
@@ -587,11 +592,6 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, err
 
 	}
-	expectedParent, err := v.Target.lifecycle.parent(authority.ExecutionID)
-	if err != nil {
-		return kernel.Observation{}, err
-	}
-	defer v.Target.lifecycle.discard(authority.ExecutionID)
 	currentHead, err := v.git(ctx, "rev-parse", "HEAD")
 	if err != nil {
 
