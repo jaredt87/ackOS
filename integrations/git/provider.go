@@ -1229,6 +1229,10 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		_ = syscall.Unlinkat(parentFD, anchorName)
 		return fmt.Errorf("hide prepared git target: %w", err)
 	}
+	var preparedStat syscall.Stat_t
+	if err := syscall.Fstat(tmpFD, &preparedStat); err != nil {
+		return fmt.Errorf("stat prepared git target: %w", err)
+	}
 	tmpName = anchorName
 	if err := tmpFile.Close(); err != nil {
 		return fmt.Errorf("close git target replacement: %w", err)
@@ -1251,7 +1255,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	// during the exchange window, restore the anchored original inode before
 	// returning failure.
 	if err := validateOpenedParentDir(target, parentFD); err != nil {
-		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat); rollbackErr != nil {
+		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat); rollbackErr != nil {
 			return fmt.Errorf("restore git target after parent identity changed: %w (parent check: %v)", rollbackErr, err)
 		}
 		return fmt.Errorf("git target parent changed during atomic replacement: %w", err)
@@ -1259,20 +1263,20 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	exchangedPath := filepath.Join(filepath.Dir(path), tmpName)
 	exchangedInfo, err := os.Lstat(exchangedPath)
 	if err != nil {
-		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat); rollbackErr != nil {
+		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat); rollbackErr != nil {
 			return fmt.Errorf("restore git target after exchanged inode inspection failure: %w (inspection: %v)", rollbackErr, err)
 		}
 		return fmt.Errorf("inspect exchanged git target: %w", err)
 	}
 	exchangedStat, ok := exchangedInfo.Sys().(*syscall.Stat_t)
 	if !ok || uint64(exchangedStat.Dev) != uint64(stat.Dev) || uint64(exchangedStat.Ino) != uint64(stat.Ino) {
-		if err := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat); err != nil {
+		if err := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat); err != nil {
 			return fmt.Errorf("restore concurrently replaced git target: %w", err)
 		}
 		return fmt.Errorf("git target changed before atomic replacement")
 	}
 	if err := verifyExchangedTargetMetadata(exchangedPath, exchangedInfo, info, capturedXattrs); err != nil {
-		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat); rollbackErr != nil {
+		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat); rollbackErr != nil {
 			return fmt.Errorf("restore concurrently modified git target: %w (metadata check: %v)", rollbackErr, err)
 		}
 		return err
@@ -1295,7 +1299,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		return fmt.Errorf("close exchanged git target: %w", closeErr)
 	}
 	if !bytes.Equal(exchangedContent, expected) {
-		if err := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat); err != nil {
+		if err := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat); err != nil {
 			return fmt.Errorf("restore concurrently modified git target: %w", err)
 		}
 		return fmt.Errorf("git target content changed before atomic replacement")
@@ -1368,7 +1372,7 @@ func exchangePreparedTargetAtValidatedParent(target Target, parentFD int, prepar
 	return nil
 }
 
-func rollbackExchangedTarget(parentFD int, tmpName, name string, originalFD int, originalStat *syscall.Stat_t) error {
+func rollbackExchangedTarget(parentFD int, tmpName, name string, originalFD int, originalStat, preparedStat *syscall.Stat_t) error {
 	// Anchor rollback to the already-open original inode. Do not trust tmpName:
 	// after RENAME_EXCHANGE another writer can replace that directory entry.
 	anchored := &syscall.Stat_t{}
@@ -1397,6 +1401,16 @@ func rollbackExchangedTarget(parentFD int, tmpName, name string, originalFD int,
 	}
 	if uint64(rollbackStat.Dev) != uint64(originalStat.Dev) || uint64(rollbackStat.Ino) != uint64(originalStat.Ino) {
 		return fmt.Errorf("anchored rollback target changed before rollback")
+	}
+	if preparedStat == nil {
+		return fmt.Errorf("prepared git target identity is unavailable for rollback")
+	}
+	currentStat := &syscall.Stat_t{}
+	if err := syscall.Fstatat(parentFD, name, currentStat, 0); err != nil {
+		return fmt.Errorf("inspect live git target before rollback: %w", err)
+	}
+	if uint64(currentStat.Dev) != uint64(preparedStat.Dev) || uint64(currentStat.Ino) != uint64(preparedStat.Ino) {
+		return fmt.Errorf("live git target changed before rollback")
 	}
 
 	if err := unix.Renameat2(parentFD, rollbackName, parentFD, name, unix.RENAME_EXCHANGE); err != nil {
@@ -2477,11 +2491,6 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, aft
 	if strings.TrimSpace(currentRef) != headRef {
 
 		return fmt.Errorf("Git HEAD branch changed during commit")
-
-	}
-	if _, err := runGitTarget(ctx, target, "add", "--", literalPathspec(target.Path)); err != nil {
-
-		return fmt.Errorf("synchronize Git index after commit: %w", err)
 
 	}
 	return nil
