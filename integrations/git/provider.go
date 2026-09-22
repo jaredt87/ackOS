@@ -1210,7 +1210,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	// Exchange the anchored prepared inode with the current directory entry atomically.
 	// The exchanged-out inode is then compared with the inode we validated before
 	// the write. A concurrent replacement therefore fails without being clobbered.
-	if err := exchangePreparedTarget(parentFD, tmpName, name); err != nil {
+	if err := exchangePreparedTargetAtValidatedParent(target, parentFD, tmpName, name); err != nil {
 		return fmt.Errorf("atomically compare-and-replace git target: %w", err)
 	}
 	// The exchange is the mutation point. Revalidate the parent immediately
@@ -1321,6 +1321,19 @@ func validateOpenedParentDir(target Target, parentFD int) error {
 func exchangePreparedTarget(parentFD int, preparedName, targetName string) error {
 	return unix.Renameat2(parentFD, preparedName, parentFD, targetName, unix.RENAME_EXCHANGE)
 }
+func exchangePreparedTargetAtValidatedParent(target Target, parentFD int, preparedName, targetName string) error {
+	if err := validateOpenedParentDir(target, parentFD); err != nil {
+		return fmt.Errorf("git target parent changed before exchange: %w", err)
+	}
+	if err := exchangePreparedTarget(parentFD, preparedName, targetName); err != nil {
+		return err
+	}
+	if err := validateOpenedParentDir(target, parentFD); err != nil {
+		return fmt.Errorf("git target parent changed during exchange: %w", err)
+	}
+	return nil
+}
+
 
 func rollbackExchangedTarget(parentFD int, tmpName, name string, originalFD int, originalStat *syscall.Stat_t) error {
 	// Anchor rollback to the already-open original inode. Do not trust tmpName:
@@ -2235,7 +2248,7 @@ func rejectLiteralWorkingTreeEncodingSentinels(ctx context.Context, target Targe
 		addSource(filepath.Join(home, ".config", "git", "attributes"))
 	}
 
-	paths, err := runGitTarget(ctx, target, "ls-files", "-z", "--cached")
+	paths, err := listCachedGitPaths(ctx, target)
 	if err != nil {
 		return fmt.Errorf("inspect Git attribute files: %w", err)
 	}
@@ -2287,6 +2300,12 @@ func rejectLiteralWorkingTreeEncodingSentinels(ctx context.Context, target Targe
 		}
 	}
 	return nil
+}
+
+func listCachedGitPaths(ctx context.Context, target Target) (string, error) {
+	// Keep pathname enumeration NUL-delimited so Git never applies C-style
+	// quoting or whitespace normalization to a valid repository path.
+	return runGitTarget(ctx, target, "ls-files", "-z", "--cached")
 }
 
 func hasLiteralWorkingTreeEncodingSentinel(content string) bool {
