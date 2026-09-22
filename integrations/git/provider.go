@@ -73,14 +73,9 @@ func (s *lifecycleState) capture(ctx context.Context, target Target, executionID
 		return executionParent{}, fmt.Errorf("Git repository lock is unavailable")
 	}
 	parent := executionParent{head: head, ref: ref, unlock: unlock}
-	s.mu.Lock()
-	if s.parents == nil {
-		s.parents = make(map[string]executionParent)
-	}
 	if err := s.storeParent(executionID, parent); err != nil {
 		return executionParent{}, err
 	}
-	s.mu.Unlock()
 	return parent, nil
 }
 
@@ -1359,6 +1354,7 @@ func validateOpenedParentDir(target Target, parentFD int) error {
 func exchangePreparedTarget(parentFD int, preparedName, targetName string) error {
 	return unix.Renameat2(parentFD, preparedName, parentFD, targetName, unix.RENAME_EXCHANGE)
 }
+
 func exchangePreparedTargetAtValidatedParent(target Target, parentFD int, preparedName, targetName string) error {
 	if err := validateOpenedParentDir(target, parentFD); err != nil {
 		return fmt.Errorf("git target parent changed before exchange: %w", err)
