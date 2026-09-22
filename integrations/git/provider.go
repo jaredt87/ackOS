@@ -4,7 +4,6 @@ package git
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -988,13 +987,22 @@ func validateNoSymlinks(target Target) error {
 }
 
 func acquireTargetLock(ctx context.Context, target Target) (func(), error) {
-	sum := sha256.Sum256([]byte(target.Repository))
-	path := filepath.Join(os.TempDir(), fmt.Sprintf("ackos-target-%x.lock", sum))
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	// Keep the lock in the captured Git common directory rather than TMPDIR.
+	// Different processes can have different TMPDIR values, but they must still
+	// resolve the same repository-associated lock inode.
+	commonFD, err := openGitMetadataDir(target.gitCommonDirPath, target.gitCommonDirDev, target.gitCommonDirIno)
 	if err != nil {
-
+		return nil, fmt.Errorf("open ackOS target lock directory: %w", err)
+	}
+	lockFD, err := syscall.Openat(commonFD, "ackos-target.lock", syscall.O_CREATE|syscall.O_RDWR|syscall.O_NOFOLLOW, 0o600)
+	_ = syscall.Close(commonFD)
+	if err != nil {
 		return nil, fmt.Errorf("open ackOS target lock: %w", err)
-
+	}
+	file := os.NewFile(uintptr(lockFD), "ackos-target.lock")
+	if file == nil {
+		_ = syscall.Close(lockFD)
+		return nil, fmt.Errorf("open ackOS target lock: invalid file descriptor")
 	}
 	for {
 		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
@@ -1255,6 +1263,13 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	// is not enough to recreate a directory entry with linkat(AT_EMPTY_PATH).
 	originalAnchorName := fmt.Sprintf(".%s.ackos-original-%d", name, time.Now().UnixNano())
 	if err := unix.Linkat(fd, "", parentFD, originalAnchorName, unix.AT_EMPTY_PATH); err != nil {
+		// RENAME_EXCHANGE has already installed the prepared inode. If the
+		// rollback anchor cannot be created, the still-present tmpName entry is
+		// the original inode, so exchange it back before returning.
+		if rollbackErr := rollbackExchangedTargetViaName(parentFD, tmpName, name, stat, &preparedStat); rollbackErr != nil {
+			cleanup = false
+			return fmt.Errorf("anchor original git target: %w (rollback: %v)", err, rollbackErr)
+		}
 		return fmt.Errorf("anchor original git target: %w", err)
 	}
 	defer syscall.Unlinkat(parentFD, originalAnchorName)
@@ -1325,6 +1340,15 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if err := syscall.Fsync(parentFD); err != nil {
 		return rollback(fmt.Errorf("sync git target directory: %w", err))
 	}
+	// The exchange is durable now, so remove the rollback-only anchor and
+	// durably synchronize that removal before reporting success.
+	if err := syscall.Unlinkat(parentFD, originalAnchorName); err != nil {
+		return fmt.Errorf("remove original git target rollback anchor: %w", err)
+	}
+	if err := syscall.Fsync(parentFD); err != nil {
+		return fmt.Errorf("sync Git target directory after rollback anchor removal: %w", err)
+	}
+	cleanup = false
 	return nil
 }
 
@@ -1379,6 +1403,33 @@ func exchangePreparedTargetAtValidatedParent(target Target, parentFD int, prepar
 	}
 	if err := exchangePreparedTarget(parentFD, preparedName, targetName); err != nil {
 		return err
+	}
+	return nil
+}
+
+func rollbackExchangedTargetViaName(parentFD int, tmpName, name string, originalStat, preparedStat *syscall.Stat_t) error {
+	if originalStat == nil || preparedStat == nil {
+		return fmt.Errorf("rollback target identities are unavailable")
+	}
+	originalCurrent := &unix.Stat_t{}
+	if err := unix.Fstatat(parentFD, tmpName, originalCurrent, 0); err != nil {
+		return fmt.Errorf("inspect exchanged original git target before rollback: %w", err)
+	}
+	if uint64(originalCurrent.Dev) != uint64(originalStat.Dev) || uint64(originalCurrent.Ino) != uint64(originalStat.Ino) {
+		return fmt.Errorf("exchanged original git target changed before rollback")
+	}
+	current := &unix.Stat_t{}
+	if err := unix.Fstatat(parentFD, name, current, 0); err != nil {
+		return fmt.Errorf("inspect live git target before rollback: %w", err)
+	}
+	if uint64(current.Dev) != uint64(preparedStat.Dev) || uint64(current.Ino) != uint64(preparedStat.Ino) {
+		return fmt.Errorf("live git target changed before rollback")
+	}
+	if err := unix.Renameat2(parentFD, tmpName, parentFD, name, unix.RENAME_EXCHANGE); err != nil {
+		return fmt.Errorf("exchange original git target back: %w", err)
+	}
+	if err := syscall.Fsync(parentFD); err != nil {
+		return fmt.Errorf("sync Git target directory after rollback: %w", err)
 	}
 	return nil
 }
