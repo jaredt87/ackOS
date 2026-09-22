@@ -1213,6 +1213,16 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if err := exchangePreparedTarget(parentFD, tmpName, name); err != nil {
 		return fmt.Errorf("atomically compare-and-replace git target: %w", err)
 	}
+	// The exchange is the mutation point. Revalidate the parent immediately
+	// afterward as well as immediately before it; if an ancestor was replaced
+	// during the exchange window, restore the anchored original inode before
+	// returning failure.
+	if err := validateOpenedParentDir(target, parentFD); err != nil {
+		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat); rollbackErr != nil {
+			return fmt.Errorf("restore git target after parent identity changed: %w (parent check: %v)", rollbackErr, err)
+		}
+		return fmt.Errorf("git target parent changed during atomic replacement: %w", err)
+	}
 	exchangedPath := filepath.Join(filepath.Dir(path), tmpName)
 	exchangedInfo, err := os.Lstat(exchangedPath)
 	if err != nil {
@@ -2251,7 +2261,7 @@ func rejectLiteralWorkingTreeEncodingSentinels(ctx context.Context, target Targe
 	parent := filepath.Dir(filepath.Clean(target.Path))
 	for {
 		candidate := filepath.Join(target.Repository, parent, ".gitattributes")
-		content, err := os.ReadFile(candidate)
+		content, err := readGitAttributeSource(candidate)
 		if err == nil {
 			if hasLiteralWorkingTreeEncodingSentinel(string(content)) {
 				return fmt.Errorf("Git working-tree attributes contain a literal working-tree-encoding sentinel")
