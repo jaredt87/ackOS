@@ -1190,6 +1190,12 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		return fmt.Errorf("close git target replacement: %w", err)
 	}
 	tmpFD = -1
+	// Revalidate the directory reached from the captured repository root immediately
+	// before the exchange. The open parent FD can otherwise refer to a detached
+	// directory after a concurrent rename/replace of an ancestor.
+	if err := validateOpenedParentDir(target, parentFD); err != nil {
+		return fmt.Errorf("git target parent changed before atomic replacement: %w", err)
+	}
 	// Exchange the anchored prepared inode with the current directory entry atomically.
 	// The exchanged-out inode is then compared with the inode we validated before
 	// the write. A concurrent replacement therefore fails without being clobbered.
@@ -1246,6 +1252,47 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	cleanup = false
 	if err := syscall.Fsync(parentFD); err != nil {
 		return fmt.Errorf("sync git target directory: %w", err)
+	}
+	return nil
+}
+
+func validateOpenedParentDir(target Target, parentFD int) error {
+	var opened syscall.Stat_t
+	if err := syscall.Fstat(parentFD, &opened); err != nil {
+		return fmt.Errorf("stat opened git target parent: %w", err)
+	}
+	rootFD, err := openRepositoryRoot(target)
+	if err != nil {
+		return err
+	}
+	defer syscall.Close(rootFD)
+	cleanPath := filepath.Clean(target.Path)
+	parentPath := filepath.Dir(cleanPath)
+	fd := rootFD
+	closeFD := false
+	for _, part := range strings.Split(parentPath, string(filepath.Separator)) {
+		if part == "." || part == "" {
+			continue
+		}
+		next, err := syscall.Openat(fd, part, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+		if closeFD {
+			_ = syscall.Close(fd)
+		}
+		if err != nil {
+			return fmt.Errorf("reopen git target parent: %w", err)
+		}
+		fd = next
+		closeFD = true
+	}
+	if closeFD {
+		defer syscall.Close(fd)
+	}
+	var reachable syscall.Stat_t
+	if err := syscall.Fstat(fd, &reachable); err != nil {
+		return fmt.Errorf("stat reachable git target parent: %w", err)
+	}
+	if uint64(opened.Dev) != uint64(reachable.Dev) || uint64(opened.Ino) != uint64(reachable.Ino) {
+		return fmt.Errorf("opened parent directory identity changed")
 	}
 	return nil
 }
@@ -2185,6 +2232,26 @@ func rejectLiteralWorkingTreeEncodingSentinels(ctx context.Context, target Targe
 				return fmt.Errorf("Git attributes contain a literal working-tree-encoding sentinel")
 			}
 		}
+	}
+	// Git also reads .gitattributes from the working tree even when the file is
+	// ignored or untracked. Scan the target's active ancestry so a hidden
+	// attribute source cannot introduce a literal encoding sentinel after the
+	// preflight checks.
+	parent := filepath.Dir(filepath.Clean(target.Path))
+	for {
+		candidate := filepath.Join(target.Repository, parent, ".gitattributes")
+		content, err := os.ReadFile(candidate)
+		if err == nil {
+			if hasLiteralWorkingTreeEncodingSentinel(string(content)) {
+				return fmt.Errorf("Git working-tree attributes contain a literal working-tree-encoding sentinel")
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("read active Git working-tree attributes %q: %w", candidate, err)
+		}
+		if parent == "." {
+			break
+		}
+		parent = filepath.Dir(parent)
 	}
 	for _, path := range sources {
 		content, err := readGitAttributeSource(path)
