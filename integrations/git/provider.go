@@ -4,8 +4,8 @@ package git
 import (
 	"bytes"
 	"context"
-	"errors"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -997,8 +997,7 @@ func validateMutationBoundary(ctx context.Context, target Target, expected strin
 
 // openRepositoryRoot revalidates the captured repository identity before use.
 func validateCapturedRepositoryIdentity(target Target) error {
-	if target.repositoryDev == 0 || target.repositoryIno == 0 {		return fmt.Errorf("configured repository identity is unavailable")	}	info, err := os.Stat(target.Repository)
-	if err != nil {
+	if target.repositoryDev == 0 || target.repositoryIno == 0 {		return fmt.Errorf("configured repository identity is unavailable")	}	info, err := os.Stat(target.Repository)	if err != nil {
 		return fmt.Errorf("revalidate configured repository identity: %w", err)
 	}
 	stat, ok := info.Sys().(*syscall.Stat_t)
@@ -1997,8 +1996,7 @@ func rejectConfiguredFilters(ctx context.Context, target Target) error {
 		return fmt.Errorf("inspect Git clean filters: %w", err)
 	}	parts := strings.Split(strings.TrimSuffix(attrs, "\x00"), "\x00")	if len(parts)%3 != 0 {
 		return fmt.Errorf("unexpected Git clean filter metadata")	}
-	configuredDrivers := make(map[string]struct{})
-	filterDrivers, filterErr := runGitTarget(ctx, target, "config", "--includes", "--name-only", "--get-regexp", "^filter\\..*\\.(clean|process)$")
+	configuredDrivers := make(map[string]struct{})	filterDrivers, filterErr := runGitTarget(ctx, target, "config", "--includes", "--name-only", "--get-regexp", "^filter\\..*\\.(clean|process)$")
 	if filterErr == nil {
 		for _, name := range strings.Split(filterDrivers, "\n") {
 			name = strings.TrimSpace(name)
