@@ -339,7 +339,7 @@ func TestVerifyCommitReadsMarkerFromCapturedCommit(t *testing.T) {
 func TestVerifierRejectsCommitWithWrongPreExecutionParent(t *testing.T) {
 	target, _, _, _, _ := newTestProvider(t, "initial")
 	capturedParent := target.capturedHead
-	if _, err := target.lifecycle.capture(context.Background(), target, "wrong-parent"); err != nil {
+	if _, err := target.lifecycle.capture(context.Background(), target, "wrong-parent", func() {}); err != nil {
 		t.Fatal(err)
 	}
 
