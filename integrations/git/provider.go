@@ -990,54 +990,33 @@ func validateNoSymlinks(target Target) error {
 }
 
 func acquireTargetLock(ctx context.Context, target Target) (func(), error) {
-	// Keep the lock in the captured Git common directory rather than TMPDIR.
-	// Different processes can have different TMPDIR values, but they must still
-	// resolve the same repository-associated lock inode.
+	// Lock the already-validated Git common-directory inode itself. A pathname
+	// lock can be replaced by another process between open and flock; the
+	// directory inode is the stable repository-associated lock namespace.
 	commonFD, err := openGitMetadataDir(target.gitCommonDirPath, target.gitCommonDirDev, target.gitCommonDirIno)
 	if err != nil {
 		return nil, fmt.Errorf("open ackOS target lock directory: %w", err)
 	}
-	lockFD, err := syscall.Openat(commonFD, "ackos-target.lock", unix.O_CREAT|syscall.O_RDWR|syscall.O_NOFOLLOW, 0o600)
-	_ = syscall.Close(commonFD)
-	if err != nil {
-		return nil, fmt.Errorf("open ackOS target lock: %w", err)
-	}
-	file := os.NewFile(uintptr(lockFD), "ackos-target.lock")
-	if file == nil {
-		_ = syscall.Close(lockFD)
-		return nil, fmt.Errorf("open ackOS target lock: invalid file descriptor")
-	}
 	for {
-		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-
+		err = syscall.Flock(commonFD, syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
-
 			return func() {
-				_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
-				_ = file.Close()
-
+				_ = syscall.Flock(commonFD, syscall.LOCK_UN)
+				_ = syscall.Close(commonFD)
 			}, nil
-
 		}
-
 		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
-			_ = file.Close()
-
+			_ = syscall.Close(commonFD)
 			return nil, fmt.Errorf("acquire ackOS target lock: %w", err)
-
 		}
 		select {
 		case <-ctx.Done():
-			_ = file.Close()
-
+			_ = syscall.Close(commonFD)
 			return nil, ctx.Err()
 		case <-time.After(25 * time.Millisecond):
-
 		}
-
 	}
 }
-
 func validateMutationBoundary(ctx context.Context, target Target, expected string) error {
 	content, err := readFile(ctx, target)
 	if err != nil {
@@ -1353,7 +1332,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	// The exchange is durable now, so remove the rollback-only anchor and
 	// durably synchronize that removal before reporting success.
 	if err := syscall.Unlinkat(parentFD, originalAnchorName); err != nil {
-		return fmt.Errorf("remove original git target rollback anchor: %w", err)
+		return rollback(fmt.Errorf("remove original git target rollback anchor: %w", err))
 	}
 	anchorRemoved = true
 	if syncErr := syscall.Fsync(parentFD); syncErr != nil {
@@ -2997,72 +2976,3 @@ func runGitWithInput(ctx context.Context, repository string, input []byte, overr
 	case runErr := <-done:
 
 		if runErr != nil {
-
-			return "", fmt.Errorf("%w: %s", runErr, strings.TrimSpace(stderr.String()))
-
-		}
-	case <-ctx.Done():
-		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		select {
-		case <-done:
-		case <-time.After(cmd.WaitDelay):
-
-		}
-
-		return "", ctx.Err()
-
-	}
-	output := stdout.String()
-	for _, arg := range args {
-
-		if arg == "-z" || arg == "--null" {
-
-			return output, nil
-
-		}
-
-	}
-	if len(args) > 0 && args[0] == "show" {
-
-		return output, nil
-
-	}
-	return strings.TrimSpace(output), nil
-}
-
-func sanitizedGitEnv() []string {
-	blocked := map[string]struct{}{
-		"GIT_DIR":                          {},
-		"GIT_WORK_TREE":                    {},
-		"GIT_INDEX_FILE":                   {},
-		"GIT_OBJECT_DIRECTORY":             {},
-		"GIT_ALTERNATE_OBJECT_DIRECTORIES": {},
-		"GIT_COMMON_DIR":                   {},
-		"GIT_NAMESPACE":                    {},
-		"GIT_CEILING_DIRECTORIES":          {},
-		"GIT_DISCOVERY_ACROSS_FILESYSTEM":  {},
-		"GIT_GRAFT_FILE":                   {},
-	}
-	env := make([]string, 0, len(os.Environ()))
-	for _, entry := range os.Environ() {
-		key, _, ok := strings.Cut(entry, "=")
-		if !ok {
-			continue
-		}
-		if _, isBlocked := blocked[key]; isBlocked || strings.HasPrefix(key, "GIT_CONFIG_") {
-			continue
-		}
-		env = append(env, entry)
-	}
-	return env
-}
-
-func rejectCommandScopeConfigEnvironment() error {
-	for _, entry := range os.Environ() {
-		key, _, ok := strings.Cut(entry, "=")
-		if ok && strings.HasPrefix(key, "GIT_CONFIG_") {
-			return fmt.Errorf("Git command-scope configuration environment is not allowed")
-		}
-	}
-	return nil
-}
