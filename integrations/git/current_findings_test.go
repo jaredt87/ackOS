@@ -116,6 +116,15 @@ func TestRejectConfiguredNormalizationRejectsEOLAttribute(t *testing.T) {
 	}
 }
 
+func TestRejectAttributesTargetAcceptsDisabledSystemAttributes(t *testing.T) {
+	t.Setenv("GIT_ATTR_NOSYSTEM", "1")
+	target, _, _, _, _ := newTestProvider(t, "initial")
+
+	if err := rejectSystemAttributesTarget(context.Background(), target); err != nil {
+		t.Fatalf("error = %v, want disabled system attributes to be treated as inactive", err)
+	}
+}
+
 func TestRejectAttributesTargetRejectsDefaultPerUserAttributesFile(t *testing.T) {
 	xdg := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdg)
