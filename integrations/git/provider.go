@@ -1179,7 +1179,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		}
 		return fmt.Errorf("git target changed before atomic replacement")
 	}
-	if err := verifyExchangedTargetMetadata(exchangedPath, exchangedInfo, info, originalXattrs); err != nil {
+	if err := verifyExchangedTargetMetadata(exchangedPath, exchangedInfo, info, capturedXattrs); err != nil {
 		if rollbackErr := unix.Renameat2(parentFD, tmpName, parentFD, name, unix.RENAME_EXCHANGE); rollbackErr != nil {
 			return fmt.Errorf("restore concurrently modified git target: %w (metadata check: %v)", rollbackErr, err)
 		}
