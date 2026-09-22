@@ -1769,45 +1769,7 @@ func requireWorktreeRoot(ctx context.Context, target Target) error {
 	return nil
 }
 func rejectSystemAttributesTarget(ctx context.Context, target Target) error {
-	if _, disabled := os.LookupEnv("GIT_ATTR_NOSYSTEM"); disabled {
-		return nil
-	}
-	return rejectActiveSystemAttributesTarget(ctx, target)
-}
-
-func rejectActiveSystemAttributesTarget(ctx context.Context, target Target) error {
-	resolved, err := filepath.EvalSymlinks(filepath.Join(target.Repository, target.Path))
-	if err != nil {
-		return nil
-	}
-	resolved, err = filepath.Abs(resolved)
-	if err != nil {
-		return fmt.Errorf("resolve target for system attributes check: %w", err)
-	}
-	systemAttrs, err := runGitTarget(ctx, target, "var", "GIT_ATTR_SYSTEM")
-	if err != nil {
-		return fmt.Errorf("inspect system Git attributes file: %w", err)
-	}
-	systemAttrs = strings.TrimSpace(systemAttrs)
-	if systemAttrs == "" {
-		return nil
-	}
-	systemAttrs, err = filepath.Abs(systemAttrs)
-	if err != nil {
-		return fmt.Errorf("resolve system Git attributes file: %w", err)
-	}
-	systemResolved, err := filepath.EvalSymlinks(systemAttrs)
-	if err != nil {
-		return nil
-	}
-	systemResolved, err = filepath.Abs(systemResolved)
-	if err != nil {
-		return fmt.Errorf("resolve system Git attributes identity: %w", err)
-	}
-	if resolved == systemResolved {
-		return fmt.Errorf("git target is configured as the active system attributes file")
-	}
-	return nil
+	return rejectSystemAttributesTargetSource(ctx, target)
 }
 
 func rejectAttributesTarget(ctx context.Context, target Target) error {
