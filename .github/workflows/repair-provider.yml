@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Fix syscall stat type
         run: |
-          sed -i '/var currentStat syscall\.Stat_t/{s/syscall\.Stat_t/unix.Stat_t/;}' integrations/git/provider.go
+          sed -i 's/currentStat := \&syscall\.Stat_t{}/currentStat := \&unix.Stat_t{}/' integrations/git/provider.go
           git diff --exit-code -- integrations/git/provider.go || {
             git config user.name github-actions[bot]
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
