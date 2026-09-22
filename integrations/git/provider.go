@@ -289,10 +289,11 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 
 	}
 	capturedLifecycle := false
+	executionSucceeded := false
 	defer func() {
-		if capturedLifecycle {
+		if capturedLifecycle && !executionSucceeded {
 			e.Target.lifecycle.discard(authority.ExecutionID)
-		} else {
+		} else if !capturedLifecycle {
 			unlock()
 		}
 	}()
@@ -560,6 +561,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(fmt.Errorf("Git HEAD changed after commit verification"))
 
 	}
+	executionSucceeded = true
 	return kernel.ExecutionResult{Success: true, Message: "git file transitioned and committed"}
 }
 
