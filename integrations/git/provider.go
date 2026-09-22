@@ -4,6 +4,7 @@ package git
 import (
 	"bytes"
 	"context"
+	"errors"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -997,8 +998,7 @@ func validateMutationBoundary(ctx context.Context, target Target, expected strin
 // openRepositoryRoot revalidates the captured repository identity before use.
 func validateCapturedRepositoryIdentity(target Target) error {
 	if target.repositoryDev == 0 || target.repositoryIno == 0 {
-		return fmt.Errorf("configured repository identity is unavailable")
-	}
+		return fmt.Errorf("configured repository identity is unavailable")	}
 	info, err := os.Stat(target.Repository)
 	if err != nil {
 		return fmt.Errorf("revalidate configured repository identity: %w", err)
@@ -1997,8 +1997,7 @@ func rejectConfiguredFilters(ctx context.Context, target Target) error {
 	attrs, err := runGitTargetInput(ctx, target, []byte(paths), "check-attr", "-z", "--stdin", "filter")
 	if err != nil {
 		return fmt.Errorf("inspect Git clean filters: %w", err)
-	}
-	parts := strings.Split(strings.TrimSuffix(attrs, "\x00"), "\x00")
+	}	parts := strings.Split(strings.TrimSuffix(attrs, "\x00"), "\x00")
 	if len(parts)%3 != 0 {
 		return fmt.Errorf("unexpected Git clean filter metadata")
 	}
@@ -2848,8 +2847,3 @@ func rejectCommandScopeConfigEnvironment() error {
 	for _, entry := range os.Environ() {
 		key, _, ok := strings.Cut(entry, "=")
 		if ok && strings.HasPrefix(key, "GIT_CONFIG_") {
-			return fmt.Errorf("Git command-scope configuration environment is not allowed")
-		}
-	}
-	return nil
-}
