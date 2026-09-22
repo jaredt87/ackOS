@@ -1141,6 +1141,12 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if err := syscall.Fsync(tmpFD); err != nil {
 		return fmt.Errorf("sync git target replacement: %w", err)
 	}
+	if err := syscall.Fchown(tmpFD, int(stat.Uid), int(stat.Gid)); err != nil {
+		return fmt.Errorf("restore git target ownership: %w", err)
+	}
+	if err := removeReplacementXattrs(tmpFile.Name()); err != nil {
+		return err
+	}
 	if err := syscall.Fchmod(tmpFD, uint32(mode.Perm())); err != nil {
 		return fmt.Errorf("restore git target mode: %w", err)
 	}
@@ -1174,7 +1180,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	}
 	exchangedStat, ok := exchangedInfo.Sys().(*syscall.Stat_t)
 	if !ok || uint64(exchangedStat.Dev) != uint64(stat.Dev) || uint64(exchangedStat.Ino) != uint64(stat.Ino) {
-		if err := unix.Renameat2(parentFD, tmpName, parentFD, name, unix.RENAME_EXCHANGE); err != nil {
+		if err := rollbackExchangedTarget(parentFD, tmpName, name, stat); err != nil {
 			return fmt.Errorf("restore concurrently replaced git target: %w", err)
 		}
 		return fmt.Errorf("git target changed before atomic replacement")
@@ -1233,6 +1239,26 @@ func rollbackExchangedTarget(parentFD int, tmpName, name string, originalStat *s
 	}
 	if err := unix.Renameat2(parentFD, tmpName, parentFD, name, unix.RENAME_EXCHANGE); err != nil {
 		return fmt.Errorf("exchange original git target back: %w", err)
+	}
+	return nil
+}
+
+func removeReplacementXattrs(path string) error {
+	xattrs, err := captureXattrs(path)
+	if err != nil {
+		return fmt.Errorf("inspect replacement extended attributes: %w", err)
+	}
+	for name := range xattrs {
+		if err := syscall.Removexattr(path, name); err != nil {
+			return fmt.Errorf("remove inherited replacement attribute %q: %w", name, err)
+		}
+	}
+	remaining, err := captureXattrs(path)
+	if err != nil {
+		return fmt.Errorf("verify replacement extended attributes: %w", err)
+	}
+	if len(remaining) != 0 {
+		return fmt.Errorf("replacement retains inherited extended attributes or ACLs")
 	}
 	return nil
 }
@@ -1595,6 +1621,39 @@ func rejectSystemAttributesTarget(ctx context.Context, target Target) error {
 func rejectAttributesTarget(ctx context.Context, target Target) error {
 	if err := rejectSystemAttributesTarget(ctx, target); err != nil {
 		return err
+	}
+	configured, err := filepath.Abs(filepath.Join(target.Repository, target.Path))
+	if err != nil {
+		return fmt.Errorf("resolve configured target path: %w", err)
+	}
+	configuredResolved, resolveErr := filepath.EvalSymlinks(configured)
+	if resolveErr == nil {
+		configuredResolved, resolveErr = filepath.Abs(configuredResolved)
+		if resolveErr != nil {
+			return fmt.Errorf("resolve configured target identity path: %w", resolveErr)
+		}
+	}
+	if infoAttrs, infoErr := runGitTarget(ctx, target, "rev-parse", "--git-path", "info/attributes"); infoErr == nil {
+		infoAttrs = strings.TrimSpace(infoAttrs)
+		if infoAttrs != "" {
+			if !filepath.IsAbs(infoAttrs) {
+				infoAttrs = filepath.Join(target.Repository, infoAttrs)
+			}
+			infoAttrs, infoErr = filepath.Abs(infoAttrs)
+			if infoErr != nil {
+				return fmt.Errorf("resolve repository attributes file: %w", infoErr)
+			}
+			infoResolved, infoResolveErr := filepath.EvalSymlinks(infoAttrs)
+			if infoResolveErr == nil {
+				infoResolved, infoResolveErr = filepath.Abs(infoResolved)
+				if infoResolveErr != nil {
+					return fmt.Errorf("resolve repository attributes identity path: %w", infoResolveErr)
+				}
+				if resolveErr == nil && configuredResolved == infoResolved {
+					return fmt.Errorf("git target is configured as the active repository attributes file")
+				}
+			}
+		}
 	}
 	if strings.EqualFold(filepath.Base(target.Path), ".gitattributes") {
 
