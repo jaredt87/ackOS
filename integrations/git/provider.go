@@ -1368,7 +1368,6 @@ func exchangePreparedTargetAtValidatedParent(target Target, parentFD int, prepar
 	return nil
 }
 
-
 func rollbackExchangedTarget(parentFD int, tmpName, name string, originalFD int, originalStat *syscall.Stat_t) error {
 	// Anchor rollback to the already-open original inode. Do not trust tmpName:
 	// after RENAME_EXCHANGE another writer can replace that directory entry.
