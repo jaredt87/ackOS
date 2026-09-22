@@ -1250,12 +1250,20 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if err := exchangePreparedTargetAtValidatedParent(target, parentFD, tmpName, name); err != nil {
 		return fmt.Errorf("atomically compare-and-replace git target: %w", err)
 	}
+	// Keep a hard-link anchor to the original inode until the directory sync
+	// succeeds. After Unlinkat removes the exchanged-out name, the open FD alone
+	// is not enough to recreate a directory entry with linkat(AT_EMPTY_PATH).
+	originalAnchorName := fmt.Sprintf(".%s.ackos-original-%d", name, time.Now().UnixNano())
+	if err := unix.Linkat(fd, "", parentFD, originalAnchorName, unix.AT_EMPTY_PATH); err != nil {
+		return fmt.Errorf("anchor original git target: %w", err)
+	}
+	defer syscall.Unlinkat(parentFD, originalAnchorName)
 	// The exchange is the mutation point. Revalidate the parent immediately
 	// afterward as well as immediately before it; if an ancestor was replaced
 	// during the exchange window, restore the anchored original inode before
 	// returning failure.
 	if err := validateOpenedParentDir(target, parentFD); err != nil {
-		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat); rollbackErr != nil {
+		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat, originalAnchorName); rollbackErr != nil {
 			return fmt.Errorf("restore git target after parent identity changed: %w (parent check: %v)", rollbackErr, err)
 		}
 		return fmt.Errorf("git target parent changed during atomic replacement: %w", err)
@@ -1263,26 +1271,26 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	exchangedPath := filepath.Join(filepath.Dir(path), tmpName)
 	exchangedInfo, err := os.Lstat(exchangedPath)
 	if err != nil {
-		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat); rollbackErr != nil {
+		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat, originalAnchorName); rollbackErr != nil {
 			return fmt.Errorf("restore git target after exchanged inode inspection failure: %w (inspection: %v)", rollbackErr, err)
 		}
 		return fmt.Errorf("inspect exchanged git target: %w", err)
 	}
 	exchangedStat, ok := exchangedInfo.Sys().(*syscall.Stat_t)
 	if !ok || uint64(exchangedStat.Dev) != uint64(stat.Dev) || uint64(exchangedStat.Ino) != uint64(stat.Ino) {
-		if err := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat); err != nil {
+		if err := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat, originalAnchorName); err != nil {
 			return fmt.Errorf("restore concurrently replaced git target: %w", err)
 		}
 		return fmt.Errorf("git target changed before atomic replacement")
 	}
 	if err := verifyExchangedTargetMetadata(exchangedPath, exchangedInfo, info, capturedXattrs); err != nil {
-		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat); rollbackErr != nil {
+		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat, originalAnchorName); rollbackErr != nil {
 			return fmt.Errorf("restore concurrently modified git target: %w (metadata check: %v)", rollbackErr, err)
 		}
 		return err
 	}
 	rollback := func(cause error) error {
-		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat); rollbackErr != nil {
+		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat, originalAnchorName); rollbackErr != nil {
 			return fmt.Errorf("%v (rollback: %v)", cause, rollbackErr)
 		}
 		return cause
@@ -1305,7 +1313,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		return rollback(fmt.Errorf("close exchanged git target: %w", closeErr))
 	}
 	if !bytes.Equal(exchangedContent, expected) {
-		if err := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat); err != nil {
+		if err := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat, originalAnchorName); err != nil {
 			return fmt.Errorf("restore concurrently modified git target: %w", err)
 		}
 		return fmt.Errorf("git target content changed before atomic replacement")
@@ -1375,7 +1383,7 @@ func exchangePreparedTargetAtValidatedParent(target Target, parentFD int, prepar
 	return nil
 }
 
-func rollbackExchangedTarget(parentFD int, tmpName, name string, originalFD int, originalStat, preparedStat *syscall.Stat_t) error {
+func rollbackExchangedTarget(parentFD int, tmpName, name string, originalFD int, originalStat, preparedStat *syscall.Stat_t, originalAnchorName string) error {
 	// Anchor rollback to the already-open original inode. Do not trust tmpName:
 	// after RENAME_EXCHANGE another writer can replace that directory entry.
 	anchored := &syscall.Stat_t{}
@@ -1386,13 +1394,11 @@ func rollbackExchangedTarget(parentFD int, tmpName, name string, originalFD int,
 		return fmt.Errorf("original git target inode changed before rollback")
 	}
 
-	rollbackName := fmt.Sprintf(".%s.ackos-rollback-%d", name, time.Now().UnixNano())
-	if err := unix.Linkat(originalFD, "", parentFD, rollbackName, unix.AT_EMPTY_PATH); err != nil {
-		return fmt.Errorf("anchor original git target for rollback: %w", err)
+	if originalAnchorName == "" {
+		return fmt.Errorf("original git target rollback anchor is unavailable")
 	}
-	defer syscall.Unlinkat(parentFD, rollbackName)
 
-	rollbackFD, err := syscall.Openat(parentFD, rollbackName, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	rollbackFD, err := syscall.Openat(parentFD, originalAnchorName, syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return fmt.Errorf("reopen anchored original git target: %w", err)
 	}
