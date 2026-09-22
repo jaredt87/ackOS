@@ -1275,7 +1275,12 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		}
 		return fmt.Errorf("anchor original git target: %w", err)
 	}
-	defer syscall.Unlinkat(parentFD, originalAnchorName)
+	anchorRemoved := false
+	defer func() {
+		if !anchorRemoved {
+			_ = syscall.Unlinkat(parentFD, originalAnchorName)
+		}
+	}()
 	// The exchange is the mutation point. Revalidate the parent immediately
 	// afterward as well as immediately before it; if an ancestor was replaced
 	// during the exchange window, restore the anchored original inode before
@@ -1348,7 +1353,8 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if err := syscall.Unlinkat(parentFD, originalAnchorName); err != nil {
 		return fmt.Errorf("remove original git target rollback anchor: %w", err)
 	}
-	if err := syscall.Fsync(parentFD); err != nil {
+	anchorRemoved = true
+	if syncErr := syscall.Fsync(parentFD); syncErr != nil {
 		return fmt.Errorf("sync Git target directory after rollback anchor removal: %w", err)
 	}
 	cleanup = false
