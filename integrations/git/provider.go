@@ -1775,8 +1775,7 @@ func rejectSystemAttributesTarget(ctx context.Context, target Target) error {
 	if _, disabled := os.LookupEnv("GIT_ATTR_NOSYSTEM"); disabled {
 		return nil
 	}
-	configured := filepath.Join(target.Repository, target.Path)
-	resolved, err := filepath.EvalSymlinks(configured)
+	resolved, err := filepath.EvalSymlinks(filepath.Join(target.Repository, target.Path))
 	if err != nil {
 		return nil
 	}
