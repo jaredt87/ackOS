@@ -1177,11 +1177,20 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if !bytes.Equal(current, expected) {
 		return fmt.Errorf("git target changed during replacement preparation")
 	}
+	anchorName := fmt.Sprintf(".%s.ackos-prepared-%d", name, time.Now().UnixNano())
+	if err := unix.Linkat(tmpFD, "", parentFD, anchorName, unix.AT_EMPTY_PATH); err != nil {
+		return fmt.Errorf("anchor prepared git target: %w", err)
+	}
+	if err := syscall.Unlinkat(parentFD, tmpName); err != nil {
+		_ = syscall.Unlinkat(parentFD, anchorName)
+		return fmt.Errorf("hide prepared git target: %w", err)
+	}
+	tmpName = anchorName
 	if err := tmpFile.Close(); err != nil {
 		return fmt.Errorf("close git target replacement: %w", err)
 	}
 	tmpFD = -1
-	// Exchange the prepared inode with the current directory entry atomically.
+	// Exchange the anchored prepared inode with the current directory entry atomically.
 	// The exchanged-out inode is then compared with the inode we validated before
 	// the write. A concurrent replacement therefore fails without being clobbered.
 	if err := unix.Renameat2(parentFD, tmpName, parentFD, name, unix.RENAME_EXCHANGE); err != nil {
@@ -1858,7 +1867,7 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 
 	}
 	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
+		line = strings.TrimSuffix(line, "\r")
 
 		if line == "" {
 			continue
@@ -1926,7 +1935,6 @@ func rejectGitConfigTarget(ctx context.Context, target Target) error {
 			if !ok {
 				return fmt.Errorf("unexpected Git include path metadata")
 			}
-			include = strings.TrimSpace(include)
 			if include == "" {
 				continue
 			}
