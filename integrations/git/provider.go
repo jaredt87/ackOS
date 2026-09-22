@@ -2150,20 +2150,23 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, aft
 		return fmt.Errorf("read parent target Git mode: %w", err)
 
 	}
-	indexFile, err := os.CreateTemp(target.Repository, ".ackos-index-*")
+	indexDir, err := os.MkdirTemp("", "ackos-index-*")
 	if err != nil {
-
-		return fmt.Errorf("create temporary Git index: %w", err)
-
+		return fmt.Errorf("create private temporary Git index directory: %w", err)
 	}
-	indexPath := indexFile.Name()
+	defer os.RemoveAll(indexDir)
+	if err := os.Chmod(indexDir, 0o700); err != nil {
+		return fmt.Errorf("lock temporary Git index directory: %w", err)
+	}
+	indexPath := filepath.Join(indexDir, "index")
+	indexFile, err := os.OpenFile(indexPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		return fmt.Errorf("create temporary Git index: %w", err)
+	}
 	if err := indexFile.Close(); err != nil {
 		_ = os.Remove(indexPath)
-
 		return fmt.Errorf("close temporary Git index: %w", err)
-
 	}
-	defer os.Remove(indexPath)
 	env := map[string]string{"GIT_INDEX_FILE": indexPath}
 	if _, err := runGitTargetWithEnv(ctx, target, env, "--no-replace-objects", "read-tree", parent); err != nil {
 
