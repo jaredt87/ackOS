@@ -1,12 +1,11 @@
 name: repair-current-provider
 on:
-  pull_request:
-    types: [synchronize]
+  push:
+    branches: [feat/phase2-git-provider]
 permissions:
   contents: write
 jobs:
   repair:
-    if: github.event.pull_request.number == 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
