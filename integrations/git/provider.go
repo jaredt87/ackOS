@@ -2976,3 +2976,72 @@ func runGitWithInput(ctx context.Context, repository string, input []byte, overr
 	case runErr := <-done:
 
 		if runErr != nil {
+
+			return "", fmt.Errorf("%w: %s", runErr, strings.TrimSpace(stderr.String()))
+
+		}
+	case <-ctx.Done():
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		select {
+		case <-done:
+		case <-time.After(cmd.WaitDelay):
+
+		}
+
+		return "", ctx.Err()
+
+	}
+	output := stdout.String()
+	for _, arg := range args {
+
+		if arg == "-z" || arg == "--null" {
+
+			return output, nil
+
+		}
+
+	}
+	if len(args) > 0 && args[0] == "show" {
+
+		return output, nil
+
+	}
+	return strings.TrimSpace(output), nil
+}
+
+func sanitizedGitEnv() []string {
+	blocked := map[string]struct{}{
+		"GIT_DIR":                          {},
+		"GIT_WORK_TREE":                    {},
+		"GIT_INDEX_FILE":                   {},
+		"GIT_OBJECT_DIRECTORY":             {},
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES": {},
+		"GIT_COMMON_DIR":                   {},
+		"GIT_NAMESPACE":                    {},
+		"GIT_CEILING_DIRECTORIES":          {},
+		"GIT_DISCOVERY_ACROSS_FILESYSTEM":  {},
+		"GIT_GRAFT_FILE":                   {},
+	}
+	env := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		if _, isBlocked := blocked[key]; isBlocked || strings.HasPrefix(key, "GIT_CONFIG_") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return env
+}
+
+func rejectCommandScopeConfigEnvironment() error {
+	for _, entry := range os.Environ() {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok && strings.HasPrefix(key, "GIT_CONFIG_") {
+			return fmt.Errorf("Git command-scope configuration environment is not allowed")
+		}
+	}
+	return nil
+}
