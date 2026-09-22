@@ -289,13 +289,14 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 
 	}
 	capturedLifecycle := false
-	executionSucceeded := false
 	defer func() {
-		if capturedLifecycle && !executionSucceeded {
+		if capturedLifecycle {
+			// Every execution, successful or failed, must evict its parent snapshot
+			// and release the repository lock at lifecycle completion.
 			e.Target.lifecycle.discard(authority.ExecutionID)
-		} else if !capturedLifecycle {
-			unlock()
+			return
 		}
+		unlock()
 	}()
 	if err := requireWorktreeRoot(ctx, e.Target); err != nil {
 		return fail(err)
@@ -350,6 +351,9 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err := rejectGitConfigTarget(ctx, e.Target); err != nil {
 		return fail(err)
 
+	}
+	if err := rejectCommandScopeConfigEnvironment(); err != nil {
+		return fail(err)
 	}
 	if err := rejectSubmodules(ctx, e.Target); err != nil {
 		return fail(err)
@@ -561,7 +565,6 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(fmt.Errorf("Git HEAD changed after commit verification"))
 
 	}
-	executionSucceeded = true
 	return kernel.ExecutionResult{Success: true, Message: "git file transitioned and committed"}
 }
 
@@ -642,6 +645,9 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 		return kernel.Observation{}, err
 	}
 	if err := rejectGitConfigTarget(ctx, v.Target); err != nil {
+		return kernel.Observation{}, err
+	}
+	if err := rejectCommandScopeConfigEnvironment(); err != nil {
 		return kernel.Observation{}, err
 	}
 	if err := rejectSubmodules(ctx, v.Target); err != nil {
