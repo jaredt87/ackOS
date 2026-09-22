@@ -994,7 +994,7 @@ func acquireTargetLock(ctx context.Context, target Target) (func(), error) {
 	if err != nil {
 		return nil, fmt.Errorf("open ackOS target lock directory: %w", err)
 	}
-	lockFD, err := syscall.Openat(commonFD, "ackos-target.lock", syscall.O_CREATE|syscall.O_RDWR|syscall.O_NOFOLLOW, 0o600)
+	lockFD, err := syscall.Openat(commonFD, "ackos-target.lock", unix.O_CREAT|syscall.O_RDWR|syscall.O_NOFOLLOW, 0o600)
 	_ = syscall.Close(commonFD)
 	if err != nil {
 		return nil, fmt.Errorf("open ackOS target lock: %w", err)
