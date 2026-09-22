@@ -51,7 +51,6 @@ jobs:
         run: |
           files="$(gofmt -l .)"
           if [ -n "$files" ]; then
-            gofmt -d $files
             printf '%s\n' "$files"
             exit 1
           fi
