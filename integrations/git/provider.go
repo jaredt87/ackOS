@@ -3074,7 +3074,7 @@ func sanitizedGitEnv() []string {
 		"GIT_CEILING_DIRECTORIES":          {},
 		"GIT_DISCOVERY_ACROSS_FILESYSTEM":  {},
 		"GIT_GRAFT_FILE":                   {},
-		"GIT_ATTR_SOURCE":                  {}, // Reject environment-selected Git attribute sources.
+		"GIT_ATTR_SOURCE":                  {},
 	}
 	env := make([]string, 0, len(os.Environ()))
 	for _, entry := range os.Environ() {
@@ -3089,7 +3089,6 @@ func sanitizedGitEnv() []string {
 	}
 	return env
 }
-
 
 func rejectCommandScopeConfigEnvironment() error {
 	for _, entry := range os.Environ() {
