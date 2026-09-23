@@ -168,7 +168,10 @@ func (p Provider) forgetParent(executionID string) {
 
 type Observer struct{ Provider Provider }
 type Executor struct{ Provider Provider }
-type Verifier struct{ Provider Provider }
+type Verifier struct {
+	Provider   Provider
+	branchHead func(context.Context, string, string) (string, error)
+}
 type RecoveryObserver struct{ Provider Provider }
 
 func (o Observer) Observe(ctx context.Context, subject string) (kernel.Observation, error) {
@@ -254,6 +257,13 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, a kernel.Aut
 	return kernel.ExecutionResult{Success: true, Message: "Git transition committed"}
 }
 
+func (v Verifier) readBranchHead(ctx context.Context) (string, error) {
+	if v.branchHead != nil {
+		return v.branchHead(ctx, v.Provider.Repository, v.Provider.Branch)
+	}
+	return branchHead(ctx, v.Provider.Repository, v.Provider.Branch)
+}
+
 func (v Verifier) verifyExecutionCommit(executionID, head string) error {
 	expectedCommit, ok := v.Provider.commit(executionID)
 	if !ok {
@@ -275,7 +285,7 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, a kernel.Auth
 	if err := v.Provider.validateRepository(); err != nil {
 		return kernel.Observation{}, err
 	}
-	head, err := branchHead(ctx, v.Provider.Repository, v.Provider.Branch)
+	head, err := v.readBranchHead(ctx)
 	if err != nil {
 		return kernel.Observation{}, err
 	}
