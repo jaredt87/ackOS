@@ -328,7 +328,12 @@ func TestVerifyCommitReadsMarkerFromCapturedCommit(t *testing.T) {
 	}
 	afterHash = strings.TrimSpace(afterHash)
 	headRef := strings.TrimSpace(gitTest(t, target.Repository, "symbolic-ref", "-q", "HEAD"))
-	if err := commitVerifiedTree(context.Background(), target, parent, headRef, afterHash, []byte("updated"), "ackOS: execute marker-test"); err != nil {
+	indexDir, indexPath, err := createTemporaryGitIndex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(indexDir)
+	if err := commitVerifiedTree(context.Background(), target, parent, headRef, afterHash, []byte("updated"), "ackOS: execute marker-test", indexPath); err != nil {
 		t.Fatal(err)
 	}
 
@@ -392,7 +397,12 @@ func TestVerifierRejectsDetachedHead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := commitVerifiedTree(context.Background(), target, parent, target.capturedHeadRef, afterHash, []byte("updated"), "ackOS: execute detached-test"); err != nil {
+	indexDir, indexPath, err := createTemporaryGitIndex()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(indexDir)
+	if err := commitVerifiedTree(context.Background(), target, parent, target.capturedHeadRef, afterHash, []byte("updated"), "ackOS: execute detached-test", indexPath); err != nil {
 		t.Fatal(err)
 	}
 	commit := strings.TrimSpace(gitTest(t, target.Repository, "rev-parse", "HEAD"))
