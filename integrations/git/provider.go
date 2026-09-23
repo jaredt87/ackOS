@@ -340,6 +340,13 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, a kernel.Auth
 	if !hasTrailer(msg, a.ExecutionID) {
 		return kernel.Observation{}, fmt.Errorf("execution trailer missing")
 	}
+	finalHead, err := v.readBranchHead(ctx)
+	if err != nil {
+		return kernel.Observation{}, err
+	}
+	if finalHead != head {
+		return kernel.Observation{}, fmt.Errorf("Git branch tip changed during verification")
+	}
 	return kernel.NewObservation(t.Subject, got, 0, time.Now().UTC())
 }
 
