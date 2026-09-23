@@ -173,6 +173,10 @@ func TestVerifierRejectsMissingExecutionCommit(t *testing.T) {
 	after := hashBlob(t, repo, "updated")
 	authority := kernel.Authority{ExecutionID: "exec-missing-commit"}
 	transition := kernel.Transition{Subject: subject, Before: before, After: after}
+	parent := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/main"))
+	if err := p.rememberParent(authority.ExecutionID, parent); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := (Verifier{Provider: p}).Verify(context.Background(), transition, authority); err == nil {
 		t.Fatal("verification succeeded without an execution commit")
 	} else if !strings.Contains(err.Error(), "execution commit is unavailable") {
