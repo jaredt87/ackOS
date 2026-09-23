@@ -3063,23 +3063,7 @@ func runGitWithInput(ctx context.Context, repository string, input []byte, overr
 }
 
 func sanitizedGitEnv() []string {
-	blocked := gitBlockedEnvironment()
-	env := make([]string, 0, len(os.Environ()))
-	for _, entry := range os.Environ() {
-		key, _, ok := strings.Cut(entry, "=")
-		if !ok {
-			continue
-		}
-		if _, isBlocked := blocked[key]; isBlocked || strings.HasPrefix(key, "GIT_CONFIG_") {
-			continue
-		}
-		env = append(env, entry)
-	}
-	return env
-}
-
-func gitBlockedEnvironment() map[string]struct{} {
-	return map[string]struct{}{
+	blocked := map[string]struct{}{
 		"GIT_DIR":                          {},
 		"GIT_WORK_TREE":                    {},
 		"GIT_INDEX_FILE":                   {},
@@ -3092,6 +3076,18 @@ func gitBlockedEnvironment() map[string]struct{} {
 		"GIT_GRAFT_FILE":                   {},
 		"GIT_ATTR_SOURCE":                  {}, // Reject environment-selected Git attribute sources.
 	}
+	env := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		if _, isBlocked := blocked[key]; isBlocked || strings.HasPrefix(key, "GIT_CONFIG_") {
+			continue
+		}
+		env = append(env, entry)
+	}
+	return env
 }
 
 
