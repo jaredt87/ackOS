@@ -398,7 +398,6 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 		return fail(err)
 	}
 	if err := rejectGrafts(ctx, e.Target); err != nil {
-
 		return fail(err)
 
 	}
@@ -798,7 +797,6 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 
 	}
 	if err := verifyLiveWorktreeState(ctx, v.Target, verifiedHead); err != nil {
-
 		return kernel.Observation{}, err
 
 	}
@@ -1197,8 +1195,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		_ = tmpFile.Close()
 	}()
 	for len(content) > 0 {
-		n, err := syscall.Write(tmpFD, content)
-		if err != nil {
+		n, err := syscall.Write(tmpFD, content)		if err != nil {
 			return fmt.Errorf("write git target replacement: %w", err)
 		}
 		if n == 0 {
@@ -1231,7 +1228,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if !bytes.Equal(current, expected) {
 		return fmt.Errorf("git target changed during replacement preparation")
 	}
-	anchorName := fmt.Sprintf(".%s.ackos-prepared-%d", name, time.Now().UnixNano())
+	anchorName := ackOSTempName("prepared")
 	if err := unix.Linkat(tmpFD, "", parentFD, anchorName, unix.AT_EMPTY_PATH); err != nil {
 		return fmt.Errorf("anchor prepared git target: %w", err)
 	}
@@ -1263,7 +1260,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	// Keep a hard-link anchor to the original inode until the directory sync
 	// succeeds. After Unlinkat removes the exchanged-out name, the open FD alone
 	// is not enough to recreate a directory entry with linkat(AT_EMPTY_PATH).
-	originalAnchorName := fmt.Sprintf(".%s.ackos-original-%d", name, time.Now().UnixNano())
+	originalAnchorName := ackOSTempName("original")
 	anchorErr := unix.Linkat(fd, "", parentFD, originalAnchorName, unix.AT_EMPTY_PATH)
 	if anchorErr != nil {
 		// RENAME_EXCHANGE has already installed the prepared inode. If the
@@ -1351,7 +1348,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	}
 	// The exchange is durable now, so remove the rollback-only anchor and
 	// durably synchronize that removal before reporting success.
-	cleanupAnchorName := fmt.Sprintf(".%s.ackos-cleanup-%d", name, time.Now().UnixNano())
+	cleanupAnchorName := ackOSTempName("cleanup")
 	if err := unix.Linkat(fd, "", parentFD, cleanupAnchorName, unix.AT_EMPTY_PATH); err != nil {
 		return rollback(fmt.Errorf("anchor original git target cleanup: %w", err))
 	}
@@ -1376,6 +1373,15 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		return fmt.Errorf("sync Git target directory after rollback anchor removal: %w", cleanupSyncErr)
 	}
 	if err := syscall.Unlinkat(parentFD, cleanupAnchorName); err != nil {
+		if rollbackErr := rollbackExchangedTarget(parentFD, cleanupAnchorName, name, fd, stat, &preparedStat, cleanupAnchorName); rollbackErr != nil {
+			return fmt.Errorf("remove Git target cleanup anchor: %w (rollback: %v)", err, rollbackErr)
+		}
+		if cleanupErr := syscall.Unlinkat(parentFD, cleanupAnchorName); cleanupErr != nil {
+			return fmt.Errorf("remove Git target cleanup anchor after rollback: %w", cleanupErr)
+		}
+		if syncErr := syscall.Fsync(parentFD); syncErr != nil {
+			return fmt.Errorf("sync Git target directory after cleanup-anchor rollback: %w", syncErr)
+		}
 		return fmt.Errorf("remove Git target cleanup anchor: %w", err)
 	}
 	if err := syscall.Fsync(parentFD); err != nil {
@@ -1385,9 +1391,13 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	return nil
 }
 
+func ackOSTempName(kind string) string {
+	return fmt.Sprintf(".ackos-%s-%d-%d", kind, os.Getpid(), time.Now().UnixNano())
+}
+
 func createReplacementFile(parentFD int, targetName string) (*os.File, string, error) {
 	for attempt := 0; attempt < 100; attempt++ {
-		name := fmt.Sprintf(".%s.ackos-tmp-%d-%d", targetName, time.Now().UnixNano(), attempt)
+		name := fmt.Sprintf(".ackos-tmp-%d-%d-%d", os.Getpid(), time.Now().UnixNano(), attempt)
 		fd, err := unix.Openat(parentFD, name, unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW, 0o600)
 		if err == nil {
 			file := os.NewFile(uintptr(fd), fmt.Sprintf("/proc/self/fd/%d", fd))
@@ -1597,8 +1607,7 @@ func verifyExchangedTargetMetadata(path string, exchanged, original os.FileInfo,
 func captureXattrs(path string) (map[string][]byte, error) {
 	names, err := listXattrNames(path)
 	if err != nil {
-		return nil, err
-	}
+		return nil, err	}
 	result := make(map[string][]byte, len(names))
 	for _, name := range names {
 		value, err := getXattr(path, name)
@@ -1997,8 +2006,7 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 
 		return fmt.Errorf("resolve configured attributes identity path: %w", err)
 
-	}
-	if configuredResolved == actualResolved {
+	}	if configuredResolved == actualResolved {
 
 		return fmt.Errorf("git target is configured as the active attributes file")
 
@@ -2397,8 +2405,7 @@ func rejectLiteralWorkingTreeEncodingSentinels(ctx context.Context, target Targe
 			content, err := runGitTarget(ctx, target, "show", "HEAD:./"+path)
 			if err != nil {
 				return fmt.Errorf("read Git attribute file %q: %w", path, err)
-			}
-			if hasLiteralWorkingTreeEncodingSentinel(content) {
+			}			if hasLiteralWorkingTreeEncodingSentinel(content) {
 				return fmt.Errorf("Git attributes contain a literal working-tree-encoding sentinel")
 			}
 		}
@@ -2797,8 +2804,7 @@ func liveTargetMode(target Target) (string, error) {
 
 		return "", fmt.Errorf("open Git target for mode check: %w", err)
 
-	}
-	file := os.NewFile(uintptr(fd), filepath.Join(target.Repository, target.Path))
+	}	file := os.NewFile(uintptr(fd), filepath.Join(target.Repository, target.Path))
 	if file == nil {
 		_ = syscall.Close(fd)
 
@@ -3084,6 +3090,7 @@ func sanitizedGitEnv() []string {
 		"GIT_CEILING_DIRECTORIES":          {},
 		"GIT_DISCOVERY_ACROSS_FILESYSTEM":  {},
 		"GIT_GRAFT_FILE":                   {},
+		"GIT_ATTR_SOURCE":                  {},
 	}
 	env := make([]string, 0, len(os.Environ()))
 	for _, entry := range os.Environ() {
