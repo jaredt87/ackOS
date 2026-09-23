@@ -46,8 +46,7 @@ func TestTransitionEndToEndUsesBlobIDsAndLeavesWorkingTreeAlone(t *testing.T) {
 
 	head := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/main"))
 	parent := strings.TrimSpace(git(t, repo, "rev-parse", head+"^1"))
-	changed := strings.TrimSuffix(git(t, repo, "diff-tree", "--no-commit-id", "--name-only", "-r", parent, head), "
-")
+	changed := strings.TrimSuffix(git(t, repo, "diff-tree", "--no-commit-id", "--name-only", "-r", parent, head), "\n")
 	if changed != subject {
 		t.Fatalf("changed paths = %q, want only %q", changed, subject)
 	}
