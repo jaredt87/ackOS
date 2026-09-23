@@ -507,6 +507,11 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if indexModeBefore != expectedMode {
 		return fail(fmt.Errorf("Git target index mode changed before mutation"))
 	}
+	indexDir, indexPath, err := createTemporaryGitIndex()
+	if err != nil {
+		return fail(err)
+	}
+	defer os.RemoveAll(indexDir)
 	if err := atomicWriteTarget(e.Target, []byte(t.Before), []byte(t.After)); err != nil {
 
 		return fail(fmt.Errorf("write git file: %w", err))
@@ -559,7 +564,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 
 	}
 	message := "ackOS: execute " + authority.ExecutionID
-	if err := commitVerifiedTree(ctx, e.Target, head, headRef, afterHash, []byte(t.After), message); err != nil {
+	if err := commitVerifiedTree(ctx, e.Target, head, headRef, afterHash, []byte(t.After), message, indexPath); err != nil {
 
 		return fail(err)
 
@@ -2465,7 +2470,30 @@ func readGitAttributeSource(path string) ([]byte, error) {
 	}
 	return io.ReadAll(file)
 }
-func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, afterHash string, content []byte, message string) error {
+func createTemporaryGitIndex() (string, string, error) {
+	indexDir, err := os.MkdirTemp("", "ackos-index-*")
+	if err != nil {
+		return "", "", fmt.Errorf("create private temporary Git index directory: %w", err)
+	}
+	if err := os.Chmod(indexDir, 0o700); err != nil {
+		_ = os.RemoveAll(indexDir)
+		return "", "", fmt.Errorf("lock temporary Git index directory: %w", err)
+	}
+	indexPath := filepath.Join(indexDir, "index")
+	indexFile, err := os.OpenFile(indexPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		_ = os.RemoveAll(indexDir)
+		return "", "", fmt.Errorf("create temporary Git index: %w", err)
+	}
+	if err := indexFile.Close(); err != nil {
+		_ = os.Remove(indexPath)
+		_ = os.RemoveAll(indexDir)
+		return "", "", fmt.Errorf("close temporary Git index: %w", err)
+	}
+	return indexDir, indexPath, nil
+}
+
+func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, afterHash string, content []byte, message, indexPath string) error {
 	blob, err := runGitTargetInput(ctx, target, content, "hash-object", "-w", "--stdin")
 	if err != nil {
 
@@ -2483,23 +2511,6 @@ func commitVerifiedTree(ctx context.Context, target Target, parent, headRef, aft
 
 		return fmt.Errorf("read parent target Git mode: %w", err)
 
-	}
-	indexDir, err := os.MkdirTemp("", "ackos-index-*")
-	if err != nil {
-		return fmt.Errorf("create private temporary Git index directory: %w", err)
-	}
-	defer os.RemoveAll(indexDir)
-	if err := os.Chmod(indexDir, 0o700); err != nil {
-		return fmt.Errorf("lock temporary Git index directory: %w", err)
-	}
-	indexPath := filepath.Join(indexDir, "index")
-	indexFile, err := os.OpenFile(indexPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
-	if err != nil {
-		return fmt.Errorf("create temporary Git index: %w", err)
-	}
-	if err := indexFile.Close(); err != nil {
-		_ = os.Remove(indexPath)
-		return fmt.Errorf("close temporary Git index: %w", err)
 	}
 	env := map[string]string{"GIT_INDEX_FILE": indexPath}
 	if _, err := runGitTargetWithEnv(ctx, target, env, "--no-replace-objects", "read-tree", parent); err != nil {
