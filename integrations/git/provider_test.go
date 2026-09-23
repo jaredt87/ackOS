@@ -112,6 +112,7 @@ func TestVerifierRejectsFalseExecutorSuccess(t *testing.T) {
 func TestRunGitIgnoresRepositorySelectionEnvironment(t *testing.T) {
 	repo, _, _ := testRepo(t, "initial")
 	other, _, _ := testRepo(t, "other")
+	want := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/main"))
 
 	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
 	t.Setenv("GIT_WORK_TREE", other)
@@ -120,7 +121,6 @@ func TestRunGitIgnoresRepositorySelectionEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/main"))
 	if got != want {
 		t.Fatalf("branch head = %s, want %s", got, want)
 	}
