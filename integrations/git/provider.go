@@ -441,11 +441,11 @@ func materializeBlob(ctx context.Context, repo, blob string) error {
 	if err := ensureBlob(ctx, repo, blob); err != nil {
 		return err
 	}
-	content, err := runGitBytes(ctx, repo, os.Environ(), nil, "cat-file", "blob", blob)
+	content, err := runGitBytes(ctx, repo, withoutGitIndex(os.Environ()), nil, "cat-file", "blob", blob)
 	if err != nil {
 		return fmt.Errorf("read Transition.After blob: %w", err)
 	}
-	out, err := runGitInput(ctx, repo, os.Environ(), string(content), "hash-object", "-w", "--stdin")
+	out, err := runGitInput(ctx, repo, withoutGitIndex(os.Environ()), string(content), "hash-object", "-w", "--stdin")
 	if err != nil {
 		return fmt.Errorf("write authorized Git blob: %w", err)
 	}
@@ -504,7 +504,7 @@ func runGitEnv(ctx context.Context, repo string, env []string, args ...string) (
 
 func createCommit(ctx context.Context, repo, tree, parent, id string) (string, error) {
 	msg := "ackOS execution\n\nAck-Execution-Id: " + id + "\n"
-	out, err := runGitInput(ctx, repo, os.Environ(), msg, "commit-tree", tree, "-p", parent)
+	out, err := runGitInput(ctx, repo, withoutGitIndex(os.Environ()), msg, "commit-tree", tree, "-p", parent)
 	if err != nil {
 		return "", fmt.Errorf("create Git commit: %w", err)
 	}
