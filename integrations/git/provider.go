@@ -416,10 +416,7 @@ func runGitEnv(ctx context.Context, repo string, env []string, args ...string) (
 }
 
 func createCommit(ctx context.Context, repo, tree, parent, id string) (string, error) {
-	msg := "ackOS execution
-
-Ack-Execution-Id: " + id + "
-"
+	msg := "ackOS execution\n\nAck-Execution-Id: " + id + "\n"
 	cmd := exec.CommandContext(ctx, "git", "commit-tree", tree, "-p", parent)
 	cmd.Dir = repo
 	cmd.Stdin = strings.NewReader(msg)
@@ -448,8 +445,7 @@ func commitMessage(ctx context.Context, repo, commit string) (string, error) {
 
 func hasTrailer(message, id string) bool {
 	want := "Ack-Execution-Id: " + id
-	for _, line := range strings.Split(message, "
-") {
+	for _, line := range strings.Split(message, "\n") {
 		if strings.TrimSpace(line) == want {
 			return true
 		}
