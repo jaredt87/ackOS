@@ -3073,8 +3073,8 @@ func sanitizedGitEnv() []string {
 		"GIT_NAMESPACE":                    {},
 		"GIT_CEILING_DIRECTORIES":          {},
 		"GIT_DISCOVERY_ACROSS_FILESYSTEM":  {},
-		"GIT_GRAFT_FILE":                   {},
 		"GIT_ATTR_SOURCE":                  {}, // Reject environment-selected attribute trees.
+		"GIT_GRAFT_FILE":                   {},
 	}
 	env := make([]string, 0, len(os.Environ()))
 	for _, entry := range os.Environ() {
