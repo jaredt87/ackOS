@@ -154,7 +154,7 @@ func TestRecoveryObservationReadsFreshGitState(t *testing.T) {
 }
 
 func TestPathSafety(t *testing.T) {
-	cases := []string{"../outside", "/absolute", "a/../../outside", ".", "a\b"}
+	cases := []string{"../outside", "/absolute", "a/../../outside", ".", "a\\b"}
 	for _, subject := range cases {
 		if err := validateSubject(subject); err == nil {
 			t.Fatalf("accepted unsafe path %q", subject)
