@@ -347,13 +347,41 @@ func validateSubject(s string) error {
 }
 
 func runGit(ctx context.Context, repo string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = repo
+	return runGitEnv(ctx, repo, os.Environ(), args...)
+}
+
+func runGitInput(ctx context.Context, repo string, env []string, input string, args ...string) (string, error) {
+	cmd := newGitCommand(ctx, repo, env, args...)
+	cmd.Stdin = strings.NewReader(input)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+func newGitCommand(ctx context.Context, repo string, env []string, args ...string) *exec.Cmd {
+	gitArgs := append([]string{"--no-replace-objects", "-C", repo}, args...)
+	cmd := exec.CommandContext(ctx, "git", gitArgs...)
+	cmd.Env = sanitizedGitEnv(env)
+	return cmd
+}
+
+func sanitizedGitEnv(env []string) []string {
+	blocked := map[string]bool{
+		"GIT_DIR": true, "GIT_WORK_TREE": true, "GIT_COMMON_DIR": true,
+		"GIT_INDEX_FILE": true, "GIT_OBJECT_DIRECTORY": true,
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES": true, "GIT_NAMESPACE": true,
+	}
+	result := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || blocked[key] {
+			continue
+		}
+		result = append(result, entry)
+	}
+	return result
 }
 
 func branchHead(ctx context.Context, repo, branch string) (string, error) {
@@ -442,9 +470,7 @@ func buildTree(ctx context.Context, repo, head, subject, blob string) (string, e
 }
 
 func runGitEnv(ctx context.Context, repo string, env []string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = repo
-	cmd.Env = env
+	cmd := newGitCommand(ctx, repo, env, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
