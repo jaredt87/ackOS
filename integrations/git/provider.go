@@ -397,7 +397,9 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err := rejectSubmodules(ctx, e.Target); err != nil {
 		return fail(err)
 	}
-	if err := rejectGrafts(ctx, e.Target); err != nil {		return fail(err)
+	if err := rejectGrafts(ctx, e.Target); err != nil {
+
+		return fail(err)
 
 	}
 	// Git ancestry must remain real; --no-replace-objects does not disable grafts.
@@ -796,7 +798,9 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 
 	}
 	if err := verifyLiveWorktreeState(ctx, v.Target, verifiedHead); err != nil {
+
 		return kernel.Observation{}, err
+
 	}
 	// The complete index must still describe the verified HEAD.
 	finalHead, err := v.git(ctx, "rev-parse", "HEAD")
@@ -1347,44 +1351,22 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	}
 	// The exchange is durable now, so remove the rollback-only anchor and
 	// durably synchronize that removal before reporting success.
-	cleanupAnchorName := ackOSTempName("cleanup")
-	if err := unix.Linkat(fd, "", parentFD, cleanupAnchorName, unix.AT_EMPTY_PATH); err != nil {
-		return rollback(fmt.Errorf("anchor original git target cleanup: %w", err))
-	}
 	if err := syscall.Unlinkat(parentFD, originalAnchorName); err != nil {
-		_ = syscall.Unlinkat(parentFD, cleanupAnchorName)
-		return rollback(fmt.Errorf("remove original git target rollback anchor: %w", err))
+		if rollbackErr := rollbackExchangedTarget(parentFD, "", name, fd, stat, &preparedStat, originalAnchorName); rollbackErr != nil {
+			return fmt.Errorf("remove original git target rollback anchor: %w (rollback: %v)", err, rollbackErr)
+		}
+		if cleanupErr := syscall.Unlinkat(parentFD, originalAnchorName); cleanupErr != nil {
+			return fmt.Errorf("remove prepared git target after rollback: %w (anchor removal: %v)", cleanupErr, err)
+		}
+		anchorRemoved = true
+		if syncErr := syscall.Fsync(parentFD); syncErr != nil {
+			return fmt.Errorf("sync Git target directory after rollback-anchor removal: %w (anchor removal: %v)", syncErr, err)
+		}
+		return fmt.Errorf("remove original git target rollback anchor: %w", err)
 	}
 	anchorRemoved = true
-	cleanupSyncErr := syscall.Fsync(parentFD)
-	if cleanupSyncErr != nil {
-		// Keep the cleanup anchor alive so the completed installation can still
-		// be rolled back if the cleanup synchronization itself fails.
-		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat, cleanupAnchorName); rollbackErr != nil {
-			return fmt.Errorf("sync Git target directory after rollback anchor removal: %w (rollback: %v)", cleanupSyncErr, rollbackErr)
-		}
-		if err := syscall.Unlinkat(parentFD, cleanupAnchorName); err != nil {
-			return fmt.Errorf("remove Git target cleanup anchor after rollback: %w", err)
-		}
-		if err := syscall.Fsync(parentFD); err != nil {
-			return fmt.Errorf("sync Git target directory after cleanup rollback: %w", err)
-		}
-		return fmt.Errorf("sync Git target directory after rollback anchor removal: %w", cleanupSyncErr)
-	}
-	if err := syscall.Unlinkat(parentFD, cleanupAnchorName); err != nil {
-		if rollbackErr := rollbackExchangedTarget(parentFD, cleanupAnchorName, name, fd, stat, &preparedStat, cleanupAnchorName); rollbackErr != nil {
-			return fmt.Errorf("remove Git target cleanup anchor: %w (rollback: %v)", err, rollbackErr)
-		}
-		if cleanupErr := syscall.Unlinkat(parentFD, cleanupAnchorName); cleanupErr != nil {
-			return fmt.Errorf("remove Git target cleanup anchor after rollback: %w", cleanupErr)
-		}
-		if syncErr := syscall.Fsync(parentFD); syncErr != nil {
-			return fmt.Errorf("sync Git target directory after cleanup-anchor rollback: %w", syncErr)
-		}
-		return fmt.Errorf("remove Git target cleanup anchor: %w", err)
-	}
-	if err := syscall.Fsync(parentFD); err != nil {
-		return fmt.Errorf("sync Git target directory after cleanup anchor removal: %w", err)
+	if syncErr := syscall.Fsync(parentFD); syncErr != nil {
+		return fmt.Errorf("sync Git target directory after rollback anchor removal: %w", err)
 	}
 	cleanup = false
 	return nil
@@ -1606,7 +1588,8 @@ func verifyExchangedTargetMetadata(path string, exchanged, original os.FileInfo,
 func captureXattrs(path string) (map[string][]byte, error) {
 	names, err := listXattrNames(path)
 	if err != nil {
-		return nil, err	}
+		return nil, err
+	}
 	result := make(map[string][]byte, len(names))
 	for _, name := range names {
 		value, err := getXattr(path, name)
@@ -1996,6 +1979,7 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 	}
 	configuredResolved, err = filepath.Abs(configuredResolved)
 	if err != nil {
+
 		return fmt.Errorf("resolve configured target identity path: %w", err)
 
 	}
@@ -2396,7 +2380,8 @@ func rejectLiteralWorkingTreeEncodingSentinels(ctx context.Context, target Targe
 		return fmt.Errorf("inspect Git attribute files: %w", err)
 	}
 	paths = strings.TrimSuffix(paths, "\x00")
-	if paths != "" {		for _, path := range strings.Split(paths, "\x00") {
+	if paths != "" {
+		for _, path := range strings.Split(paths, "\x00") {
 			if filepath.Base(path) != ".gitattributes" {
 				continue
 			}
