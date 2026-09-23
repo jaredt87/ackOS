@@ -1184,11 +1184,10 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		return fmt.Errorf("git target already contains requested state")
 	}
 
-	tmpFile, err := os.CreateTemp(filepath.Dir(path), "."+name+".ackos-tmp-*")
+	tmpFile, tmpName, err := createReplacementFile(parentFD, name)
 	if err != nil {
 		return fmt.Errorf("create git target replacement: %w", err)
 	}
-	tmpName := filepath.Base(tmpFile.Name())
 	tmpFD := int(tmpFile.Fd())
 	cleanup := true
 	defer func() {
@@ -1352,15 +1351,57 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	}
 	// The exchange is durable now, so remove the rollback-only anchor and
 	// durably synchronize that removal before reporting success.
+	cleanupAnchorName := fmt.Sprintf(".%s.ackos-cleanup-%d", name, time.Now().UnixNano())
+	if err := unix.Linkat(fd, "", parentFD, cleanupAnchorName, unix.AT_EMPTY_PATH); err != nil {
+		return rollback(fmt.Errorf("anchor original git target cleanup: %w", err))
+	}
 	if err := syscall.Unlinkat(parentFD, originalAnchorName); err != nil {
-		return fmt.Errorf("remove original git target rollback anchor: %w", err)
+		_ = syscall.Unlinkat(parentFD, cleanupAnchorName)
+		return rollback(fmt.Errorf("remove original git target rollback anchor: %w", err))
 	}
 	anchorRemoved = true
 	if syncErr := syscall.Fsync(parentFD); syncErr != nil {
-		return fmt.Errorf("sync Git target directory after rollback anchor removal: %w", err)
+		// Keep the cleanup anchor alive so the completed installation can still
+		// be rolled back if the cleanup synchronization itself fails.
+		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat, cleanupAnchorName); rollbackErr != nil {
+			return fmt.Errorf("sync Git target directory after rollback anchor removal: %w (rollback: %v)", syncErr, rollbackErr)
+		}
+		if err := syscall.Unlinkat(parentFD, cleanupAnchorName); err != nil {
+			return fmt.Errorf("remove Git target cleanup anchor after rollback: %w", err)
+		}
+		if err := syscall.Fsync(parentFD); err != nil {
+			return fmt.Errorf("sync Git target directory after cleanup rollback: %w", err)
+		}
+		return fmt.Errorf("sync Git target directory after rollback anchor removal: %w", syncErr)
+	}
+	if err := syscall.Unlinkat(parentFD, cleanupAnchorName); err != nil {
+		return fmt.Errorf("remove Git target cleanup anchor: %w", err)
+	}
+	if err := syscall.Fsync(parentFD); err != nil {
+		return fmt.Errorf("sync Git target directory after cleanup anchor removal: %w", err)
 	}
 	cleanup = false
 	return nil
+}
+
+func createReplacementFile(parentFD int, targetName string) (*os.File, string, error) {
+	for attempt := 0; attempt < 100; attempt++ {
+		name := fmt.Sprintf(".%s.ackos-tmp-%d-%d", targetName, time.Now().UnixNano(), attempt)
+		fd, err := unix.Openat(parentFD, name, unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW, 0o600)
+		if err == nil {
+			file := os.NewFile(uintptr(fd), fmt.Sprintf("/proc/self/fd/%d", fd))
+			if file == nil {
+				_ = syscall.Close(fd)
+				_ = syscall.Unlinkat(parentFD, name)
+				return nil, "", fmt.Errorf("create replacement file handle")
+			}
+			return file, name, nil
+		}
+		if err != unix.EEXIST {
+			return nil, "", err
+		}
+	}
+	return nil, "", fmt.Errorf("unable to allocate unique replacement name")
 }
 
 func validateOpenedParentDir(target Target, parentFD int) error {
