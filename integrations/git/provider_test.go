@@ -232,7 +232,7 @@ func git(t *testing.T, repo string, args ...string) string {
 	cmd.Dir = repo
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("git %v: %v: %s", args, out)
+		t.Fatalf("git %v: %s", args, out)
 	}
 	return string(out)
 }
