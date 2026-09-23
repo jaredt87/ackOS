@@ -22,7 +22,7 @@ func TestTransitionEndToEndUsesBlobIDsAndLeavesWorkingTreeAlone(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(repo, "unrelated.txt"), []byte("dirty"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	transition := kernel.Transition{Subject: subject, Before: before, After: after}
+	transition := observedTransition(t, p, subject, before, after)
 	authority := kernel.Authority{ExecutionID: "exec-1"}
 	result := (Executor{Provider: p}).Execute(context.Background(), transition, authority)
 	if !result.Success {
@@ -62,7 +62,7 @@ func TestExecutorRejectsStaleBeforeAfterBranchMoves(t *testing.T) {
 	after := hashBlob(t, repo, "updated")
 	git(t, repo, "commit", "--allow-empty", "-m", "unrelated")
 
-	result := (Executor{Provider: p}).Execute(context.Background(), kernel.Transition{Subject: subject, Before: before, After: after}, kernel.Authority{ExecutionID: "exec-stale"})
+	result := (Executor{Provider: p}).Execute(context.Background(), observedTransition(t, p, subject, before, after), kernel.Authority{ExecutionID: "exec-stale"})
 	if result.Success {
 		t.Fatal("stale transition succeeded")
 	}
@@ -76,7 +76,7 @@ func TestExecutorRejectsMissingObservedBranchTip(t *testing.T) {
 	before := observeBlob(t, p, subject)
 	after := hashBlob(t, repo, "updated")
 	git(t, repo, "commit", "--allow-empty", "-m", "newer branch tip")
-	result := (Executor{Provider: p}).Execute(context.Background(), kernel.Transition{Subject: subject, Before: before, After: after}, kernel.Authority{ExecutionID: "exec-branch"})
+	result := (Executor{Provider: p}).Execute(context.Background(), observedTransition(t, p, subject, before, after), kernel.Authority{ExecutionID: "exec-branch"})
 	if result.Success {
 		t.Fatal("transition succeeded after observed branch tip moved")
 	}
@@ -111,7 +111,7 @@ func TestVerifierRejectsPostExecutionMutation(t *testing.T) {
 	before := observeBlob(t, p, subject)
 	after := hashBlob(t, repo, "updated")
 	authority := kernel.Authority{ExecutionID: "exec-post"}
-	transition := kernel.Transition{Subject: subject, Before: before, After: after}
+	transition := observedTransition(t, p, subject, before, after)
 	if result := (Executor{Provider: p}).Execute(context.Background(), transition, authority); !result.Success {
 		t.Fatal(result.Message)
 	}
@@ -135,6 +135,52 @@ func TestVerifierRejectsWrongResultingState(t *testing.T) {
 	git(t, repo, "update-ref", "refs/heads/main", commit, parent)
 	if _, err := (Verifier{Provider: p}).Verify(context.Background(), transition, authority); err == nil {
 		t.Fatal("wrong resulting state accepted")
+	}
+}
+
+func TestExecutorUsesTheExactObservationFingerprint(t *testing.T) {
+	repo, subject, p := testRepo(t, "initial")
+	before := observeBlob(t, p, subject)
+	after := hashBlob(t, repo, "updated")
+	first, err := (Observer{Provider: p}).Observe(context.Background(), subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "commit", "--allow-empty", "-m", "same target, new tip")
+	second, err := (Observer{Provider: p}).Observe(context.Background(), subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.State != second.State || first.Fingerprint == second.Fingerprint {
+		t.Fatal("observations unexpectedly matched")
+	}
+	result := (Executor{Provider: p}).Execute(context.Background(), kernel.Transition{
+		Subject: subject, Before: before, After: after, ObservationFingerprint: first.Fingerprint,
+	}, kernel.Authority{ExecutionID: "exec-observation-fingerprint"})
+	if result.Success {
+		t.Fatal("stale observation fingerprint was accepted")
+	}
+	if !strings.Contains(result.Message, "branch tip changed") {
+		t.Fatalf("result = %q", result.Message)
+	}
+}
+
+func TestVerifierRejectsSiblingCommitWithMatchingContents(t *testing.T) {
+	repo, subject, p := testRepo(t, "initial")
+	before := observeBlob(t, p, subject)
+	after := hashBlob(t, repo, "updated")
+	transition := observedTransition(t, p, subject, before, after)
+	authority := kernel.Authority{ExecutionID: "exec-exact-commit"}
+	if result := (Executor{Provider: p}).Execute(context.Background(), transition, authority); !result.Success {
+		t.Fatal(result.Message)
+	}
+	produced := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/main"))
+	parent := strings.TrimSpace(git(t, repo, "rev-parse", produced+"^1"))
+	tree := strings.TrimSpace(git(t, repo, "rev-parse", produced+"^{tree}"))
+	sibling := strings.TrimSpace(git(t, repo, "commit-tree", tree, "-p", parent, "-m", "ackOS execution"))
+	git(t, repo, "update-ref", "refs/heads/main", sibling, produced)
+	if _, err := (Verifier{Provider: p}).Verify(context.Background(), transition, authority); err == nil {
+		t.Fatal("sibling commit was accepted as execution result")
 	}
 }
 
@@ -185,6 +231,18 @@ func testRepo(t *testing.T, content string) (string, string, Provider) {
 		t.Fatal(err)
 	}
 	return repo, subject, p
+}
+
+func observedTransition(t *testing.T, p Provider, subject, before, after string) kernel.Transition {
+	t.Helper()
+	o, err := (Observer{Provider: p}).Observe(context.Background(), subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.State != before {
+		t.Fatalf("observed state = %s, want %s", o.State, before)
+	}
+	return kernel.Transition{Subject: subject, Before: before, After: after, ObservationFingerprint: o.Fingerprint}
 }
 
 func observeBlob(t *testing.T, p Provider, subject string) string {
