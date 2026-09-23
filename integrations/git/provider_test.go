@@ -60,9 +60,10 @@ func TestExecutorRejectsStaleBeforeAfterBranchMoves(t *testing.T) {
 	repo, subject, p := testRepo(t, "initial")
 	before := observeBlob(t, p, subject)
 	after := hashBlob(t, repo, "updated")
+	transition := observedTransition(t, p, subject, before, after)
 	git(t, repo, "commit", "--allow-empty", "-m", "unrelated")
 
-	result := (Executor{Provider: p}).Execute(context.Background(), observedTransition(t, p, subject, before, after), kernel.Authority{ExecutionID: "exec-stale"})
+	result := (Executor{Provider: p}).Execute(context.Background(), transition, kernel.Authority{ExecutionID: "exec-stale"})
 	if result.Success {
 		t.Fatal("stale transition succeeded")
 	}
@@ -75,8 +76,9 @@ func TestExecutorRejectsMissingObservedBranchTip(t *testing.T) {
 	repo, subject, p := testRepo(t, "initial")
 	before := observeBlob(t, p, subject)
 	after := hashBlob(t, repo, "updated")
+	transition := observedTransition(t, p, subject, before, after)
 	git(t, repo, "commit", "--allow-empty", "-m", "newer branch tip")
-	result := (Executor{Provider: p}).Execute(context.Background(), observedTransition(t, p, subject, before, after), kernel.Authority{ExecutionID: "exec-branch"})
+	result := (Executor{Provider: p}).Execute(context.Background(), transition, kernel.Authority{ExecutionID: "exec-branch"})
 	if result.Success {
 		t.Fatal("transition succeeded after observed branch tip moved")
 	}
@@ -177,7 +179,7 @@ func TestVerifierRejectsSiblingCommitWithMatchingContents(t *testing.T) {
 	produced := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/main"))
 	parent := strings.TrimSpace(git(t, repo, "rev-parse", produced+"^1"))
 	tree := strings.TrimSpace(git(t, repo, "rev-parse", produced+"^{tree}"))
-	sibling := strings.TrimSpace(git(t, repo, "commit-tree", tree, "-p", parent, "-m", "ackOS execution", "-m", "Ack-Execution-Id: "+authority.ExecutionID))
+	sibling := strings.TrimSpace(gitWithEnv(t, repo, map[string]string{"GIT_AUTHOR_DATE": "2000-01-01T00:00:00Z", "GIT_COMMITTER_DATE": "2000-01-01T00:00:00Z"}, "commit-tree", tree, "-p", parent, "-m", "ackOS execution", "-m", "Ack-Execution-Id: "+authority.ExecutionID))
 	git(t, repo, "update-ref", "refs/heads/main", sibling, produced)
 	if _, err := (Verifier{Provider: p}).Verify(context.Background(), transition, authority); err == nil {
 		t.Fatal("sibling commit was accepted as execution result")
@@ -282,6 +284,21 @@ func readGitWorktreeFile(t *testing.T, repo, subject string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+func gitWithEnv(t *testing.T, repo string, env map[string]string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = repo
+	cmd.Env = os.Environ()
+	for key, value := range env {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %s", args, out)
+	}
+	return string(out)
 }
 
 func git(t *testing.T, repo string, args ...string) string {
