@@ -254,6 +254,17 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, a kernel.Aut
 	return kernel.ExecutionResult{Success: true, Message: "Git transition committed"}
 }
 
+func (v Verifier) verifyExecutionCommit(executionID, head string) error {
+	expectedCommit, ok := v.Provider.commit(executionID)
+	if !ok {
+		return fmt.Errorf("Git execution commit is unavailable")
+	}
+	if head != expectedCommit {
+		return fmt.Errorf("verified Git commit is not the commit produced by execution")
+	}
+	return nil
+}
+
 func (v Verifier) Verify(ctx context.Context, t kernel.Transition, a kernel.Authority) (kernel.Observation, error) {
 	if a.ExecutionID == "" {
 		return kernel.Observation{}, fmt.Errorf("execution authority ID is required")
@@ -272,12 +283,8 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, a kernel.Auth
 	if !ok {
 		return kernel.Observation{}, fmt.Errorf("Git execution parent is unavailable")
 	}
-	expectedCommit, ok := v.Provider.commit(a.ExecutionID)
-	if !ok {
-		return kernel.Observation{}, fmt.Errorf("Git execution commit is unavailable")
-	}
-	if head != expectedCommit {
-		return kernel.Observation{}, fmt.Errorf("verified Git commit is not the commit produced by execution")
+	if err := v.verifyExecutionCommit(a.ExecutionID, head); err != nil {
+		return kernel.Observation{}, err
 	}
 	defer v.Provider.forgetExecution(a.ExecutionID)
 	parent, err := commitParent(ctx, v.Provider.Repository, head)
