@@ -361,13 +361,21 @@ func runGit(ctx context.Context, repo string, args ...string) (string, error) {
 }
 
 func runGitInput(ctx context.Context, repo string, env []string, input string, args ...string) (string, error) {
-	cmd := newGitCommand(ctx, repo, env, args...)
-	cmd.Stdin = strings.NewReader(input)
-	out, err := cmd.CombinedOutput()
+	out, err := runGitBytes(ctx, repo, env, []byte(input), args...)
 	if err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+func runGitBytes(ctx context.Context, repo string, env []string, input []byte, args ...string) ([]byte, error) {
+	cmd := newGitCommand(ctx, repo, env, args...)
+	cmd.Stdin = strings.NewReader(string(input))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
 }
 
 func newGitCommand(ctx context.Context, repo string, env []string, args ...string) *exec.Cmd {
@@ -422,11 +430,11 @@ func materializeBlob(ctx context.Context, repo, blob string) error {
 	if err := ensureBlob(ctx, repo, blob); err != nil {
 		return err
 	}
-	content, err := runGitInput(ctx, repo, os.Environ(), "", "cat-file", "blob", blob)
+	content, err := runGitBytes(ctx, repo, os.Environ(), nil, "cat-file", "blob", blob)
 	if err != nil {
 		return fmt.Errorf("read Transition.After blob: %w", err)
 	}
-	out, err := runGitInput(ctx, repo, os.Environ(), content, "hash-object", "-w", "--stdin")
+	out, err := runGitInput(ctx, repo, os.Environ(), string(content), "hash-object", "-w", "--stdin")
 	if err != nil {
 		return fmt.Errorf("write authorized Git blob: %w", err)
 	}
