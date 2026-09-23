@@ -2470,6 +2470,7 @@ func readGitAttributeSource(path string) ([]byte, error) {
 	}
 	return io.ReadAll(file)
 }
+
 func createTemporaryGitIndex() (string, string, error) {
 	indexDir, err := os.MkdirTemp("", "ackos-index-*")
 	if err != nil {
