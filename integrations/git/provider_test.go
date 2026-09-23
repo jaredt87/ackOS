@@ -156,6 +156,42 @@ func TestObservationCacheIsBounded(t *testing.T) {
 	_ = repo
 }
 
+func TestVerifierRejectsBranchMoveAfterContentVerification(t *testing.T) {
+	repo, subject, p := testRepo(t, "initial")
+	before := observeBlob(t, p, subject)
+	after := hashBlob(t, repo, "updated")
+	authority := kernel.Authority{ExecutionID: "exec-final-head"}
+	transition := observedTransition(t, p, subject, before, after)
+	if result := (Executor{Provider: p}).Execute(context.Background(), transition, authority); !result.Success {
+		t.Fatal(result.Message)
+	}
+
+	calls := 0
+	verifier := Verifier{
+		Provider: p,
+		branchHead: func(ctx context.Context, repo, branch string) (string, error) {
+			calls++
+			head, err := branchHead(ctx, repo, branch)
+			if err != nil {
+				return "", err
+			}
+			if calls == 2 {
+				git(t, repo, "commit", "--allow-empty", "-m", "verification race")
+				head, err = branchHead(ctx, repo, branch)
+				if err != nil {
+					return "", err
+				}
+			}
+			return head, nil
+		},
+	}
+	if _, err := verifier.Verify(context.Background(), transition, authority); err == nil {
+		t.Fatal("verification accepted a branch move after content verification")
+	} else if !strings.Contains(err.Error(), "branch tip changed during verification") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
 func TestVerifierRejectsPostExecutionMutation(t *testing.T) {
 	repo, subject, p := testRepo(t, "initial")
 	before := observeBlob(t, p, subject)
