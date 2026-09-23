@@ -26,6 +26,7 @@ type Provider struct {
 type executionState struct {
 	mu           sync.Mutex
 	parents      map[string]string
+	commits      map[string]string
 	observations map[string]string
 }
 
@@ -56,7 +57,7 @@ func NewProvider(repository, branch string) (Provider, error) {
 		Branch:     branch,
 		repoDev:    uint64(stat.Dev),
 		repoIno:    uint64(stat.Ino),
-		state:      &executionState{parents: make(map[string]string), observations: make(map[string]string)},
+		state:      &executionState{parents: make(map[string]string), commits: make(map[string]string), observations: make(map[string]string)},
 	}, nil
 }
 
@@ -72,36 +73,36 @@ func (p Provider) validateRepository() error {
 	return nil
 }
 
-func observationKey(subject, before string) string {
-	return subject + "\x00" + before
+func observationKey(fingerprint string) string {
+	return fingerprint
 }
 
-func (p Provider) rememberObservation(subject, before, head string) {
+func (p Provider) rememberObservation(fingerprint, head string) {
 	if p.state == nil {
 		return
 	}
 	p.state.mu.Lock()
 	defer p.state.mu.Unlock()
-	p.state.observations[observationKey(subject, before)] = head
+	p.state.observations[observationKey(fingerprint)] = head
 }
 
-func (p Provider) observationHead(subject, before string) (string, bool) {
+func (p Provider) observationHead(fingerprint string) (string, bool) {
 	if p.state == nil {
 		return "", false
 	}
 	p.state.mu.Lock()
 	defer p.state.mu.Unlock()
-	head, ok := p.state.observations[observationKey(subject, before)]
+	head, ok := p.state.observations[observationKey(fingerprint)]
 	return head, ok
 }
 
-func (p Provider) forgetObservation(subject, before string) {
+func (p Provider) forgetObservation(fingerprint string) {
 	if p.state == nil {
 		return
 	}
 	p.state.mu.Lock()
 	defer p.state.mu.Unlock()
-	delete(p.state.observations, observationKey(subject, before))
+	delete(p.state.observations, observationKey(fingerprint))
 }
 
 func (p Provider) rememberParent(executionID, parent string) error {
@@ -125,6 +126,35 @@ func (p Provider) parent(executionID string) (string, bool) {
 	defer p.state.mu.Unlock()
 	parent, ok := p.state.parents[executionID]
 	return parent, ok
+}
+
+func (p Provider) rememberCommit(executionID, commit string) {
+	if p.state == nil {
+		return
+	}
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
+	p.state.commits[executionID] = commit
+}
+
+func (p Provider) commit(executionID string) (string, bool) {
+	if p.state == nil {
+		return "", false
+	}
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
+	commit, ok := p.state.commits[executionID]
+	return commit, ok
+}
+
+func (p Provider) forgetExecution(executionID string) {
+	if p.state == nil {
+		return
+	}
+	p.state.mu.Lock()
+	defer p.state.mu.Unlock()
+	delete(p.state.parents, executionID)
+	delete(p.state.commits, executionID)
 }
 
 func (p Provider) forgetParent(executionID string) {
@@ -153,7 +183,7 @@ func (o Observer) Observe(ctx context.Context, subject string) (kernel.Observati
 	if err != nil {
 		return kernel.Observation{}, err
 	}
-	o.Provider.rememberObservation(subject, blob, head)
+	o.Provider.rememberObservation(observation.Fingerprint, head)
 	return observation, nil
 }
 
@@ -172,58 +202,55 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, a kernel.Aut
 	if err := e.Provider.validateRepository(); err != nil {
 		return fail(err)
 	}
-	expectedHead, ok := e.Provider.observationHead(t.Subject, t.Before)
+	expectedHead, ok := e.Provider.observationHead(t.ObservationFingerprint)
 	if !ok {
 		return fail(fmt.Errorf("Git observation is unavailable"))
 	}
 	head, err := branchHead(ctx, e.Provider.Repository, e.Provider.Branch)
 	if err != nil {
-		e.Provider.forgetObservation(t.Subject, t.Before)
+		e.Provider.forgetObservation(t.ObservationFingerprint)
 		return fail(err)
 	}
 	if head != expectedHead {
-		e.Provider.forgetObservation(t.Subject, t.Before)
+		e.Provider.forgetObservation(t.ObservationFingerprint)
 		return fail(fmt.Errorf("Git branch tip changed since observation"))
 	}
 	before, err := treeBlob(ctx, e.Provider.Repository, head, t.Subject)
 	if err != nil {
-		e.Provider.forgetObservation(t.Subject, t.Before)
+		e.Provider.forgetObservation(t.ObservationFingerprint)
 		return fail(err)
 	}
 	if before != t.Before {
-		e.Provider.forgetObservation(t.Subject, t.Before)
+		e.Provider.forgetObservation(t.ObservationFingerprint)
 		return fail(fmt.Errorf("Git target does not match Transition.Before"))
 	}
-	if !isBlobID(t.After) {
-		e.Provider.forgetObservation(t.Subject, t.Before)
-		return fail(fmt.Errorf("Transition.After must be a Git blob object ID"))
-	}
 	if err := materializeBlob(ctx, e.Provider.Repository, t.After); err != nil {
-		e.Provider.forgetObservation(t.Subject, t.Before)
+		e.Provider.forgetObservation(t.ObservationFingerprint)
 		return fail(err)
 	}
 	if err := e.Provider.rememberParent(a.ExecutionID, head); err != nil {
-		e.Provider.forgetObservation(t.Subject, t.Before)
+		e.Provider.forgetObservation(t.ObservationFingerprint)
 		return fail(err)
 	}
 	tree, err := buildTree(ctx, e.Provider.Repository, head, t.Subject, t.After)
 	if err != nil {
 		e.Provider.forgetParent(a.ExecutionID)
-		e.Provider.forgetObservation(t.Subject, t.Before)
+		e.Provider.forgetObservation(t.ObservationFingerprint)
 		return fail(err)
 	}
 	commit, err := createCommit(ctx, e.Provider.Repository, tree, head, a.ExecutionID)
 	if err != nil {
 		e.Provider.forgetParent(a.ExecutionID)
-		e.Provider.forgetObservation(t.Subject, t.Before)
+		e.Provider.forgetObservation(t.ObservationFingerprint)
 		return fail(err)
 	}
 	if err := updateBranchCAS(ctx, e.Provider.Repository, e.Provider.Branch, head, commit); err != nil {
 		e.Provider.forgetParent(a.ExecutionID)
-		e.Provider.forgetObservation(t.Subject, t.Before)
+		e.Provider.forgetObservation(t.ObservationFingerprint)
 		return fail(err)
 	}
-	e.Provider.forgetObservation(t.Subject, t.Before)
+	e.Provider.rememberCommit(a.ExecutionID, commit)
+	e.Provider.forgetObservation(t.ObservationFingerprint)
 	return kernel.ExecutionResult{Success: true, Message: "Git transition committed"}
 }
 
@@ -245,7 +272,14 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, a kernel.Auth
 	if !ok {
 		return kernel.Observation{}, fmt.Errorf("Git execution parent is unavailable")
 	}
-	defer v.Provider.forgetParent(a.ExecutionID)
+	expectedCommit, ok := v.Provider.commit(a.ExecutionID)
+	if !ok {
+		return kernel.Observation{}, fmt.Errorf("Git execution commit is unavailable")
+	}
+	if head != expectedCommit {
+		return kernel.Observation{}, fmt.Errorf("verified Git commit is not the commit produced by execution")
+	}
+	defer v.Provider.forgetExecution(a.ExecutionID)
 	parent, err := commitParent(ctx, v.Provider.Repository, head)
 	if err != nil {
 		return kernel.Observation{}, err
@@ -377,10 +411,6 @@ func treeMode(ctx context.Context, repo, head, subject string) (string, error) {
 		return "", fmt.Errorf("Git target is not a file")
 	}
 	return fields[0], nil
-}
-
-func isBlobID(s string) bool {
-	return len(s) == 40 && strings.Trim(s, "0123456789abcdef") == ""
 }
 
 func buildTree(ctx context.Context, repo, head, subject, blob string) (string, error) {
