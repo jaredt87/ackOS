@@ -397,8 +397,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err := rejectSubmodules(ctx, e.Target); err != nil {
 		return fail(err)
 	}
-	if err := rejectGrafts(ctx, e.Target); err != nil {
-		return fail(err)
+	if err := rejectGrafts(ctx, e.Target); err != nil {		return fail(err)
 
 	}
 	// Git ancestry must remain real; --no-replace-objects does not disable grafts.
@@ -798,7 +797,6 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority ker
 	}
 	if err := verifyLiveWorktreeState(ctx, v.Target, verifiedHead); err != nil {
 		return kernel.Observation{}, err
-
 	}
 	// The complete index must still describe the verified HEAD.
 	finalHead, err := v.git(ctx, "rev-parse", "HEAD")
@@ -1195,10 +1193,10 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		_ = tmpFile.Close()
 	}()
 	for len(content) > 0 {
-		n, err := syscall.Write(tmpFD, content)		if err != nil {
+		n, err := syscall.Write(tmpFD, content)
+		if err != nil {
 			return fmt.Errorf("write git target replacement: %w", err)
-		}
-		if n == 0 {
+		}		if n == 0 {
 			return fmt.Errorf("write git target replacement: short write")
 		}
 		content = content[n:]
@@ -1597,8 +1595,7 @@ func verifyExchangedTargetMetadata(path string, exchanged, original os.FileInfo,
 	exchangedXattrs, err := captureXattrs(path)
 	if err != nil {
 		return fmt.Errorf("inspect exchanged git target extended attributes: %w", err)
-	}
-	if !equalXattrs(originalXattrs, exchangedXattrs) {
+	}	if !equalXattrs(originalXattrs, exchangedXattrs) {
 		return fmt.Errorf("git target extended attributes changed before atomic replacement")
 	}
 	return nil
@@ -1997,7 +1994,6 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 	}
 	configuredResolved, err = filepath.Abs(configuredResolved)
 	if err != nil {
-
 		return fmt.Errorf("resolve configured target identity path: %w", err)
 
 	}
@@ -2006,7 +2002,8 @@ func rejectAttributesTarget(ctx context.Context, target Target) error {
 
 		return fmt.Errorf("resolve configured attributes identity path: %w", err)
 
-	}	if configuredResolved == actualResolved {
+	}
+	if configuredResolved == actualResolved {
 
 		return fmt.Errorf("git target is configured as the active attributes file")
 
@@ -2397,15 +2394,15 @@ func rejectLiteralWorkingTreeEncodingSentinels(ctx context.Context, target Targe
 		return fmt.Errorf("inspect Git attribute files: %w", err)
 	}
 	paths = strings.TrimSuffix(paths, "\x00")
-	if paths != "" {
-		for _, path := range strings.Split(paths, "\x00") {
+	if paths != "" {		for _, path := range strings.Split(paths, "\x00") {
 			if filepath.Base(path) != ".gitattributes" {
 				continue
 			}
 			content, err := runGitTarget(ctx, target, "show", "HEAD:./"+path)
 			if err != nil {
 				return fmt.Errorf("read Git attribute file %q: %w", path, err)
-			}			if hasLiteralWorkingTreeEncodingSentinel(content) {
+			}
+			if hasLiteralWorkingTreeEncodingSentinel(content) {
 				return fmt.Errorf("Git attributes contain a literal working-tree-encoding sentinel")
 			}
 		}
@@ -2797,14 +2794,14 @@ func liveTargetMode(target Target) (string, error) {
 
 		return "", err
 
-	}
-	defer syscall.Close(parentFD)
+	}	defer syscall.Close(parentFD)
 	fd, err := syscall.Openat(parentFD, filepath.Base(filepath.Clean(target.Path)), syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 
 		return "", fmt.Errorf("open Git target for mode check: %w", err)
 
-	}	file := os.NewFile(uintptr(fd), filepath.Join(target.Repository, target.Path))
+	}
+	file := os.NewFile(uintptr(fd), filepath.Join(target.Repository, target.Path))
 	if file == nil {
 		_ = syscall.Close(fd)
 
