@@ -1184,11 +1184,10 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		return fmt.Errorf("git target already contains requested state")
 	}
 
-	tmpFile, err := os.CreateTemp(filepath.Dir(path), "."+name+".ackos-tmp-*")
+	tmpFile, tmpName, err := createReplacementFile(parentFD)
 	if err != nil {
 		return fmt.Errorf("create git target replacement: %w", err)
 	}
-	tmpName := filepath.Base(tmpFile.Name())
 	tmpFD := int(tmpFile.Fd())
 	cleanup := true
 	defer func() {
@@ -1232,7 +1231,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	if !bytes.Equal(current, expected) {
 		return fmt.Errorf("git target changed during replacement preparation")
 	}
-	anchorName := fmt.Sprintf(".%s.ackos-prepared-%d", name, time.Now().UnixNano())
+	anchorName := ackOSTempName("prepared")
 	if err := unix.Linkat(tmpFD, "", parentFD, anchorName, unix.AT_EMPTY_PATH); err != nil {
 		return fmt.Errorf("anchor prepared git target: %w", err)
 	}
@@ -1264,7 +1263,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	// Keep a hard-link anchor to the original inode until the directory sync
 	// succeeds. After Unlinkat removes the exchanged-out name, the open FD alone
 	// is not enough to recreate a directory entry with linkat(AT_EMPTY_PATH).
-	originalAnchorName := fmt.Sprintf(".%s.ackos-original-%d", name, time.Now().UnixNano())
+	originalAnchorName := ackOSTempName("original")
 	anchorErr := unix.Linkat(fd, "", parentFD, originalAnchorName, unix.AT_EMPTY_PATH)
 	if anchorErr != nil {
 		// RENAME_EXCHANGE has already installed the prepared inode. If the
@@ -1505,6 +1504,30 @@ func rollbackExchangedTarget(parentFD int, tmpName, name string, originalFD int,
 
 func exchangeRollbackAtValidatedDestination(parentFD int, rollbackName, name string) error {
 	return unix.Renameat2(parentFD, rollbackName, parentFD, name, unix.RENAME_EXCHANGE)
+}
+
+func ackOSTempName(kind string) string {
+	return fmt.Sprintf(".ackos-%s-%d-%d", kind, os.Getpid(), time.Now().UnixNano())
+}
+
+func createReplacementFile(parentFD int) (*os.File, string, error) {
+	for attempt := 0; attempt < 100; attempt++ {
+		name := fmt.Sprintf(".ackos-tmp-%d-%d-%d", os.Getpid(), time.Now().UnixNano(), attempt)
+		fd, err := unix.Openat(parentFD, name, unix.O_RDWR|unix.O_CREAT|unix.O_EXCL|unix.O_NOFOLLOW, 0o600)
+		if err == nil {
+			file := os.NewFile(uintptr(fd), fmt.Sprintf("/proc/self/fd/%d", fd))
+			if file == nil {
+				_ = syscall.Close(fd)
+				_ = syscall.Unlinkat(parentFD, name)
+				return nil, "", fmt.Errorf("create replacement file handle")
+			}
+			return file, name, nil
+		}
+		if err != unix.EEXIST {
+			return nil, "", err
+		}
+	}
+	return nil, "", fmt.Errorf("unable to allocate unique replacement name")
 }
 
 func removeReplacementXattrs(path string) error {
