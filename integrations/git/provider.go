@@ -1196,7 +1196,8 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		n, err := syscall.Write(tmpFD, content)
 		if err != nil {
 			return fmt.Errorf("write git target replacement: %w", err)
-		}		if n == 0 {
+		}
+		if n == 0 {
 			return fmt.Errorf("write git target replacement: short write")
 		}
 		content = content[n:]
@@ -1595,7 +1596,8 @@ func verifyExchangedTargetMetadata(path string, exchanged, original os.FileInfo,
 	exchangedXattrs, err := captureXattrs(path)
 	if err != nil {
 		return fmt.Errorf("inspect exchanged git target extended attributes: %w", err)
-	}	if !equalXattrs(originalXattrs, exchangedXattrs) {
+	}
+	if !equalXattrs(originalXattrs, exchangedXattrs) {
 		return fmt.Errorf("git target extended attributes changed before atomic replacement")
 	}
 	return nil
@@ -2794,7 +2796,8 @@ func liveTargetMode(target Target) (string, error) {
 
 		return "", err
 
-	}	defer syscall.Close(parentFD)
+	}
+	defer syscall.Close(parentFD)
 	fd, err := syscall.Openat(parentFD, filepath.Base(filepath.Clean(target.Path)), syscall.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 
