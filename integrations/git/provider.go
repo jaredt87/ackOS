@@ -3063,19 +3063,7 @@ func runGitWithInput(ctx context.Context, repository string, input []byte, overr
 }
 
 func sanitizedGitEnv() []string {
-	blocked := map[string]struct{}{
-		"GIT_DIR":                          {},
-		"GIT_WORK_TREE":                    {},
-		"GIT_INDEX_FILE":                   {},
-		"GIT_OBJECT_DIRECTORY":             {},
-		"GIT_ALTERNATE_OBJECT_DIRECTORIES": {},
-		"GIT_COMMON_DIR":                   {},
-		"GIT_NAMESPACE":                    {},
-		"GIT_CEILING_DIRECTORIES":          {},
-		"GIT_DISCOVERY_ACROSS_FILESYSTEM":  {},
-		"GIT_ATTR_SOURCE":                  {}, // Reject environment-selected Git attribute sources.
-		"GIT_GRAFT_FILE":                   {},
-	}
+	blocked := gitBlockedEnvironment()
 	env := make([]string, 0, len(os.Environ()))
 	for _, entry := range os.Environ() {
 		key, _, ok := strings.Cut(entry, "=")
@@ -3089,6 +3077,23 @@ func sanitizedGitEnv() []string {
 	}
 	return env
 }
+
+func gitBlockedEnvironment() map[string]struct{} {
+	return map[string]struct{}{
+		"GIT_DIR":                          {},
+		"GIT_WORK_TREE":                    {},
+		"GIT_INDEX_FILE":                   {},
+		"GIT_OBJECT_DIRECTORY":             {},
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES": {},
+		"GIT_COMMON_DIR":                   {},
+		"GIT_NAMESPACE":                    {},
+		"GIT_CEILING_DIRECTORIES":          {},
+		"GIT_DISCOVERY_ACROSS_FILESYSTEM":  {},
+		"GIT_GRAFT_FILE":                   {},
+		"GIT_ATTR_SOURCE":                  {}, // Reject environment-selected Git attribute sources.
+	}
+}
+
 
 func rejectCommandScopeConfigEnvironment() error {
 	for _, entry := range os.Environ() {
