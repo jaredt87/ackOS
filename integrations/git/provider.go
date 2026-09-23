@@ -1360,11 +1360,12 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		return rollback(fmt.Errorf("remove original git target rollback anchor: %w", err))
 	}
 	anchorRemoved = true
-	if syncErr := syscall.Fsync(parentFD); syncErr != nil {
+	cleanupSyncErr := syscall.Fsync(parentFD)
+	if cleanupSyncErr != nil {
 		// Keep the cleanup anchor alive so the completed installation can still
 		// be rolled back if the cleanup synchronization itself fails.
 		if rollbackErr := rollbackExchangedTarget(parentFD, tmpName, name, fd, stat, &preparedStat, cleanupAnchorName); rollbackErr != nil {
-			return fmt.Errorf("sync Git target directory after rollback anchor removal: %w (rollback: %v)", syncErr, rollbackErr)
+			return fmt.Errorf("sync Git target directory after rollback anchor removal: %w (rollback: %v)", cleanupSyncErr, rollbackErr)
 		}
 		if err := syscall.Unlinkat(parentFD, cleanupAnchorName); err != nil {
 			return fmt.Errorf("remove Git target cleanup anchor after rollback: %w", err)
@@ -1372,7 +1373,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 		if err := syscall.Fsync(parentFD); err != nil {
 			return fmt.Errorf("sync Git target directory after cleanup rollback: %w", err)
 		}
-		return fmt.Errorf("sync Git target directory after rollback anchor removal: %w", syncErr)
+		return fmt.Errorf("sync Git target directory after rollback anchor removal: %w", cleanupSyncErr)
 	}
 	if err := syscall.Unlinkat(parentFD, cleanupAnchorName); err != nil {
 		return fmt.Errorf("remove Git target cleanup anchor: %w", err)
