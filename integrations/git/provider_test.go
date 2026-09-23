@@ -177,7 +177,7 @@ func TestVerifierRejectsSiblingCommitWithMatchingContents(t *testing.T) {
 	produced := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/main"))
 	parent := strings.TrimSpace(git(t, repo, "rev-parse", produced+"^1"))
 	tree := strings.TrimSpace(git(t, repo, "rev-parse", produced+"^{tree}"))
-	sibling := strings.TrimSpace(git(t, repo, "commit-tree", tree, "-p", parent, "-m", "ackOS execution"))
+	sibling := strings.TrimSpace(git(t, repo, "commit-tree", tree, "-p", parent, "-m", "ackOS execution", "-m", "Ack-Execution-Id: "+authority.ExecutionID))
 	git(t, repo, "update-ref", "refs/heads/main", sibling, produced)
 	if _, err := (Verifier{Provider: p}).Verify(context.Background(), transition, authority); err == nil {
 		t.Fatal("sibling commit was accepted as execution result")
