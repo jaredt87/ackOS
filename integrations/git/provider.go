@@ -357,7 +357,7 @@ func validateSubject(s string) error {
 }
 
 func runGit(ctx context.Context, repo string, args ...string) (string, error) {
-	return runGitEnv(ctx, repo, os.Environ(), args...)
+	return runGitEnv(ctx, repo, withoutGitIndex(os.Environ()), args...)
 }
 
 func runGitInput(ctx context.Context, repo string, env []string, input string, args ...string) (string, error) {
@@ -385,10 +385,21 @@ func newGitCommand(ctx context.Context, repo string, env []string, args ...strin
 	return cmd
 }
 
+func withoutGitIndex(env []string) []string {
+	result := make([]string, 0, len(env))
+	for _, entry := range env {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || key != "GIT_INDEX_FILE" {
+			result = append(result, entry)
+		}
+	}
+	return result
+}
+
 func sanitizedGitEnv(env []string) []string {
 	blocked := map[string]bool{
 		"GIT_DIR": true, "GIT_WORK_TREE": true, "GIT_COMMON_DIR": true,
-		"GIT_INDEX_FILE": true, "GIT_OBJECT_DIRECTORY": true,
+		"GIT_OBJECT_DIRECTORY": true,
 		"GIT_ALTERNATE_OBJECT_DIRECTORIES": true, "GIT_NAMESPACE": true,
 	}
 	result := make([]string, 0, len(env)+1)
