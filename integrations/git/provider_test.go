@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -106,6 +107,53 @@ func TestVerifierRejectsFalseExecutorSuccess(t *testing.T) {
 	before := observeBlob(t, p, subject)
 	after := hashBlob(t, repo, "updated")
 	assertFalseVerifier(t, p, subject, before, after)
+}
+
+func TestRunGitIgnoresRepositorySelectionEnvironment(t *testing.T) {
+	repo, _, _ := testRepo(t, "initial")
+	other, _, _ := testRepo(t, "other")
+
+	t.Setenv("GIT_DIR", filepath.Join(other, ".git"))
+	t.Setenv("GIT_WORK_TREE", other)
+
+	got, err := runGit(context.Background(), repo, "rev-parse", "refs/heads/main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/main"))
+	if got != want {
+		t.Fatalf("branch head = %s, want %s", got, want)
+	}
+}
+
+func TestTreeBlobIgnoresReplacementRefs(t *testing.T) {
+	repo, subject, p := testRepo(t, "initial")
+	before := observeBlob(t, p, subject)
+	replacementBlob := hashBlob(t, repo, "replacement")
+	replacementTree := buildTestTree(t, repo, strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/main")), subject, replacementBlob)
+	head := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/main"))
+	replacement := strings.TrimSpace(git(t, repo, "commit-tree", replacementTree, "-p", head, "-m", "replacement"))
+	git(t, repo, "replace", head, replacement)
+	t.Cleanup(func() { _ = exec.Command("git", "-C", repo, "replace", "-d", head).Run() })
+
+	got, err := treeBlob(context.Background(), repo, head, subject)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != before {
+		t.Fatalf("tree blob = %s, want original %s", got, before)
+	}
+}
+
+func TestObservationCacheIsBounded(t *testing.T) {
+	repo, _, p := testRepo(t, "initial")
+	for i := 0; i < maxCachedObservations+17; i++ {
+		p.rememberObservation(fmt.Sprintf("fingerprint-%d", i), "head")
+	}
+	if got := len(p.state.observations); got > maxCachedObservations {
+		t.Fatalf("observation cache size = %d, want <= %d", got, maxCachedObservations)
+	}
+	_ = repo
 }
 
 func TestVerifierRejectsPostExecutionMutation(t *testing.T) {
