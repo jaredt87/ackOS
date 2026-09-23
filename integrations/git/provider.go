@@ -412,20 +412,15 @@ func materializeBlob(ctx context.Context, repo, blob string) error {
 	if err := ensureBlob(ctx, repo, blob); err != nil {
 		return err
 	}
-	cmd := exec.CommandContext(ctx, "git", "cat-file", "blob", blob)
-	cmd.Dir = repo
-	content, err := cmd.Output()
+	content, err := runGitInput(ctx, repo, os.Environ(), "", "cat-file", "blob", blob)
 	if err != nil {
 		return fmt.Errorf("read Transition.After blob: %w", err)
 	}
-	cmd = exec.CommandContext(ctx, "git", "hash-object", "-w", "--stdin")
-	cmd.Dir = repo
-	cmd.Stdin = strings.NewReader(string(content))
-	out, err := cmd.Output()
+	out, err := runGitInput(ctx, repo, os.Environ(), content, "hash-object", "-w", "--stdin")
 	if err != nil {
 		return fmt.Errorf("write authorized Git blob: %w", err)
 	}
-	if strings.TrimSpace(string(out)) != blob {
+	if strings.TrimSpace(out) != blob {
 		return fmt.Errorf("authorized Git blob ID mismatch")
 	}
 	return nil
@@ -480,14 +475,11 @@ func runGitEnv(ctx context.Context, repo string, env []string, args ...string) (
 
 func createCommit(ctx context.Context, repo, tree, parent, id string) (string, error) {
 	msg := "ackOS execution\n\nAck-Execution-Id: " + id + "\n"
-	cmd := exec.CommandContext(ctx, "git", "commit-tree", tree, "-p", parent)
-	cmd.Dir = repo
-	cmd.Stdin = strings.NewReader(msg)
-	out, err := cmd.CombinedOutput()
+	out, err := runGitInput(ctx, repo, os.Environ(), msg, "commit-tree", tree, "-p", parent)
 	if err != nil {
-		return "", fmt.Errorf("create Git commit: %w: %s", err, strings.TrimSpace(string(out)))
+		return "", fmt.Errorf("create Git commit: %w", err)
 	}
-	return strings.TrimSpace(string(out)), nil
+	return out, nil
 }
 
 func updateBranchCAS(ctx context.Context, repo, branch, old, new string) error {
