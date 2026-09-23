@@ -167,6 +167,19 @@ func TestExecutorUsesTheExactObservationFingerprint(t *testing.T) {
 	}
 }
 
+func TestVerifierRejectsMissingExecutionCommit(t *testing.T) {
+	repo, subject, p := testRepo(t, "initial")
+	before := observeBlob(t, p, subject)
+	after := hashBlob(t, repo, "updated")
+	authority := kernel.Authority{ExecutionID: "exec-missing-commit"}
+	transition := kernel.Transition{Subject: subject, Before: before, After: after}
+	if _, err := (Verifier{Provider: p}).Verify(context.Background(), transition, authority); err == nil {
+		t.Fatal("verification succeeded without an execution commit")
+	} else if !strings.Contains(err.Error(), "execution commit is unavailable") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
 func TestVerifierRejectsSiblingCommitWithMatchingContents(t *testing.T) {
 	repo, subject, p := testRepo(t, "initial")
 	before := observeBlob(t, p, subject)
