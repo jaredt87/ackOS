@@ -990,33 +990,54 @@ func validateNoSymlinks(target Target) error {
 }
 
 func acquireTargetLock(ctx context.Context, target Target) (func(), error) {
-	// Lock the already-validated Git common-directory inode itself. A pathname
-	// lock can be replaced by another process between open and flock; the
-	// directory inode is the stable repository-associated lock namespace.
+	// Keep the lock in the captured Git common directory rather than TMPDIR.
+	// Different processes can have different TMPDIR values, but they must still
+	// resolve the same repository-associated lock inode.
 	commonFD, err := openGitMetadataDir(target.gitCommonDirPath, target.gitCommonDirDev, target.gitCommonDirIno)
 	if err != nil {
 		return nil, fmt.Errorf("open ackOS target lock directory: %w", err)
 	}
+	lockFD, err := syscall.Openat(commonFD, "ackos-target.lock", unix.O_CREAT|syscall.O_RDWR|syscall.O_NOFOLLOW, 0o600)
+	_ = syscall.Close(commonFD)
+	if err != nil {
+		return nil, fmt.Errorf("open ackOS target lock: %w", err)
+	}
+	file := os.NewFile(uintptr(lockFD), "ackos-target.lock")
+	if file == nil {
+		_ = syscall.Close(lockFD)
+		return nil, fmt.Errorf("open ackOS target lock: invalid file descriptor")
+	}
 	for {
-		err = syscall.Flock(commonFD, syscall.LOCK_EX|syscall.LOCK_NB)
+		err = syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+
 		if err == nil {
+
 			return func() {
-				_ = syscall.Flock(commonFD, syscall.LOCK_UN)
-				_ = syscall.Close(commonFD)
+				_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
+				_ = file.Close()
+
 			}, nil
+
 		}
+
 		if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
-			_ = syscall.Close(commonFD)
+			_ = file.Close()
+
 			return nil, fmt.Errorf("acquire ackOS target lock: %w", err)
+
 		}
 		select {
 		case <-ctx.Done():
-			_ = syscall.Close(commonFD)
+			_ = file.Close()
+
 			return nil, ctx.Err()
 		case <-time.After(25 * time.Millisecond):
+
 		}
+
 	}
 }
+
 func validateMutationBoundary(ctx context.Context, target Target, expected string) error {
 	content, err := readFile(ctx, target)
 	if err != nil {
@@ -1332,7 +1353,7 @@ func atomicWriteTarget(target Target, expected, content []byte) error {
 	// The exchange is durable now, so remove the rollback-only anchor and
 	// durably synchronize that removal before reporting success.
 	if err := syscall.Unlinkat(parentFD, originalAnchorName); err != nil {
-		return rollback(fmt.Errorf("remove original git target rollback anchor: %w", err))
+		return fmt.Errorf("remove original git target rollback anchor: %w", err)
 	}
 	anchorRemoved = true
 	if syncErr := syscall.Fsync(parentFD); syncErr != nil {
