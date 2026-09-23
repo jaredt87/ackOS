@@ -418,7 +418,7 @@ func withoutGitIndex(env []string) []string {
 func sanitizedGitEnv(env []string) []string {
 	blocked := map[string]bool{
 		"GIT_DIR": true, "GIT_WORK_TREE": true, "GIT_COMMON_DIR": true,
-		"GIT_OBJECT_DIRECTORY": true,
+		"GIT_OBJECT_DIRECTORY":             true,
 		"GIT_ALTERNATE_OBJECT_DIRECTORIES": true, "GIT_NAMESPACE": true,
 	}
 	result := make([]string, 0, len(env)+1)
