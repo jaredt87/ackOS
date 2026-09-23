@@ -23,11 +23,14 @@ type Provider struct {
 	state      *executionState
 }
 
+const maxCachedObservations = 128
+
 type executionState struct {
-	mu           sync.Mutex
-	parents      map[string]string
-	commits      map[string]string
-	observations map[string]string
+	mu               sync.Mutex
+	parents          map[string]string
+	commits          map[string]string
+	observations     map[string]string
+	observationOrder []string
 }
 
 func NewProvider(repository, branch string) (Provider, error) {
@@ -83,7 +86,16 @@ func (p Provider) rememberObservation(fingerprint, head string) {
 	}
 	p.state.mu.Lock()
 	defer p.state.mu.Unlock()
-	p.state.observations[observationKey(fingerprint)] = head
+	key := observationKey(fingerprint)
+	if _, exists := p.state.observations[key]; !exists {
+		p.state.observationOrder = append(p.state.observationOrder, key)
+	}
+	p.state.observations[key] = head
+	for len(p.state.observationOrder) > maxCachedObservations {
+		oldest := p.state.observationOrder[0]
+		p.state.observationOrder = p.state.observationOrder[1:]
+		delete(p.state.observations, oldest)
+	}
 }
 
 func (p Provider) observationHead(fingerprint string) (string, bool) {
@@ -102,7 +114,14 @@ func (p Provider) forgetObservation(fingerprint string) {
 	}
 	p.state.mu.Lock()
 	defer p.state.mu.Unlock()
-	delete(p.state.observations, observationKey(fingerprint))
+	key := observationKey(fingerprint)
+	delete(p.state.observations, key)
+	for i, cached := range p.state.observationOrder {
+		if cached == key {
+			p.state.observationOrder = append(p.state.observationOrder[:i], p.state.observationOrder[i+1:]...)
+			break
+		}
+	}
 }
 
 func (p Provider) rememberParent(executionID, parent string) error {
