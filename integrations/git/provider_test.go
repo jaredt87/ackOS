@@ -405,7 +405,7 @@ func TestProviderDisablesGitHooks(t *testing.T) {
 	postIndexSentinel := filepath.Join(t.TempDir(), "post-index-change")
 	referenceSentinel := filepath.Join(t.TempDir(), "reference-transaction")
 	hooks := map[string]string{
-		"post-index-change": "#!/bin/sh\nprintf hook > " + postIndexSentinel + "\n",
+		"post-index-change":     "#!/bin/sh\nprintf hook > " + postIndexSentinel + "\n",
 		"reference-transaction": "#!/bin/sh\nprintf hook > " + referenceSentinel + "\n",
 	}
 	for name, script := range hooks {
