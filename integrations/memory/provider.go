@@ -27,6 +27,8 @@ func NewResource(id, fingerprint string) (*Resource, error) {
 	return &Resource{id: id, fingerprint: fingerprint, version: 1}, nil
 }
 
+var _ control.Provider = (*Provider)(nil)
+
 type Provider struct {
 	resource *Resource
 }
