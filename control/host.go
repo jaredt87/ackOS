@@ -14,22 +14,22 @@ const defaultInvocationTimeout = 30 * time.Second
 // Runtime owns authorization and lifecycle state; Host owns provider routing
 // and the invocation boundary. Providers own only domain-specific resource state.
 type Host struct {
-	runtime  *kernel.Runtime
+	runtime   *kernel.Runtime
 	providers map[string]Provider
-	timeout time.Duration
+	timeout   time.Duration
 }
 
 type ControlRequest struct {
-	Target        ResourceRef
-	Desired       ResourceRef
-	AuthorityTTL  time.Duration
+	Target       ResourceRef
+	Desired      ResourceRef
+	AuthorityTTL time.Duration
 }
 
 type ControlResult struct {
-	Observation Observation
-	Transition  kernel.Transition
-	Authority   kernel.Authority
-	Execution   Execution
+	Observation  Observation
+	Transition   kernel.Transition
+	Authority    kernel.Authority
+	Execution    Execution
 	Verification Verification
 }
 
@@ -140,10 +140,10 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 		return ControlResult{Observation: observed, Transition: transition, Authority: authority, Execution: execution, Verification: verification}, err
 	}
 	return ControlResult{
-		Observation: observed,
-		Transition: transition,
-		Authority: authority,
-		Execution: execution,
+		Observation:  observed,
+		Transition:   transition,
+		Authority:    authority,
+		Execution:    execution,
 		Verification: verification,
 	}, nil
 }
