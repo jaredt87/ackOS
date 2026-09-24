@@ -152,7 +152,6 @@ func TestBranchCASCannotOverwriteNewerTip(t *testing.T) {
 	}
 }
 
-
 func TestBranchCASDoesNotDereferenceSymbolicRef(t *testing.T) {
 	repo, _, p := testRepo(t, "initial")
 	old := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/main"))
