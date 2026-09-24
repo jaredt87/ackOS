@@ -441,6 +441,90 @@ func TestProviderDisablesGitHooks(t *testing.T) {
 	}
 }
 
+func TestProviderDisablesGitFSMonitor(t *testing.T) {
+	repo, subject, p := testRepo(t, "initial")
+	fsmonitorSentinel := filepath.Join(t.TempDir(), "fsmonitor")
+	fsmonitor := filepath.Join(t.TempDir(), "fsmonitor-hook")
+	script := "#!/bin/sh\nprintf fsmonitor > " + fsmonitorSentinel + "\nexit 1\n"
+	if err := os.WriteFile(fsmonitor, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(fsmonitor, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "config", "core.fsmonitor", fsmonitor)
+
+	before := observeBlob(t, p, subject)
+	after := hashBlob(t, repo, "updated")
+	transition := observedTransition(t, p, subject, before, after)
+	authority := kernel.Authority{ExecutionID: "exec-fsmonitor-disabled"}
+
+	if result := (Executor{Provider: p}).Execute(context.Background(), transition, authority); !result.Success {
+		t.Fatal(result.Message)
+	}
+	if _, err := (Verifier{Provider: p}).Verify(context.Background(), transition, authority); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(fsmonitorSentinel); err == nil {
+		t.Fatal("fsmonitor hook executed")
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
+func TestProviderExecutionUsesConfiguredBranchAfterProviderCopy(t *testing.T) {
+	repo, subject, p := testRepo(t, "initial")
+	git(t, repo, "branch", "alternate")
+	copy := p
+	copy.Branch = "alternate"
+
+	before := observeBlob(t, p, subject)
+	after := hashBlob(t, repo, "updated")
+	transition := observedTransition(t, p, subject, before, after)
+	authority := kernel.Authority{ExecutionID: "exec-configured-branch"}
+
+	if result := (Executor{Provider: copy}).Execute(context.Background(), transition, authority); !result.Success {
+		t.Fatal(result.Message)
+	}
+	mainHead := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/main"))
+	alternateHead := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/alternate"))
+	if mainHead == alternateHead {
+		t.Fatal("configured branch was redirected by copied provider mutation")
+	}
+	if got := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/main:"+subject)); got != after {
+		t.Fatalf("main target = %s, want %s", got, after)
+	}
+	if got := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/alternate:"+subject)); got != before {
+		t.Fatalf("alternate target = %s, want %s", got, before)
+	}
+}
+
+func TestVerifierReleasesExecutionStateWhenBranchHeadReadFails(t *testing.T) {
+	repo, _, p := testRepo(t, "initial")
+	authority := kernel.Authority{ExecutionID: "exec-branch-head-failure"}
+	parent := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/main"))
+	p.rememberParent(authority.ExecutionID, parent)
+	p.rememberCommit(authority.ExecutionID, "commit")
+
+	verifier := Verifier{
+		Provider: p,
+		branchHead: func(context.Context, string, string) (string, error) {
+			return "", fmt.Errorf("branch head unavailable")
+		},
+	}
+	if _, err := verifier.Verify(context.Background(), kernel.Transition{Subject: "docs/example.md"}, authority); err == nil {
+		t.Fatal("verification unexpectedly succeeded")
+	} else if !strings.Contains(err.Error(), "branch head unavailable") {
+		t.Fatalf("error = %q", err)
+	}
+	if _, ok := p.parent(authority.ExecutionID); ok {
+		t.Fatal("execution parent leaked after branch-head failure")
+	}
+	if _, ok := p.commit(authority.ExecutionID); ok {
+		t.Fatal("execution commit leaked after branch-head failure")
+	}
+}
+
 func TestCreateCommitUsesProviderIdentityWithoutGitConfig(t *testing.T) {
 	repo, subject, p := testRepo(t, "initial")
 	git(t, repo, "config", "--unset", "user.name")
