@@ -511,7 +511,7 @@ func treeMode(ctx context.Context, repo, head, subject string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read Git target mode: %w", err)
 	}
-	entry := strings.TrimSuffix(out, "\x00")
+	entry := strings.TrimSuffix(string(out), "\x00")
 	parts := strings.SplitN(entry, "	", 2)
 	if len(parts) != 2 {
 		return "", fmt.Errorf("Git target tree entry is unavailable")
