@@ -13,17 +13,15 @@ type ResourceRef struct {
 	Fingerprint string
 }
 
-func (r ResourceRef) valid() bool {
-	return r.ID != "" && r.Fingerprint != ""
-}
+func (r ResourceRef) valid() bool { return r.ID != "" && r.Fingerprint != "" }
 
 type ObserveRequest struct {
 	Target ResourceRef
 }
 
 type Observation struct {
-	Resource  ResourceRef
-	Evidence  []byte
+	Resource   ResourceRef
+	Evidence   []byte
 	ObservedAt time.Time
 }
 
