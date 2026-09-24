@@ -17,8 +17,12 @@ import (
 )
 
 type Provider struct {
+	// Repository and Branch are retained as public metadata for compatibility.
+	// Provider operations use the immutable internal configuration below.
 	Repository string
 	Branch     string
+	repository string
+	branch     string
 	repoDev    uint64
 	repoIno    uint64
 	state      *executionState
@@ -71,6 +75,8 @@ func NewProvider(repository, branch string) (Provider, error) {
 	return Provider{
 		Repository: canonicalRepository,
 		Branch:     branch,
+		repository: canonicalRepository,
+		branch:     branch,
 		repoDev:    uint64(stat.Dev),
 		repoIno:    uint64(stat.Ino),
 		state:      &executionState{parents: make(map[string]string), commits: make(map[string]string), observations: make(map[string]string)},
@@ -90,7 +96,7 @@ func canonicalRepositoryPath(repository string) (string, error) {
 }
 
 func (p Provider) validateRepository() error {
-	info, err := os.Stat(p.Repository)
+	info, err := os.Stat(p.repository)
 	if err != nil {
 		return fmt.Errorf("configured Git repository unavailable: %w", err)
 	}
@@ -253,7 +259,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, a kernel.Aut
 	if !ok {
 		return fail(fmt.Errorf("Git observation is unavailable"))
 	}
-	head, err := branchHead(ctx, e.Provider.Repository, e.Provider.Branch)
+	head, err := branchHead(ctx, e.Provider.repository, e.Provider.branch)
 	if err != nil {
 		e.Provider.forgetObservation(t.ObservationFingerprint)
 		return fail(err)
@@ -279,19 +285,19 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, a kernel.Aut
 		e.Provider.forgetObservation(t.ObservationFingerprint)
 		return fail(err)
 	}
-	tree, err := buildTree(ctx, e.Provider.Repository, head, t.Subject, t.After)
+	tree, err := buildTree(ctx, e.Provider.repository, head, t.Subject, t.After)
 	if err != nil {
 		e.Provider.forgetParent(a.ExecutionID)
 		e.Provider.forgetObservation(t.ObservationFingerprint)
 		return fail(err)
 	}
-	commit, err := createCommit(ctx, e.Provider.Repository, tree, head, a.ExecutionID)
+	commit, err := createCommit(ctx, e.Provider.repository, tree, head, a.ExecutionID)
 	if err != nil {
 		e.Provider.forgetParent(a.ExecutionID)
 		e.Provider.forgetObservation(t.ObservationFingerprint)
 		return fail(err)
 	}
-	if err := updateBranchCAS(ctx, e.Provider.Repository, e.Provider.Branch, head, commit); err != nil {
+	if err := updateBranchCAS(ctx, e.Provider.repository, e.Provider.branch, head, commit); err != nil {
 		e.Provider.forgetParent(a.ExecutionID)
 		e.Provider.forgetObservation(t.ObservationFingerprint)
 		return fail(err)
@@ -303,9 +309,9 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, a kernel.Aut
 
 func (v Verifier) readBranchHead(ctx context.Context) (string, error) {
 	if v.branchHead != nil {
-		return v.branchHead(ctx, v.Provider.Repository, v.Provider.Branch)
+		return v.branchHead(ctx, v.Provider.repository, v.Provider.branch)
 	}
-	return branchHead(ctx, v.Provider.Repository, v.Provider.Branch)
+	return branchHead(ctx, v.Provider.repository, v.Provider.branch)
 }
 
 func (v Verifier) verifyExecutionCommit(executionID, head string) error {
@@ -323,6 +329,7 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, a kernel.Auth
 	if a.ExecutionID == "" {
 		return kernel.Observation{}, fmt.Errorf("execution authority ID is required")
 	}
+	defer v.Provider.forgetExecution(a.ExecutionID)
 	if err := validateSubject(t.Subject); err != nil {
 		return kernel.Observation{}, err
 	}
@@ -337,7 +344,6 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, a kernel.Auth
 	if !ok {
 		return kernel.Observation{}, fmt.Errorf("Git execution parent is unavailable")
 	}
-	defer v.Provider.forgetExecution(a.ExecutionID)
 	if err := v.verifyExecutionCommit(a.ExecutionID, head); err != nil {
 		return kernel.Observation{}, err
 	}
@@ -379,7 +385,7 @@ func (p Provider) observe(ctx context.Context, subject string) (string, string, 
 	if err := validateSubject(subject); err != nil {
 		return "", "", err
 	}
-	head, err := branchHead(ctx, p.Repository, p.Branch)
+	head, err := branchHead(ctx, p.repository, p.branch)
 	if err != nil {
 		return "", "", err
 	}
@@ -432,7 +438,7 @@ func runGitBytes(ctx context.Context, repo string, env []string, input []byte, a
 func newGitCommand(ctx context.Context, repo string, env []string, args ...string) *exec.Cmd {
 	// /dev/null is used as a Unix hooks-path sentinel; use a platform-specific
 	// null-device path if the Git provider gains Windows support.
-	gitArgs := append([]string{"--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-C", repo}, args...)
+	gitArgs := append([]string{"--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-C", repo}, args...)
 	cmd := exec.CommandContext(ctx, "git", gitArgs...)
 	cmd.Env = sanitizedGitEnv(env)
 	return cmd
