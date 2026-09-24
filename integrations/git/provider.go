@@ -430,7 +430,9 @@ func runGitBytes(ctx context.Context, repo string, env []string, input []byte, a
 }
 
 func newGitCommand(ctx context.Context, repo string, env []string, args ...string) *exec.Cmd {
-	gitArgs := append([]string{"--no-replace-objects", "-C", repo}, args...)
+	// /dev/null is used as a Unix hooks-path sentinel; use a platform-specific
+	// null-device path if the Git provider gains Windows support.
+	gitArgs := append([]string{"--no-replace-objects", "-c", "core.hooksPath=/dev/null", "-C", repo}, args...)
 	cmd := exec.CommandContext(ctx, "git", gitArgs...)
 	cmd.Env = sanitizedGitEnv(env)
 	return cmd
