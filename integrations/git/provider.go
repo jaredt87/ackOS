@@ -507,7 +507,7 @@ func materializeBlob(ctx context.Context, repo, blob string) error {
 }
 
 func treeMode(ctx context.Context, repo, head, subject string) (string, error) {
-	out, err := runGit(ctx, repo, "ls-tree", "-z", head, "--", ":(literal)"+subject)
+	out, err := runGitRaw(ctx, repo, withoutGitIndex(os.Environ()), "ls-tree", "-z", head, "--", ":(literal)"+subject)
 	if err != nil {
 		return "", fmt.Errorf("read Git target mode: %w", err)
 	}
@@ -545,17 +545,54 @@ func buildTree(ctx context.Context, repo, head, subject, blob string) (string, e
 }
 
 func runGitEnv(ctx context.Context, repo string, env []string, args ...string) (string, error) {
-	cmd := newGitCommand(ctx, repo, env, args...)
-	out, err := cmd.CombinedOutput()
+	out, err := runGitRaw(ctx, repo, env, args...)
 	if err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
 }
 
+func runGitRaw(ctx context.Context, repo string, env []string, args ...string) ([]byte, error) {
+	out, err := runGitBytes(ctx, repo, env, nil, args...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+const (
+	providerIdentityName  = "ackOS Git Provider"
+	providerIdentityEmail = "ackos@localhost"
+)
+
+func providerGitIdentity(env []string) []string {
+	blocked := map[string]bool{
+		"GIT_AUTHOR_NAME":     true,
+		"GIT_AUTHOR_EMAIL":    true,
+		"GIT_COMMITTER_NAME":  true,
+		"GIT_COMMITTER_EMAIL": true,
+	}
+	result := make([]string, 0, len(env)+4)
+	for _, entry := range env {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || blocked[key] {
+			continue
+		}
+		result = append(result, entry)
+	}
+	result = append(result,
+		"GIT_AUTHOR_NAME="+providerIdentityName,
+		"GIT_AUTHOR_EMAIL="+providerIdentityEmail,
+		"GIT_COMMITTER_NAME="+providerIdentityName,
+		"GIT_COMMITTER_EMAIL="+providerIdentityEmail,
+	)
+	return result
+}
+
 func createCommit(ctx context.Context, repo, tree, parent, id string) (string, error) {
 	msg := "ackOS execution\n\nAck-Execution-Id: " + id + "\n"
-	out, err := runGitInput(ctx, repo, withoutGitIndex(os.Environ()), msg, "commit-tree", tree, "-p", parent)
+	env := providerGitIdentity(withoutGitIndex(os.Environ()))
+	out, err := runGitInput(ctx, repo, env, msg, "commit-tree", tree, "-p", parent)
 	if err != nil {
 		return "", fmt.Errorf("create Git commit: %w", err)
 	}
@@ -602,7 +639,7 @@ func verifySinglePathChange(ctx context.Context, repo, parent, head, subject, be
 	if p != before {
 		return fmt.Errorf("commit parent target does not match Transition.Before")
 	}
-	out, err := runGit(ctx, repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", parent, head)
+	out, err := runGitRaw(ctx, repo, withoutGitIndex(os.Environ()), "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", parent, head)
 	if err != nil {
 		return err
 	}
