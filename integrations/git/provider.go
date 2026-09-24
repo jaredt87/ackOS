@@ -643,7 +643,7 @@ func verifySinglePathChange(ctx context.Context, repo, parent, head, subject, be
 	if err != nil {
 		return err
 	}
-	names := strings.Split(out, "\x00")
+	names := strings.Split(string(out), "\x00")
 	var changed []string
 	for _, n := range names {
 		if n != "" {
