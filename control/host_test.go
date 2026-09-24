@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jaredt87/ackOS/kernel"
 	"github.com/jaredt87/ackOS/integrations/memory"
+	"github.com/jaredt87/ackOS/kernel"
 )
 
 func TestHostMemoryProviderLifecycle(t *testing.T) {
