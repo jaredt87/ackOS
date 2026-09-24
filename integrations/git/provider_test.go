@@ -374,7 +374,6 @@ func TestRecoveryObservationReadsFreshGitState(t *testing.T) {
 	}
 }
 
-
 func TestVerifierPreservesLeadingWhitespaceInPath(t *testing.T) {
 	repo, subject, p := testRepo(t, "initial")
 	renamed := " leading.txt"
