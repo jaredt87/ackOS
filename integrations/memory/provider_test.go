@@ -23,8 +23,8 @@ func TestProviderIsIndependentOfGit(t *testing.T) {
 
 	execution, err := provider.Execute(context.Background(), control.ExecuteRequest{
 		ExecutionID: "execution-1",
-		Target: observation.Resource,
-		Payload: []byte("state:v2"),
+		Target:      observation.Resource,
+		Payload:     []byte("state:v2"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +35,7 @@ func TestProviderIsIndependentOfGit(t *testing.T) {
 
 	verification, err := provider.Verify(context.Background(), control.VerifyRequest{
 		ExecutionID: "execution-1",
-		Expected: control.ResourceRef{ID: "resource-a", Fingerprint: "state:v2"},
+		Expected:    control.ResourceRef{ID: "resource-a", Fingerprint: "state:v2"},
 	})
 	if err != nil {
 		t.Fatal(err)
