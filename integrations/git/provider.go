@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -45,8 +46,20 @@ func NewProvider(repository, branch string) (Provider, error) {
 	if !ok {
 		return Provider{}, fmt.Errorf("cannot identify Git repository")
 	}
-	if _, err := runGit(context.Background(), repository, "rev-parse", "--git-dir"); err != nil {
+	canonicalRepository, err := canonicalRepositoryPath(repository)
+	if err != nil {
+		return Provider{}, err
+	}
+	gitRoot, err := runGit(context.Background(), canonicalRepository, "rev-parse", "--show-toplevel")
+	if err != nil {
 		return Provider{}, fmt.Errorf("invalid Git repository: %w", err)
+	}
+	canonicalGitRoot, err := canonicalRepositoryPath(gitRoot)
+	if err != nil {
+		return Provider{}, fmt.Errorf("invalid Git repository root: %w", err)
+	}
+	if canonicalRepository != canonicalGitRoot {
+		return Provider{}, fmt.Errorf("configured Git repository must be the repository root")
 	}
 	branch = strings.TrimSpace(branch)
 	if strings.HasPrefix(branch, "refs/heads/") {
@@ -56,12 +69,24 @@ func NewProvider(repository, branch string) (Provider, error) {
 		return Provider{}, fmt.Errorf("invalid Git branch: %w", err)
 	}
 	return Provider{
-		Repository: repository,
+		Repository: canonicalRepository,
 		Branch:     branch,
 		repoDev:    uint64(stat.Dev),
 		repoIno:    uint64(stat.Ino),
 		state:      &executionState{parents: make(map[string]string), commits: make(map[string]string), observations: make(map[string]string)},
 	}, nil
+}
+
+func canonicalRepositoryPath(repository string) (string, error) {
+	absolute, err := filepath.Abs(repository)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve Git repository path: %w", err)
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", fmt.Errorf("cannot resolve Git repository path: %w", err)
+	}
+	return filepath.Clean(resolved), nil
 }
 
 func (p Provider) validateRepository() error {
@@ -312,10 +337,10 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, a kernel.Auth
 	if !ok {
 		return kernel.Observation{}, fmt.Errorf("Git execution parent is unavailable")
 	}
+	defer v.Provider.forgetExecution(a.ExecutionID)
 	if err := v.verifyExecutionCommit(a.ExecutionID, head); err != nil {
 		return kernel.Observation{}, err
 	}
-	defer v.Provider.forgetExecution(a.ExecutionID)
 	parent, err := commitParent(ctx, v.Provider.Repository, head)
 	if err != nil {
 		return kernel.Observation{}, err
@@ -482,7 +507,7 @@ func materializeBlob(ctx context.Context, repo, blob string) error {
 }
 
 func treeMode(ctx context.Context, repo, head, subject string) (string, error) {
-	out, err := runGit(ctx, repo, "ls-tree", "-z", head, "--", subject)
+	out, err := runGit(ctx, repo, "ls-tree", "-z", head, "--", ":(literal)"+subject)
 	if err != nil {
 		return "", fmt.Errorf("read Git target mode: %w", err)
 	}
@@ -538,7 +563,7 @@ func createCommit(ctx context.Context, repo, tree, parent, id string) (string, e
 }
 
 func updateBranchCAS(ctx context.Context, repo, branch, old, new string) error {
-	_, err := runGit(ctx, repo, "update-ref", "refs/heads/"+branch, new, old)
+	_, err := runGit(ctx, repo, "update-ref", "--no-deref", "refs/heads/"+branch, new, old)
 	if err != nil {
 		return fmt.Errorf("Git branch CAS failed: %w", err)
 	}
