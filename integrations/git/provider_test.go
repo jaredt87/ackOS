@@ -374,6 +374,53 @@ func TestRecoveryObservationReadsFreshGitState(t *testing.T) {
 	}
 }
 
+
+func TestVerifierPreservesLeadingWhitespaceInPath(t *testing.T) {
+	repo, subject, p := testRepo(t, "initial")
+	renamed := " leading.txt"
+	if err := os.Rename(filepath.Join(repo, subject), filepath.Join(repo, renamed)); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "add", "-A")
+	git(t, repo, "commit", "-m", "rename target")
+
+	before := observeBlob(t, p, renamed)
+	after := hashBlob(t, repo, "updated")
+	transition := observedTransition(t, p, renamed, before, after)
+	authority := kernel.Authority{ExecutionID: "exec-leading-space"}
+
+	if result := (Executor{Provider: p}).Execute(context.Background(), transition, authority); !result.Success {
+		t.Fatal(result.Message)
+	}
+	if _, err := (Verifier{Provider: p}).Verify(context.Background(), transition, authority); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreateCommitUsesProviderIdentityWithoutGitConfig(t *testing.T) {
+	repo, subject, p := testRepo(t, "initial")
+	git(t, repo, "config", "--unset", "user.name")
+	git(t, repo, "config", "--unset", "user.email")
+
+	before := observeBlob(t, p, subject)
+	after := hashBlob(t, repo, "updated")
+	transition := observedTransition(t, p, subject, before, after)
+	authority := kernel.Authority{ExecutionID: "exec-provider-identity"}
+
+	if result := (Executor{Provider: p}).Execute(context.Background(), transition, authority); !result.Success {
+		t.Fatal(result.Message)
+	}
+
+	author := strings.TrimSpace(git(t, repo, "show", "-s", "--format=%an <%ae>", "HEAD"))
+	if author != "ackOS Git Provider <ackos@localhost>" {
+		t.Fatalf("commit author = %q", author)
+	}
+	committer := strings.TrimSpace(git(t, repo, "show", "-s", "--format=%cn <%ce>", "HEAD"))
+	if committer != "ackOS Git Provider <ackos@localhost>" {
+		t.Fatalf("commit committer = %q", committer)
+	}
+}
+
 func TestPathSafety(t *testing.T) {
 	cases := []string{"../outside", "/absolute", "a/../../outside", ".", "a\\b"}
 	for _, subject := range cases {
