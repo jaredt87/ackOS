@@ -12,6 +12,55 @@ import (
 	"github.com/jaredt87/ackOS/kernel"
 )
 
+
+func TestNewProviderRejectsRepositorySubdirectory(t *testing.T) {
+	repo, _, _ := testRepo(t, "initial")
+	subdir := filepath.Join(repo, "subdir")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewProvider(subdir, "main"); err == nil {
+		t.Fatal("subdirectory repository configuration was accepted")
+	} else if !strings.Contains(err.Error(), "repository root") {
+		t.Fatalf("error = %q", err)
+	}
+}
+
+func TestNewProviderAcceptsSymlinkToRepositoryRoot(t *testing.T) {
+	repo, _, _ := testRepo(t, "initial")
+	link := filepath.Join(t.TempDir(), "repo-link")
+	if err := os.Symlink(repo, link); err != nil {
+		t.Fatal(err)
+	}
+	p, err := NewProvider(link, "main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Repository != repo {
+		t.Fatalf("repository = %q, want canonical root %q", p.Repository, repo)
+	}
+}
+
+func TestNewProviderRejectsBareRepository(t *testing.T) {
+	repo := t.TempDir()
+	git(t, repo, "init", "--bare")
+	if _, err := NewProvider(repo, "main"); err == nil {
+		t.Fatal("bare repository was accepted")
+	}
+}
+
+func TestTreeModeTreatsSubjectAsLiteralPath(t *testing.T) {
+	repo, _, _ := testRepo(t, "initial")
+	subject := ":(glob)a*"
+	blob := hashBlob(t, repo, "literal")
+	git(t, repo, "update-index", "--add", "--cacheinfo", "100644,"+blob+","+subject)
+	git(t, repo, "commit", "-m", "literal path")
+	head := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/main"))
+	if _, err := treeMode(context.Background(), repo, head, subject); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTransitionEndToEndUsesBlobIDsAndLeavesWorkingTreeAlone(t *testing.T) {
 	repo, subject, p := testRepo(t, "initial")
 	before := observeBlob(t, p, subject)
@@ -284,6 +333,12 @@ func TestVerifierRejectsSiblingCommitWithMatchingContents(t *testing.T) {
 	git(t, repo, "update-ref", "refs/heads/main", sibling, produced)
 	if _, err := (Verifier{Provider: p}).Verify(context.Background(), transition, authority); err == nil {
 		t.Fatal("sibling commit was accepted as execution result")
+	}
+	if _, ok := p.parent(authority.ExecutionID); ok {
+		t.Fatal("execution parent leaked after verification failure")
+	}
+	if _, ok := p.commit(authority.ExecutionID); ok {
+		t.Fatal("execution commit leaked after verification failure")
 	}
 }
 
