@@ -268,7 +268,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, a kernel.Aut
 		e.Provider.forgetObservation(t.ObservationFingerprint)
 		return fail(fmt.Errorf("Git branch tip changed since observation"))
 	}
-	before, err := treeBlob(ctx, e.Provider.Repository, head, t.Subject)
+	before, err := treeBlob(ctx, e.Provider.repository, head, t.Subject)
 	if err != nil {
 		e.Provider.forgetObservation(t.ObservationFingerprint)
 		return fail(err)
@@ -277,7 +277,7 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, a kernel.Aut
 		e.Provider.forgetObservation(t.ObservationFingerprint)
 		return fail(fmt.Errorf("Git target does not match Transition.Before"))
 	}
-	if err := materializeBlob(ctx, e.Provider.Repository, t.After); err != nil {
+	if err := materializeBlob(ctx, e.Provider.repository, t.After); err != nil {
 		e.Provider.forgetObservation(t.ObservationFingerprint)
 		return fail(err)
 	}
@@ -347,24 +347,24 @@ func (v Verifier) Verify(ctx context.Context, t kernel.Transition, a kernel.Auth
 	if err := v.verifyExecutionCommit(a.ExecutionID, head); err != nil {
 		return kernel.Observation{}, err
 	}
-	parent, err := commitParent(ctx, v.Provider.Repository, head)
+	parent, err := commitParent(ctx, v.Provider.repository, head)
 	if err != nil {
 		return kernel.Observation{}, err
 	}
 	if parent != parentExpected {
 		return kernel.Observation{}, fmt.Errorf("verified Git commit parent changed")
 	}
-	got, err := treeBlob(ctx, v.Provider.Repository, head, t.Subject)
+	got, err := treeBlob(ctx, v.Provider.repository, head, t.Subject)
 	if err != nil {
 		return kernel.Observation{}, err
 	}
 	if got != t.After {
 		return kernel.Observation{}, fmt.Errorf("verified Git target does not match Transition.After")
 	}
-	if err := verifySinglePathChange(ctx, v.Provider.Repository, parent, head, t.Subject, t.Before, t.After); err != nil {
+	if err := verifySinglePathChange(ctx, v.Provider.repository, parent, head, t.Subject, t.Before, t.After); err != nil {
 		return kernel.Observation{}, err
 	}
-	msg, err := commitMessage(ctx, v.Provider.Repository, head)
+	msg, err := commitMessage(ctx, v.Provider.repository, head)
 	if err != nil {
 		return kernel.Observation{}, err
 	}
@@ -389,7 +389,7 @@ func (p Provider) observe(ctx context.Context, subject string) (string, string, 
 	if err != nil {
 		return "", "", err
 	}
-	blob, err := treeBlob(ctx, p.Repository, head, subject)
+	blob, err := treeBlob(ctx, p.repository, head, subject)
 	if err != nil {
 		return "", "", err
 	}
