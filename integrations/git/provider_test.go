@@ -396,6 +396,51 @@ func TestVerifierPreservesLeadingWhitespaceInPath(t *testing.T) {
 	}
 }
 
+func TestProviderDisablesGitHooks(t *testing.T) {
+	repo, subject, p := testRepo(t, "initial")
+	hooksDir := filepath.Join(t.TempDir(), "hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	postIndexSentinel := filepath.Join(t.TempDir(), "post-index-change")
+	referenceSentinel := filepath.Join(t.TempDir(), "reference-transaction")
+	hooks := map[string]string{
+		"post-index-change": "#!/bin/sh\nprintf hook > " + postIndexSentinel + "\n",
+		"reference-transaction": "#!/bin/sh\nprintf hook > " + referenceSentinel + "\n",
+	}
+	for name, script := range hooks {
+		if err := os.WriteFile(filepath.Join(hooksDir, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(filepath.Join(hooksDir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git(t, repo, "config", "core.hooksPath", hooksDir)
+
+	before := observeBlob(t, p, subject)
+	after := hashBlob(t, repo, "updated")
+	transition := observedTransition(t, p, subject, before, after)
+	authority := kernel.Authority{ExecutionID: "exec-hooks-disabled"}
+
+	if result := (Executor{Provider: p}).Execute(context.Background(), transition, authority); !result.Success {
+		t.Fatal(result.Message)
+	}
+	if _, err := (Verifier{Provider: p}).Verify(context.Background(), transition, authority); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(postIndexSentinel); err == nil {
+		t.Fatal("post-index-change hook executed")
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(referenceSentinel); err == nil {
+		t.Fatal("reference-transaction hook executed")
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
 func TestCreateCommitUsesProviderIdentityWithoutGitConfig(t *testing.T) {
 	repo, subject, p := testRepo(t, "initial")
 	git(t, repo, "config", "--unset", "user.name")
