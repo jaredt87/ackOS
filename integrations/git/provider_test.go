@@ -152,6 +152,23 @@ func TestBranchCASCannotOverwriteNewerTip(t *testing.T) {
 	}
 }
 
+
+func TestBranchCASDoesNotDereferenceSymbolicRef(t *testing.T) {
+	repo, _, p := testRepo(t, "initial")
+	old := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/main"))
+	candidate := strings.TrimSpace(git(t, repo, "commit-tree", old+"^{tree}", "-p", old, "-m", "candidate"))
+	git(t, repo, "symbolic-ref", "refs/heads/alias", "refs/heads/main")
+	if err := updateBranchCAS(context.Background(), p.Repository, "alias", old, candidate); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/main")); got != old {
+		t.Fatalf("target branch changed: %s", got)
+	}
+	if got := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/alias")); got != candidate {
+		t.Fatalf("configured ref = %s, want %s", got, candidate)
+	}
+}
+
 func TestVerifierRejectsFalseExecutorSuccess(t *testing.T) {
 	repo, subject, p := testRepo(t, "initial")
 	before := observeBlob(t, p, subject)
