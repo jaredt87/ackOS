@@ -113,15 +113,24 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 		return ControlResult{}, err
 	}
 
+	execution := Execution{}
 	execCtx, cancel := context.WithTimeout(ctx, h.timeout)
 	defer cancel()
-	execution, err := h.execute(execCtx, p, ExecuteRequest{
-		ExecutionID: authority.ExecutionID,
-		Target:      req.Target,
-		Payload:     []byte(req.Desired.Fingerprint),
+	executionResult, err := h.runtime.Start(execCtx, providerExecutor{
+		host:      h,
+		provider:  p,
+		execution: &execution,
+		request: ExecuteRequest{
+			ExecutionID: authority.ExecutionID,
+			Target:      req.Target,
+			Payload:     []byte(req.Desired.Fingerprint),
+		},
 	})
 	if err != nil {
 		return ControlResult{Observation: observed, Transition: transition, Authority: authority}, err
+	}
+	if !executionResult.Success {
+		return ControlResult{Observation: observed, Transition: transition, Authority: authority, Execution: execution}, fmt.Errorf("execution failed: %s", executionResult.Message)
 	}
 
 	verifyCtx, cancel := context.WithTimeout(ctx, h.timeout)
@@ -177,6 +186,22 @@ func (h *Host) verify(ctx context.Context, p Provider, req VerifyRequest) (Verif
 		return Verification{}, fmt.Errorf("provider verification timestamp is required")
 	}
 	return result, nil
+}
+
+type providerExecutor struct {
+	host      *Host
+	provider  Provider
+	execution *Execution
+	request   ExecuteRequest
+}
+
+func (e providerExecutor) Execute(ctx context.Context, _ kernel.Transition, _ kernel.Authority) kernel.ExecutionResult {
+	result, err := e.host.execute(ctx, e.provider, e.request)
+	if err != nil {
+		return kernel.ExecutionResult{Message: err.Error()}
+	}
+	*e.execution = result
+	return kernel.ExecutionResult{Success: true, Message: "provider execution completed"}
 }
 
 type kernelVerifier struct {
