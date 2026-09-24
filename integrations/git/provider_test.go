@@ -12,7 +12,6 @@ import (
 	"github.com/jaredt87/ackOS/kernel"
 )
 
-
 func TestNewProviderRejectsRepositorySubdirectory(t *testing.T) {
 	repo, _, _ := testRepo(t, "initial")
 	subdir := filepath.Join(repo, "subdir")
