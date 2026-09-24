@@ -27,7 +27,7 @@ func TestHostMemoryProviderLifecycle(t *testing.T) {
 	}
 
 	result, err := host.Control(context.Background(), "memory", ControlRequest{
-		Target: ResourceRef{ID: "resource-a", Fingerprint: "initial"},
+		Target:  ResourceRef{ID: "resource-a", Fingerprint: "initial"},
 		Desired: ResourceRef{ID: "resource-a", Fingerprint: "running"},
 	})
 	if err != nil {
@@ -52,7 +52,7 @@ func TestHostRejectsResourceSubstitution(t *testing.T) {
 
 	resource.Set("other")
 	_, err := host.Control(context.Background(), "memory", ControlRequest{
-		Target: ResourceRef{ID: "resource-a", Fingerprint: "initial"},
+		Target:  ResourceRef{ID: "resource-a", Fingerprint: "initial"},
 		Desired: ResourceRef{ID: "resource-a", Fingerprint: "running"},
 	})
 	if err == nil {
@@ -67,7 +67,7 @@ func TestHostDoesNotInterpretFingerprint(t *testing.T) {
 	_ = host.Register("memory", provider)
 
 	_, err := host.Control(context.Background(), "memory", ControlRequest{
-		Target: ResourceRef{ID: "resource-a", Fingerprint: "opaque::provider-state"},
+		Target:  ResourceRef{ID: "resource-a", Fingerprint: "opaque::provider-state"},
 		Desired: ResourceRef{ID: "resource-a", Fingerprint: "another::provider-state"},
 	})
 	if err != nil {
