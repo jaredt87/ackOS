@@ -52,8 +52,10 @@ func TestNewProviderRejectsBareRepository(t *testing.T) {
 func TestTreeModeTreatsSubjectAsLiteralPath(t *testing.T) {
 	repo, _, _ := testRepo(t, "initial")
 	subject := ":(glob)a*"
-	blob := hashBlob(t, repo, "literal")
-	git(t, repo, "update-index", "--add", "--cacheinfo", "100644,"+blob+","+subject)
+	if err := os.WriteFile(filepath.Join(repo, subject), []byte("literal"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "add", "--", ":(literal)"+subject)
 	git(t, repo, "commit", "-m", "literal path")
 	head := strings.TrimSpace(git(t, repo, "rev-parse", "refs/heads/main"))
 	if _, err := treeMode(context.Background(), repo, head, subject); err != nil {
