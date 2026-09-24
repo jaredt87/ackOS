@@ -49,8 +49,8 @@ func (p *Provider) Observe(ctx context.Context, req control.ObserveRequest) (con
 		return control.Observation{}, fmt.Errorf("resource ID mismatch")
 	}
 	return control.Observation{
-		Resource: control.ResourceRef{ID: id, Fingerprint: fingerprint},
-		Evidence: mustEvidence(id, fingerprint, version),
+		Resource:   control.ResourceRef{ID: id, Fingerprint: fingerprint},
+		Evidence:   mustEvidence(id, fingerprint, version),
 		ObservedAt: time.Now().UTC(),
 	}, nil
 }
@@ -93,8 +93,8 @@ func (p *Provider) Verify(ctx context.Context, req control.VerifyRequest) (contr
 		return control.Verification{}, fmt.Errorf("resource does not match expected state")
 	}
 	return control.Verification{
-		Resource: control.ResourceRef{ID: id, Fingerprint: fingerprint},
-		Evidence: mustEvidence(id, fingerprint, version),
+		Resource:   control.ResourceRef{ID: id, Fingerprint: fingerprint},
+		Evidence:   mustEvidence(id, fingerprint, version),
 		VerifiedAt: time.Now().UTC(),
 	}, nil
 }
@@ -109,9 +109,9 @@ func (r *Resource) Set(fingerprint string) {
 
 func mustEvidence(id, fingerprint string, version uint64) []byte {
 	b, _ := json.Marshal(struct {
-		ID string
+		ID          string
 		Fingerprint string
-		Version uint64
+		Version     uint64
 	}{id, fingerprint, version})
 	return b
 }
