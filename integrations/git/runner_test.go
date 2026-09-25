@@ -458,7 +458,7 @@ func TestRun_AllowsSupportedPlumbingCommands(t *testing.T) {
 	}
 
 	commands := [][]string{
-		{"rev-parse", "--git-dir"},
+		{"rev-parse", "refs/heads/main"},
 		{"cat-file", "-e", "HEAD"},
 		{"status", "--porcelain"},
 	}
