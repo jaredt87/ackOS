@@ -53,7 +53,7 @@ The `git.Runner` package provides low-level, sandboxed subprocess execution for 
 
 ### Guarantees Enforced by Runner
 
-- **Repository Root Anchoring:** Validates that target paths resolve directly to a repository root and rejects `.git` metadata symlinks that escape the supplied root.
+- **Repository Root Anchoring:** Validates that target paths resolve directly to a repository root and rejects any `.git` metadata symlink that escapes the canonical Git metadata root, including nested refs and object fan-out paths.
 - **Clean-Room Environment:** Constructs a minimal, explicit process environment (`sanitizedEnv`), discarding ambient environment variables.
 - **Hardened Execution Flags:** Enforces `core.hooksPath=/dev/null`, `core.fsmonitor=false`, `diff.external=`, and `--no-replace-objects` to prevent common repository-configured subprocess execution.
 - **Argument Boundaries:** Rejects caller-supplied global override flags including `-C`, `--git-dir`, `--work-tree`, `-c`, `--config`, `--exec-path`, `--config-env`, `--bare`, and replacement-object controls.
@@ -64,7 +64,7 @@ The `git.Runner` package provides low-level, sandboxed subprocess execution for 
 ### Intentionally Deferred Boundaries
 
 - **Process-Group Cleanup:** `Runner` manages and cancels the direct Git process spawned via `exec.CommandContext`. Cleanup of descendant process groups is deferred.
-- **Pathspec Interpretation:** `Runner` passes arguments directly to Git without evaluating pathspec magic (`:`, `!`, `*`). Path sanitization remains the responsibility of caller call sites. The generic Runner rejects `hash-object --path` so repository `.gitattributes` clean drivers cannot execute through this boundary. When the eventual Git Provider needs path-based hashing, it must establish an explicit safe filtering policy rather than relying on the generic Runner.
+- **Pathspec Interpretation:** `Runner` passes arguments directly to Git without evaluating pathspec magic (`:`, `!`, `*`). Path sanitization remains the responsibility of caller call sites. The generic Runner rejects help options, `hash-object --path`, and `cat-file --filters` so Git help viewers and repository `.gitattributes` filter drivers cannot execute through this boundary. When the eventual Git Provider needs path-based hashing or filtered object access, it must establish an explicit safe filtering policy rather than relying on the generic Runner.
 - **Provider & Abstraction Layers:** Higher-level Provider interfaces, working-tree operations, and plugin abstractions are deferred to PR #16.
 
 ## V0 guarantees and boundaries
