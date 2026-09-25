@@ -93,6 +93,45 @@ func TestRun_RejectsLeadingGlobalFlags(t *testing.T) {
 	}
 }
 
+func TestRun_RejectsTrailingHelpAndFilters(t *testing.T) {
+	repo := initRepo(t)
+	r, err := NewRunner(repo)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	badInvocations := [][]string{
+		{"status", "--help"},
+		{"cat-file", "--filters", "HEAD:file.txt"},
+	}
+	for _, args := range badInvocations {
+		_, err := r.Run(context.Background(), args...)
+		if err == nil || !errors.Is(err, ErrUnsafeArgument) {
+			t.Fatalf("expected ErrUnsafeArgument for %v, got: %v", args, err)
+		}
+	}
+}
+
+func TestNewRunner_RejectsNestedMetadataSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink test assumed on unix-like systems")
+	}
+
+	repo := initRepo(t)
+	outsideDir := t.TempDir()
+	headsPath := filepath.Join(repo, ".git", "refs", "heads")
+	if err := os.RemoveAll(headsPath); err != nil {
+		t.Fatalf("removing heads: %v", err)
+	}
+	if err := os.Symlink(outsideDir, headsPath); err != nil {
+		t.Fatalf("symlinking heads: %v", err)
+	}
+
+	if _, err := NewRunner(repo); err == nil {
+		t.Fatal("expected NewRunner to reject repo with nested escaping symlink")
+	}
+}
+
 func TestRun_RejectsUpdateRef(t *testing.T) {
 	repo := initRepo(t)
 	r, err := NewRunner(repo)
