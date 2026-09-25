@@ -459,7 +459,7 @@ func TestRun_AllowsSupportedPlumbingCommands(t *testing.T) {
 
 	commands := [][]string{
 		{"rev-parse", "refs/heads/main"},
-		{"cat-file", "-e", "HEAD"},
+		{"cat-file", "-e", "refs/heads/main"},
 		{"status", "--porcelain"},
 	}
 	for _, args := range commands {
