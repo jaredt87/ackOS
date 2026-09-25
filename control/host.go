@@ -133,16 +133,18 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 		return ControlResult{Observation: observed, Transition: transition, Authority: authority, Execution: execution}, fmt.Errorf("execution failed: %s", executionResult.Message)
 	}
 
+	verification := Verification{}
 	verifyCtx, cancel := context.WithTimeout(ctx, h.timeout)
 	defer cancel()
-	verification, err := h.verify(verifyCtx, p, VerifyRequest{
-		ExecutionID: authority.ExecutionID,
-		Expected:    req.Desired,
-	})
-	if err != nil {
-		return ControlResult{Observation: observed, Transition: transition, Authority: authority, Execution: execution}, err
-	}
-	if err := h.runtime.Verify(context.Background(), kernelVerifier{verification: verification}); err != nil {
+	if err := h.runtime.Verify(verifyCtx, providerVerifier{
+		host:         h,
+		provider:     p,
+		verification: &verification,
+		request: VerifyRequest{
+			ExecutionID: authority.ExecutionID,
+			Expected:    req.Desired,
+		},
+	}); err != nil {
 		return ControlResult{Observation: observed, Transition: transition, Authority: authority, Execution: execution, Verification: verification}, err
 	}
 	if err := h.runtime.Commit(); err != nil {
@@ -204,15 +206,23 @@ func (e providerExecutor) Execute(ctx context.Context, _ kernel.Transition, _ ke
 	return kernel.ExecutionResult{Success: true, Message: "provider execution completed"}
 }
 
-type kernelVerifier struct {
-	verification Verification
+type providerVerifier struct {
+	host         *Host
+	provider     Provider
+	verification *Verification
+	request      VerifyRequest
 }
 
-func (v kernelVerifier) Verify(context.Context, kernel.Transition, kernel.Authority) (kernel.Observation, error) {
+func (v providerVerifier) Verify(ctx context.Context, _ kernel.Transition, _ kernel.Authority) (kernel.Observation, error) {
+	result, err := v.host.verify(ctx, v.provider, v.request)
+	if err != nil {
+		return kernel.Observation{}, err
+	}
+	*v.verification = result
 	return kernel.NewObservation(
-		v.verification.Resource.ID,
-		v.verification.Resource.Fingerprint,
+		result.Resource.ID,
+		result.Resource.Fingerprint,
 		0,
-		v.verification.VerifiedAt,
+		result.VerifiedAt,
 	)
 }
