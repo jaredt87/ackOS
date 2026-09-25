@@ -53,10 +53,10 @@ The `git.Runner` package provides low-level, sandboxed subprocess execution for 
 
 ### Guarantees Enforced by Runner
 
-- **Repository Root Anchoring:** Validates that target paths resolve directly to a repository root and rejects any `.git` metadata symlink that escapes the canonical Git metadata root, including nested refs and object fan-out paths.
+- **Repository Root Anchoring:** Validates that target paths resolve directly to a repository root and rejects any `.git` metadata symlink that escapes the canonical Git metadata root, including nested refs and object fan-out paths. Metadata is also revalidated immediately before each Git execution to mitigate post-construction symlink mutations; this is defense-in-depth, not an OS-level lifetime confinement guarantee.
 - **Clean-Room Environment:** Constructs a minimal, explicit process environment (`sanitizedEnv`), discarding ambient environment variables.
-- **Hardened Execution Flags:** Enforces `core.hooksPath=/dev/null`, `core.fsmonitor=false`, `diff.external=`, and `--no-replace-objects` to prevent common repository-configured subprocess execution.
-- **Argument Boundaries:** Rejects caller-supplied global override flags including `-C`, `--git-dir`, `--work-tree`, `-c`, `--config`, `--exec-path`, `--config-env`, `--bare`, and replacement-object controls.
+- **Hardened Execution Flags:** Enforces `core.hooksPath=/dev/null`, `core.fsmonitor=false`, `core.editor=false`, and `--no-replace-objects`; `diff` also receives `--no-ext-diff`. to prevent common repository-configured subprocess execution.
+- **Argument Boundaries:** Rejects caller-supplied global override flags including `-C`, `--git-dir`, `--work-tree`, `-c`, `--config`, `--exec-path`, `--config-env`, `--bare`, and replacement-object controls. It also rejects command options that can invoke external programs, including `cat-file --filters`, `cat-file --textconv`, `hash-object --path`, and `commit -e`/`--edit`. Editor environment variables are neutralized as defense-in-depth.
 - **Subcommand Allowlist:** `Runner.Run` accepts only the explicitly supported Git commands (`rev-parse`, `hash-object`, `cat-file`, `write-tree`, `commit-tree`, `diff`, `status`, and `commit`). `update-ref` is intentionally excluded from the generic Runner surface. Repository-defined aliases and other Git subcommands are rejected before process dispatch.
 - **Deterministic Executable Resolution:** Resolves the `git` binary path once at construction time (`exec.LookPath`) and executes via that resolved path.
 - **Direct Process Cancellation:** Uses `exec.CommandContext` so cancellation terminates the direct Git subprocess. A successfully completed command remains successful even if the context expires in the race window after process completion.
@@ -64,7 +64,7 @@ The `git.Runner` package provides low-level, sandboxed subprocess execution for 
 ### Intentionally Deferred Boundaries
 
 - **Process-Group Cleanup:** `Runner` manages and cancels the direct Git process spawned via `exec.CommandContext`. Cleanup of descendant process groups is deferred.
-- **Pathspec Interpretation:** `Runner` passes arguments directly to Git without evaluating pathspec magic (`:`, `!`, `*`). Path sanitization remains the responsibility of caller call sites. The generic Runner rejects help options, `hash-object --path`, and `cat-file --filters` so Git help viewers and repository `.gitattributes` filter drivers cannot execute through this boundary. When the eventual Git Provider needs path-based hashing or filtered object access, it must establish an explicit safe filtering policy rather than relying on the generic Runner.
+- **Pathspec Interpretation:** `Runner` passes arguments directly to Git without evaluating pathspec magic (`:`, `!`, `*`). Path sanitization remains the responsibility of caller call sites. The generic Runner rejects help options, `hash-object --path`, `cat-file --filters`, and `cat-file --textconv` so Git help viewers, repository `.gitattributes` filter drivers, and text conversion drivers cannot execute through this boundary. Interactive commit editing is likewise rejected with `-e`/`--edit`. When the eventual Git Provider needs path-based hashing or filtered object access, it must establish an explicit safe filtering policy rather than relying on the generic Runner.
 - **Provider & Abstraction Layers:** Higher-level Provider interfaces, working-tree operations, and plugin abstractions are deferred to PR #16.
 
 ## V0 guarantees and boundaries
