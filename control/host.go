@@ -239,6 +239,7 @@ func (e providerExecutor) Execute(ctx context.Context, _ kernel.Transition, _ ke
 
 type providerVerifier struct {
 	host         *Host
+	providerName string
 	provider     Provider
 	verification *Verification
 	request      VerifyRequest
