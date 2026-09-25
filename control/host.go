@@ -136,7 +136,7 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 		host:         h,
 		providerName: providerName,
 		provider:     p,
-		execution: &execution,
+		execution:    &execution,
 		request: ExecuteRequest{
 			ExecutionID: authority.ExecutionID,
 			Target:      req.Target,
