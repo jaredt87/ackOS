@@ -265,7 +265,6 @@ func TestHostProviderVerificationTimeoutTransitionsToRecovery(t *testing.T) {
 	}
 }
 
-
 func TestHostProviderTimeoutKeepsAdmissionGateOccupied(t *testing.T) {
 	release := make(chan struct{})
 	provider := newVerificationProvider(t, func(context.Context, control.VerifyRequest) (control.Verification, error) {
