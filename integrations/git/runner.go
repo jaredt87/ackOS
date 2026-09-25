@@ -165,7 +165,7 @@ func validateRepoRoot(gitPath, abs string) (string, error) {
 		return "", fmt.Errorf("%w: %s uses git metadata outside its own root", ErrNotRepoRoot, abs)
 	}
 	if err := validateGitMetadataSymlinks(gitDirAbs); err != nil {
-		return err
+		return "", err
 	}
 	return nil
 }
