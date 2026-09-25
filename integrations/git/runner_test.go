@@ -86,6 +86,23 @@ func TestNewRunner_RejectsSubdirectoryOfRepo(t *testing.T) {
 	}
 }
 
+func TestNewRunner_RejectsEscapingGitSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink test assumed on unix-like systems")
+	}
+	repo := initRepo(t)
+	otherRepo := initRepo(t)
+
+	targetDir := t.TempDir()
+	if err := os.Symlink(filepath.Join(otherRepo, ".git"), filepath.Join(targetDir, ".git")); err != nil {
+		t.Fatalf("creating symlink: %v", err)
+	}
+
+	if _, err := NewRunner(targetDir); err == nil {
+		t.Fatal("expected NewRunner to reject repository with an escaping .git symlink")
+	}
+}
+
 func TestNewRunner_RejectsNonRepoPath(t *testing.T) {
 	dir := t.TempDir()
 	if _, err := NewRunner(dir); err == nil {
@@ -134,6 +151,32 @@ func TestRun_HooksPathBlocksHostileHook(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("hook fired through the Runner; core.hooksPath=/dev/null did not hold")
+	}
+}
+
+func TestRun_BlocksRepositoryConfiguredDiffExternal(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell script execution assumed on unix-like systems")
+	}
+	repo := initRepo(t)
+	writeAndCommit(t, repo)
+
+	marker := filepath.Join(repo, "diff-external-fired")
+	script := filepath.Join(repo, "fake-diff.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\ntouch "+marker+"\n"), 0o755); err != nil {
+		t.Fatalf("writing script: %v", err)
+	}
+
+	runGit(t, repo, "config", "diff.external", script)
+
+	r, err := NewRunner(repo)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	_, _ = r.Run(context.Background(), "diff", "HEAD~1", "HEAD")
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("diff.external executable fired through Runner; repository config was not neutralized")
 	}
 }
 
