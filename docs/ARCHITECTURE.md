@@ -47,6 +47,25 @@ Recovery applies the same temporal boundary. An observation used to recover from
 
 Only one verification callback may be active for an execution attempt. This prevents competing verifiers from racing one another and moving a committed lifecycle backward into recovery.
 
+## Git Execution Architecture & Security Boundary
+
+The `git.Runner` package provides low-level, sandboxed subprocess execution for Git plumbing commands against a single repository root. It is an integration boundary, not a Provider or kernel abstraction.
+
+### Guarantees Enforced by Runner
+
+- **Repository Root Anchoring:** Validates that target paths resolve directly to a repository root (`.git` directory matches the root), preventing sub-directory escaping or target ambiguity.
+- **Clean-Room Environment:** Constructs a minimal, explicit process environment (`sanitizedEnv`), discarding ambient environment variables.
+- **Hardened Execution Flags:** Enforces `core.hooksPath=/dev/null`, `core.fsmonitor=false`, and `--no-replace-objects`.
+- **Argument Boundaries:** Rejects caller-supplied global override flags including `-C`, `--git-dir`, `--work-tree`, `-c`, `--config`, `--exec-path`, `--config-env`, `--bare`, and replacement-object controls.
+- **Deterministic Executable Resolution:** Resolves the `git` binary path once at construction time (`exec.LookPath`) and executes via that resolved path.
+- **Direct Process Cancellation:** Uses `exec.CommandContext` so cancellation terminates the direct Git subprocess. A successfully completed command remains successful even if the context expires in the race window after process completion.
+
+### Intentionally Deferred Boundaries
+
+- **Process-Group Cleanup:** `Runner` manages and cancels the direct Git process spawned via `exec.CommandContext`. Cleanup of descendant process groups is deferred.
+- **Pathspec Interpretation:** `Runner` passes arguments directly to Git without evaluating pathspec magic (`:`, `!`, `*`). Path sanitization remains the responsibility of caller call sites.
+- **Provider & Abstraction Layers:** Higher-level Provider interfaces, working-tree operations, and plugin abstractions are deferred to PR #16.
+
 ## V0 guarantees and boundaries
 
 V0 is a single-process, in-memory implementation. Authority consumption is atomic within the runtime and concurrent attempts cannot both cross the same execution boundary. CAS is atomic within the in-memory state store.
