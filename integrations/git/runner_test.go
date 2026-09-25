@@ -259,6 +259,19 @@ func TestRun_HooksPathBlocksHostileHook(t *testing.T) {
 	}
 }
 
+func TestRun_RejectsExternalDiffOption(t *testing.T) {
+	repo := initRepo(t)
+	r, err := NewRunner(repo)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	_, err = r.Run(context.Background(), "diff", "--ext-diff")
+	if err == nil || !errors.Is(err, ErrUnsafeArgument) {
+		t.Fatalf("expected ErrUnsafeArgument for diff --ext-diff, got: %v", err)
+	}
+}
+
 func TestRun_BlocksRepositoryConfiguredDiffExternal(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script execution assumed on unix-like systems")
@@ -291,7 +304,10 @@ func TestRun_BlocksRepositoryConfiguredDiffExternal(t *testing.T) {
 		t.Fatalf("NewRunner: %v", err)
 	}
 
-	_, _ = r.Run(context.Background(), "diff", "HEAD~1", "HEAD")
+	result, err := r.Run(context.Background(), "diff", "HEAD~1", "HEAD")
+	if err != nil {
+		t.Fatalf("Runner diff: %v\n%s", err, result.Stderr)
+	}
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("diff.external executable fired through Runner; repository config was not neutralized")
 	}
