@@ -69,7 +69,6 @@ func TestProviderVerifyTimestampFollowsLockedSnapshot(t *testing.T) {
 		resource.Set("state:v3")
 		close(setDone)
 	}()
-	time.Sleep(time.Millisecond)
 	resource.mu.Unlock()
 
 	select {
