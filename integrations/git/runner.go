@@ -9,7 +9,7 @@
 //
 // Path arguments are intentionally not interpreted by Runner. Run accepts
 // git command arguments, not typed path arguments, so pathspec-magic
-// safety (leading `:`, `!`, `*` in a path being reinterpreted by git)
+// safety (leading \`:\`, \`!\`, \`*\` in a path being reinterpreted by git)
 // belongs at the eventual Git provider call sites, where the caller knows
 // a given argument is a literal path. See PR #15 notes for the reasoning.
 package git
@@ -41,6 +41,9 @@ var unsafeArgPrefixes = []string{
 	"--config",
 	"--no-replace-objects",
 	"--replace-objects",
+	"--exec-path",
+	"--config-env",
+	"--bare",
 }
 
 // Result is the outcome of one Runner.Run call.
@@ -161,19 +164,23 @@ func (r *Runner) Run(ctx context.Context, args ...string) (Result, error) {
 		Stderr: stderr.String(),
 	}
 
-	if ctx.Err() != nil {
-		return result, ctx.Err()
-	}
-
 	var exitErr *exec.ExitError
 	if errors.As(runErr, &exitErr) {
 		result.ExitCode = exitErr.ExitCode()
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
 		return result, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), runErr, result.Stderr)
 	}
 	if runErr != nil {
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
 		return result, fmt.Errorf("git %s: %w", strings.Join(args, " "), runErr)
 	}
 
+	// Execution succeeded completely (runErr == nil). Preserve success even if
+	// the context expired in the race window after the process completed.
 	return result, nil
 }
 
