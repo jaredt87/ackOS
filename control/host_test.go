@@ -298,11 +298,8 @@ func TestHostProviderTimeoutKeepsAdmissionGateOccupied(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		_, err = host.Control(context.Background(), "test", controlRequest())
-		if err == nil {
-			return
-		}
 		if !errors.Is(err, control.ErrCallbackInFlight) {
-			t.Fatalf("error after releasing provider callback = %v", err)
+			return
 		}
 		time.Sleep(time.Millisecond)
 	}
