@@ -72,7 +72,6 @@ func runGit(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-
 func TestRun_RejectsLeadingGlobalFlags(t *testing.T) {
 	repo := initRepo(t)
 	r, err := NewRunner(repo)
