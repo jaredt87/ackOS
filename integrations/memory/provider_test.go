@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/jaredt87/ackOS/control"
 )
@@ -44,7 +45,6 @@ func TestProviderIsIndependentOfGit(t *testing.T) {
 		t.Fatalf("verification fingerprint = %q", verification.Resource.Fingerprint)
 	}
 }
-
 
 func TestProviderVerifyTimestampFollowsLockedSnapshot(t *testing.T) {
 	resource, err := NewResource("resource-a", "state:v1")
