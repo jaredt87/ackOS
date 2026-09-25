@@ -77,8 +77,12 @@ func TestProviderVerifyTimestampFollowsLockedSnapshot(t *testing.T) {
 		t.Fatal("Set did not complete after resource lock was released")
 	}
 
+	resource.mu.Lock()
+	resource.executionID = "execution-2"
+	resource.mu.Unlock()
+
 	verification, err := provider.Verify(context.Background(), control.VerifyRequest{
-		ExecutionID: "execution-1",
+		ExecutionID: "execution-2",
 		Expected:    control.ResourceRef{ID: "resource-a", Fingerprint: "state:v3"},
 	})
 	if err != nil {
