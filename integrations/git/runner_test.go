@@ -72,6 +72,74 @@ func runGit(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
+
+func TestRun_RejectsLeadingGlobalFlags(t *testing.T) {
+	repo := initRepo(t)
+	r, err := NewRunner(repo)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	badInvocations := [][]string{
+		{"--help", "status"},
+		{"-C", "/tmp", "status"},
+		{"--exec-path=/tmp", "status"},
+		{"--config-env=X=Y", "status"},
+	}
+	for _, args := range badInvocations {
+		_, err := r.Run(context.Background(), args...)
+		if err == nil || !errors.Is(err, ErrUnsafeArgument) {
+			t.Fatalf("expected ErrUnsafeArgument for leading flags %v, got: %v", args, err)
+		}
+	}
+}
+
+func TestRun_RejectsUpdateRef(t *testing.T) {
+	repo := initRepo(t)
+	r, err := NewRunner(repo)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	_, err = r.Run(context.Background(), "update-ref", "refs/heads/main", "HEAD")
+	if err == nil || !errors.Is(err, ErrUnsafeArgument) {
+		t.Fatalf("expected update-ref to be rejected by allowlist, got: %v", err)
+	}
+}
+
+func TestRun_RejectsHashObjectPath(t *testing.T) {
+	repo := initRepo(t)
+	r, err := NewRunner(repo)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	_, err = r.Run(context.Background(), "hash-object", "--path=some/file.txt", "some/file.txt")
+	if err == nil || !errors.Is(err, ErrUnsafeArgument) {
+		t.Fatalf("expected hash-object --path to be rejected, got: %v", err)
+	}
+}
+
+func TestNewRunner_RejectsEscapingMetadataSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink test assumed on unix-like systems")
+	}
+
+	repo := initRepo(t)
+	outsideDir := t.TempDir()
+	refsPath := filepath.Join(repo, ".git", "refs")
+	if err := os.RemoveAll(refsPath); err != nil {
+		t.Fatalf("removing refs: %v", err)
+	}
+	if err := os.Symlink(outsideDir, refsPath); err != nil {
+		t.Fatalf("symlinking refs: %v", err)
+	}
+
+	if _, err := NewRunner(repo); err == nil {
+		t.Fatal("expected NewRunner to reject repo with escaping .git/refs symlink")
+	}
+}
+
 func TestNewRunner_RejectsSubdirectoryOfRepo(t *testing.T) {
 	repo := initRepo(t)
 	writeAndCommit(t, repo)
