@@ -95,7 +95,17 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 	if err != nil {
 		return ControlResult{}, err
 	}
-	if err := h.runtime.Observe(kernelObservation); err != nil {
+	if phase := h.runtime.Phase(); phase == kernel.PhaseRecovery {
+		recoverySubject, ok := h.runtime.RecoverySubject()
+		if !ok || observed.Resource.ID != recoverySubject {
+			return ControlResult{}, fmt.Errorf("provider observation does not match recovery subject")
+		}
+		// RecoverySubject is the kernel's generic lifecycle subject; provider identity
+		// beyond that subject is domain-specific and is not interpreted by the Host.
+		if err := h.runtime.Recover(kernelObservation); err != nil {
+			return ControlResult{}, err
+		}
+	} else if err := h.runtime.Observe(kernelObservation); err != nil {
 		return ControlResult{}, err
 	}
 	if _, err := h.runtime.Normalize(kernel.Proposal{Subject: req.Desired.ID, TargetState: req.Desired.Fingerprint}); err != nil {
@@ -129,12 +139,14 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 	if err != nil {
 		return ControlResult{Observation: observed, Transition: transition, Authority: authority}, err
 	}
+	authority.Consumed = true
 	if !executionResult.Success {
 		return ControlResult{Observation: observed, Transition: transition, Authority: authority, Execution: execution}, fmt.Errorf("execution failed: %s", executionResult.Message)
 	}
 
 	verification := Verification{}
-	verifyCtx, cancel := context.WithTimeout(ctx, h.timeout)
+	verifyBase := context.WithoutCancel(ctx)
+	verifyCtx, cancel := context.WithTimeout(verifyBase, h.timeout)
 	defer cancel()
 	if err := h.runtime.Verify(verifyCtx, providerVerifier{
 		host:         h,

@@ -38,6 +38,9 @@ func TestHostMemoryProviderLifecycle(t *testing.T) {
 	if result.Authority.ExecutionID == "" || result.Execution.ExecutionID != result.Authority.ExecutionID {
 		t.Fatal("execution was not bound to host-issued authority")
 	}
+	if !result.Authority.Consumed {
+		t.Fatal("authority was not reported as consumed")
+	}
 	if result.Verification.Resource.Fingerprint != "running" {
 		t.Fatalf("verification fingerprint = %q, want running", result.Verification.Resource.Fingerprint)
 	}
@@ -78,8 +81,9 @@ func TestHostDoesNotInterpretFingerprint(t *testing.T) {
 }
 
 type verificationProvider struct {
-	base     control.Provider
-	verifyFn func(context.Context, control.VerifyRequest) (control.Verification, error)
+	base      control.Provider
+	executeFn func(context.Context, control.ExecuteRequest) (control.Execution, error)
+	verifyFn  func(context.Context, control.VerifyRequest) (control.Verification, error)
 }
 
 func (p verificationProvider) Observe(ctx context.Context, req control.ObserveRequest) (control.Observation, error) {
@@ -87,6 +91,9 @@ func (p verificationProvider) Observe(ctx context.Context, req control.ObserveRe
 }
 
 func (p verificationProvider) Execute(ctx context.Context, req control.ExecuteRequest) (control.Execution, error) {
+	if p.executeFn != nil {
+		return p.executeFn(ctx, req)
+	}
 	return p.base.Execute(ctx, req)
 }
 
@@ -134,6 +141,92 @@ func TestHostProviderVerificationFailureTransitionsToRecovery(t *testing.T) {
 	}
 	if got := runtime.Phase(); got != kernel.PhaseRecovery {
 		t.Fatalf("runtime phase = %s, want %s", got, kernel.PhaseRecovery)
+	}
+}
+
+func TestHostRecoveryRunsAnotherLifecycle(t *testing.T) {
+	resource, err := memory.NewResource("resource-a", "initial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := memory.NewProvider(resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := verificationProvider{
+		base: base,
+		executeFn: func(context.Context, control.ExecuteRequest) (control.Execution, error) {
+			return control.Execution{}, errors.New("execution failed")
+		},
+		verifyFn: base.Verify,
+	}
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	host, err := control.NewHost(runtime, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Register("test", provider); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := host.Control(context.Background(), "test", controlRequest()); err == nil {
+		t.Fatal("first control unexpectedly succeeded")
+	}
+	if got := runtime.Phase(); got != kernel.PhaseRecovery {
+		t.Fatalf("runtime phase = %s, want %s", got, kernel.PhaseRecovery)
+	}
+
+	result, err := host.Control(context.Background(), "test", controlRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Verification.Resource.Fingerprint != "running" {
+		t.Fatalf("verification fingerprint = %q, want running", result.Verification.Resource.Fingerprint)
+	}
+	if got := runtime.Phase(); got != kernel.PhaseCommitted {
+		t.Fatalf("runtime phase = %s, want %s", got, kernel.PhaseCommitted)
+	}
+}
+
+func TestHostCallerCancellationAfterExecuteStillVerifies(t *testing.T) {
+	resource, err := memory.NewResource("resource-a", "initial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := memory.NewProvider(resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callerCtx, cancel := context.WithCancel(context.Background())
+	provider := verificationProvider{
+		base: base,
+		executeFn: func(ctx context.Context, req control.ExecuteRequest) (control.Execution, error) {
+			result, err := base.Execute(ctx, req)
+			if err == nil {
+				cancel()
+			}
+			return result, err
+		},
+		verifyFn: base.Verify,
+	}
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	host, err := control.NewHost(runtime, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Register("test", provider); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := host.Control(callerCtx, "test", controlRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Verification.Resource.Fingerprint != "running" {
+		t.Fatalf("verification fingerprint = %q, want running", result.Verification.Resource.Fingerprint)
+	}
+	if got := runtime.Phase(); got != kernel.PhaseCommitted {
+		t.Fatalf("runtime phase = %s, want %s", got, kernel.PhaseCommitted)
 	}
 }
 
