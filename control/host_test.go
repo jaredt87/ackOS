@@ -270,7 +270,7 @@ func TestHostProviderTimeoutKeepsAdmissionGateOccupied(t *testing.T) {
 	provider := newVerificationProvider(t, func(context.Context, control.VerifyRequest) (control.Verification, error) {
 		<-release
 		return control.Verification{
-			Resource: control.ResourceRef{ID: "resource-a", Fingerprint: "running"},
+			Resource:   control.ResourceRef{ID: "resource-a", Fingerprint: "running"},
 			VerifiedAt: time.Now().UTC(),
 		}, nil
 	})
