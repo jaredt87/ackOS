@@ -336,7 +336,7 @@ func TestRun_PreservesSuccessIfCommandCompletesBeforeCancellation(t *testing.T) 
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	result, err := r.Run(ctx, "rev-parse", "HEAD")
+	result, err := r.Run(ctx, "rev-parse", "refs/heads/main")
 	cancel()
 
 	if err != nil {
