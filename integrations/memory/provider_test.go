@@ -44,3 +44,51 @@ func TestProviderIsIndependentOfGit(t *testing.T) {
 		t.Fatalf("verification fingerprint = %q", verification.Resource.Fingerprint)
 	}
 }
+
+
+func TestProviderVerifyTimestampFollowsLockedSnapshot(t *testing.T) {
+	resource, err := NewResource("resource-a", "state:v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider, err := NewProvider(resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Execute(context.Background(), control.ExecuteRequest{
+		ExecutionID: "execution-1",
+		Target:      control.ResourceRef{ID: "resource-a", Fingerprint: "state:v1"},
+		Payload:     []byte("state:v2"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resource.mu.Lock()
+	setDone := make(chan struct{})
+	go func() {
+		resource.Set("state:v3")
+		close(setDone)
+	}()
+	time.Sleep(time.Millisecond)
+	resource.mu.Unlock()
+
+	select {
+	case <-setDone:
+	case <-time.After(time.Second):
+		t.Fatal("Set did not complete after resource lock was released")
+	}
+
+	verification, err := provider.Verify(context.Background(), control.VerifyRequest{
+		ExecutionID: "execution-1",
+		Expected:    control.ResourceRef{ID: "resource-a", Fingerprint: "state:v3"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verification.Resource.Fingerprint != "state:v3" {
+		t.Fatalf("fingerprint = %q, want state:v3", verification.Resource.Fingerprint)
+	}
+	if verification.VerifiedAt.IsZero() {
+		t.Fatal("VerifiedAt is zero")
+	}
+}
