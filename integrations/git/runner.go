@@ -168,27 +168,25 @@ func validateRepoRoot(gitPath, abs string) error {
 }
 
 func validateGitMetadataSymlinks(gitDirAbs string) error {
-	for _, sub := range []string{"refs", "objects", "HEAD"} {
-		target := filepath.Join(gitDirAbs, sub)
-
-		if _, err := os.Lstat(target); os.IsNotExist(err) {
-			continue
-		} else if err != nil {
-			return fmt.Errorf("git: inspecting metadata component %s: %w", sub, err)
+	return filepath.WalkDir(gitDirAbs, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return fmt.Errorf("git: inspecting metadata path %s: %w", path, err)
+		}
+		if d.Type()&os.ModeSymlink == 0 {
+			return nil
 		}
 
-		resolved, err := filepath.EvalSymlinks(target)
+		resolved, err := filepath.EvalSymlinks(path)
 		if err != nil {
-			return fmt.Errorf("git: validating metadata symlink %s: %w", sub, err)
+			return fmt.Errorf("git: resolving metadata symlink %s: %w", path, err)
 		}
 
 		rel, err := filepath.Rel(gitDirAbs, resolved)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("%w: git metadata component %q escapes root via symlink", ErrNotRepoRoot, sub)
+			return fmt.Errorf("%w: git metadata symlink at %q escapes root to %q", ErrNotRepoRoot, path, resolved)
 		}
-	}
-
-	return nil
+		return nil
+	})
 }
 
 func sanitizedEnv() []string {
@@ -261,8 +259,14 @@ func checkSafeArgs(args []string) error {
 	}
 
 	for _, a := range args[1:] {
+		if a == "--help" || a == "-h" || strings.HasPrefix(a, "--help=") {
+			return fmt.Errorf("%w: help flags are disallowed: %q", ErrUnsafeArgument, a)
+		}
 		if subCmd == "hash-object" && (a == "--path" || strings.HasPrefix(a, "--path=")) {
 			return fmt.Errorf("%w: hash-object --path is disallowed in generic Runner", ErrUnsafeArgument)
+		}
+		if subCmd == "cat-file" && (a == "--filters" || strings.HasPrefix(a, "--filters=")) {
+			return fmt.Errorf("%w: cat-file --filters is disallowed in generic Runner", ErrUnsafeArgument)
 		}
 		for _, prefix := range unsafeArgPrefixes {
 			if a == prefix || strings.HasPrefix(a, prefix+"=") {
