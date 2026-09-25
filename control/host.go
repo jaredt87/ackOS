@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jaredt87/ackOS/kernel"
@@ -32,6 +33,29 @@ type ControlResult struct {
 	Authority    kernel.Authority
 	Execution    Execution
 	Verification Verification
+}
+
+type invocation struct {
+	outstanding sync.WaitGroup
+}
+
+func (i *invocation) invokeProvider(h *Host, ctx context.Context, providerName, ownerID string, fn func() error) error {
+	i.outstanding.Add(1)
+	err, admitted := h.callProvider(ctx, providerName, ownerID, func() error {
+		defer i.outstanding.Done()
+		return fn()
+	})
+	if !admitted {
+		i.outstanding.Done()
+	}
+	return err
+}
+
+func (i *invocation) releaseWhenDone(runtime *kernel.Runtime) {
+	go func() {
+		i.outstanding.Wait()
+		runtime.ReleaseLifecycle()
+	}()
 }
 
 func NewHost(runtime *kernel.Runtime, timeout time.Duration) (*Host, error) {
@@ -80,11 +104,12 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 	if err := h.runtime.AcquireLifecycle(ctx); err != nil {
 		return ControlResult{}, err
 	}
-	defer h.runtime.ReleaseLifecycle()
+	inv := &invocation{}
+	defer inv.releaseWhenDone(h.runtime)
 
 	observeCtx, cancel := context.WithTimeout(ctx, h.timeout)
 	var observed Observation
-	err = h.callProvider(observeCtx, providerName, "observe", func() error {
+	err = inv.invokeProvider(h, observeCtx, providerName, "observe", func() error {
 		var callErr error
 		observed, callErr = p.Observe(observeCtx, ObserveRequest{Target: req.Target})
 		return callErr
@@ -134,6 +159,7 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 	defer cancel()
 	executionResult, err := h.runtime.Start(execCtx, providerExecutor{
 		host:         h,
+		invocation:   inv,
 		providerName: providerName,
 		provider:     p,
 		execution:    &execution,
@@ -157,6 +183,7 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 	defer cancel()
 	if err := h.runtime.Verify(verifyCtx, providerVerifier{
 		host:         h,
+		invocation:   inv,
 		providerName: providerName,
 		provider:     p,
 		verification: &verification,
@@ -179,12 +206,12 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 	}, nil
 }
 
-func (h *Host) execute(ctx context.Context, providerName string, p Provider, req ExecuteRequest) (Execution, error) {
+func (h *Host) execute(ctx context.Context, providerName string, p Provider, req ExecuteRequest, inv *invocation) (Execution, error) {
 	if err := ctx.Err(); err != nil {
 		return Execution{}, err
 	}
 	var result Execution
-	err := h.callProvider(ctx, providerName, req.ExecutionID, func() error {
+	err := inv.invokeProvider(h, ctx, providerName, req.ExecutionID, func() error {
 		var callErr error
 		result, callErr = p.Execute(ctx, req)
 		return callErr
@@ -198,12 +225,12 @@ func (h *Host) execute(ctx context.Context, providerName string, p Provider, req
 	return result, nil
 }
 
-func (h *Host) verify(ctx context.Context, providerName string, p Provider, req VerifyRequest) (Verification, error) {
+func (h *Host) verify(ctx context.Context, providerName string, p Provider, req VerifyRequest, inv *invocation) (Verification, error) {
 	if err := ctx.Err(); err != nil {
 		return Verification{}, err
 	}
 	var result Verification
-	err := h.callProvider(ctx, providerName, req.ExecutionID, func() error {
+	err := inv.invokeProvider(h, ctx, providerName, req.ExecutionID, func() error {
 		var callErr error
 		result, callErr = p.Verify(ctx, req)
 		return callErr
@@ -222,6 +249,7 @@ func (h *Host) verify(ctx context.Context, providerName string, p Provider, req 
 
 type providerExecutor struct {
 	host         *Host
+	invocation   *invocation
 	providerName string
 	provider     Provider
 	execution    *Execution
@@ -229,7 +257,7 @@ type providerExecutor struct {
 }
 
 func (e providerExecutor) Execute(ctx context.Context, _ kernel.Transition, _ kernel.Authority) kernel.ExecutionResult {
-	result, err := e.host.execute(ctx, e.providerName, e.provider, e.request)
+	result, err := e.host.execute(ctx, e.providerName, e.provider, e.request, e.invocation)
 	if err != nil {
 		return kernel.ExecutionResult{Message: err.Error()}
 	}
@@ -239,6 +267,7 @@ func (e providerExecutor) Execute(ctx context.Context, _ kernel.Transition, _ ke
 
 type providerVerifier struct {
 	host         *Host
+	invocation   *invocation
 	providerName string
 	provider     Provider
 	verification *Verification
@@ -246,7 +275,7 @@ type providerVerifier struct {
 }
 
 func (v providerVerifier) Verify(ctx context.Context, _ kernel.Transition, _ kernel.Authority) (kernel.Observation, error) {
-	result, err := v.host.verify(ctx, v.providerName, v.provider, v.request)
+	result, err := v.host.verify(ctx, v.providerName, v.provider, v.request, v.invocation)
 	if err != nil {
 		return kernel.Observation{}, err
 	}

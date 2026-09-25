@@ -65,10 +65,10 @@ func (g *providerGates) forProvider(name string) *providerGate {
 // keeping the provider admission gate occupied until the callback actually
 // returns. A timed-out, non-cooperative callback therefore cannot overlap a
 // later callback for the same provider.
-func (h *Host) callProvider(ctx context.Context, providerName, ownerID string, fn func() error) error {
+func (h *Host) callProvider(ctx context.Context, providerName, ownerID string, fn func() error) (error, bool) {
 	gate := h.gates.forProvider(providerName)
 	if !gate.tryEnter(ownerID) {
-		return fmt.Errorf("%w: provider %q (held by %s)", ErrCallbackInFlight, providerName, gate.currentOwner())
+		return fmt.Errorf("%w: provider %q (held by %s)", ErrCallbackInFlight, providerName, gate.currentOwner()), false
 	}
 
 	done := make(chan error, 1)
@@ -82,13 +82,13 @@ func (h *Host) callProvider(ctx context.Context, providerName, ownerID string, f
 
 	select {
 	case err := <-done:
-		return err
+		return err, true
 	case <-ctx.Done():
 		// If the callback completed before cancellation won the select, preserve
 		// its result. Otherwise the callback remains admitted until it returns.
 		if completed.Load() {
-			return <-done
+			return <-done, true
 		}
-		return ctx.Err()
+		return ctx.Err(), true
 	}
 }

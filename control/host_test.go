@@ -265,7 +265,7 @@ func TestHostProviderVerificationTimeoutTransitionsToRecovery(t *testing.T) {
 	}
 }
 
-func TestHostProviderTimeoutKeepsAdmissionGateOccupied(t *testing.T) {
+func TestHostProviderTimeoutRetainsLifecycle(t *testing.T) {
 	release := make(chan struct{})
 	provider := newVerificationProvider(t, func(context.Context, control.VerifyRequest) (control.Verification, error) {
 		<-release
@@ -288,20 +288,98 @@ func TestHostProviderTimeoutKeepsAdmissionGateOccupied(t *testing.T) {
 		t.Fatalf("error = %v, want ErrVerificationFailed", err)
 	}
 
-	_, err = host.Control(context.Background(), "test", controlRequest())
-	if !errors.Is(err, control.ErrCallbackInFlight) {
-		t.Fatalf("error = %v, want ErrCallbackInFlight", err)
+	blockedCtx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	_, err = host.Control(blockedCtx, "test", controlRequest())
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context deadline while callback remains in flight", err)
 	}
 
 	close(release)
+}
 
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		_, err = host.Control(context.Background(), "test", controlRequest())
-		if !errors.Is(err, control.ErrCallbackInFlight) {
-			return
-		}
-		time.Sleep(time.Millisecond)
+type lifecycleTestProvider struct {
+	verificationProvider
+	executeCount int
+}
+
+func (p *lifecycleTestProvider) Execute(ctx context.Context, req control.ExecuteRequest) (control.Execution, error) {
+	p.executeCount++
+	if p.executeCount == 1 {
+		return control.Execution{ExecutionID: req.ExecutionID, Evidence: []byte("initial")}, nil
 	}
-	t.Fatal("provider admission gate did not clear after callback returned")
+	return p.base.Execute(ctx, req)
+}
+
+func TestHostLifecycleRemainsHeldUntilTimedOutProviderCallbackExits(t *testing.T) {
+	release := make(chan struct{})
+	resource, err := memory.NewResource("resource-a", "initial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := memory.NewProvider(resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &lifecycleTestProvider{
+		verificationProvider: verificationProvider{
+			base: base,
+			verifyFn: func(context.Context, control.VerifyRequest) (control.Verification, error) {
+				<-release
+				return control.Verification{
+					Resource:   control.ResourceRef{ID: "resource-a", Fingerprint: "running"},
+					VerifiedAt: time.Now().UTC(),
+				}, nil
+			},
+		},
+	}
+
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	host1, err := control.NewHost(runtime, 10*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host2, err := control.NewHost(runtime, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host1.Register("test", provider); err != nil {
+		t.Fatal(err)
+	}
+	if err := host2.Register("test", provider); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = host1.Control(context.Background(), "test", controlRequest())
+	if !errors.Is(err, kernel.ErrVerificationFailed) {
+		t.Fatalf("error = %v, want ErrVerificationFailed", err)
+	}
+	if got := runtime.Phase(); got != kernel.PhaseRecovery {
+		t.Fatalf("runtime phase = %s, want %s", got, kernel.PhaseRecovery)
+	}
+
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := host2.Control(context.Background(), "test", control.ControlRequest{
+			Target:  control.ResourceRef{ID: "resource-a", Fingerprint: "initial"},
+			Desired: control.ResourceRef{ID: "resource-a", Fingerprint: "running"},
+		})
+		secondDone <- err
+	}()
+
+	select {
+	case err := <-secondDone:
+		t.Fatalf("second lifecycle completed before timed-out callback exited: %v", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("second lifecycle failed after callback exited: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second lifecycle did not acquire runtime after callback exited")
+	}
 }
