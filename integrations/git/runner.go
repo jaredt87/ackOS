@@ -109,7 +109,6 @@ func newRunnerWithGitPath(repoPath, gitPath string) (*Runner, error) {
 			"-C", abs,
 			"-c", "core.hooksPath=/dev/null",
 			"-c", "core.fsmonitor=false",
-			"-c", "diff.external=",
 		},
 		env: sanitizedEnv(),
 	}, nil
@@ -206,8 +205,11 @@ func (r *Runner) Run(ctx context.Context, args ...string) (Result, error) {
 		return Result{}, err
 	}
 
-	fullArgs := make([]string, 0, len(r.baseArgs)+len(args))
+	fullArgs := make([]string, 0, len(r.baseArgs)+len(args)+1)
 	fullArgs = append(fullArgs, r.baseArgs...)
+	if args[0] == "diff" {
+		fullArgs = append(fullArgs, "--no-ext-diff")
+	}
 	fullArgs = append(fullArgs, args...)
 
 	cmd := exec.CommandContext(ctx, r.gitPath, fullArgs...)
@@ -267,6 +269,9 @@ func checkSafeArgs(args []string) error {
 		}
 		if subCmd == "cat-file" && (a == "--filters" || strings.HasPrefix(a, "--filters=")) {
 			return fmt.Errorf("%w: cat-file --filters is disallowed in generic Runner", ErrUnsafeArgument)
+		}
+		if subCmd == "diff" && (a == "--ext-diff" || strings.HasPrefix(a, "--ext-diff=")) {
+			return fmt.Errorf("%w: diff --ext-diff is disallowed in generic Runner", ErrUnsafeArgument)
 		}
 		for _, prefix := range unsafeArgPrefixes {
 			if a == prefix || strings.HasPrefix(a, prefix+"=") {
