@@ -90,7 +90,6 @@ func TestNewRunner_RejectsEscapingGitSymlink(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink test assumed on unix-like systems")
 	}
-	repo := initRepo(t)
 	otherRepo := initRepo(t)
 
 	targetDir := t.TempDir()
