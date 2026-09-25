@@ -249,7 +249,7 @@ for arg in "$@"; do
     exit 0
   fi
 done
-sleep 10
+exec sleep 10
 `
 	if err := os.WriteFile(shim, []byte(script), 0o755); err != nil {
 		t.Fatalf("writing git shim: %v", err)
