@@ -46,6 +46,7 @@ func (p *Provider) Observe(ctx context.Context, req control.ObserveRequest) (con
 	}
 	p.resource.mu.Lock()
 	id, fingerprint, version := p.resource.id, p.resource.fingerprint, p.resource.version
+	observedAt := time.Now().UTC()
 	p.resource.mu.Unlock()
 	if req.Target.ID != id {
 		return control.Observation{}, fmt.Errorf("resource ID mismatch")
@@ -53,7 +54,7 @@ func (p *Provider) Observe(ctx context.Context, req control.ObserveRequest) (con
 	return control.Observation{
 		Resource:   control.ResourceRef{ID: id, Fingerprint: fingerprint},
 		Evidence:   mustEvidence(id, fingerprint, version),
-		ObservedAt: time.Now().UTC(),
+		ObservedAt: observedAt,
 	}, nil
 }
 
@@ -87,6 +88,7 @@ func (p *Provider) Verify(ctx context.Context, req control.VerifyRequest) (contr
 	}
 	p.resource.mu.Lock()
 	id, fingerprint, executionID, version := p.resource.id, p.resource.fingerprint, p.resource.executionID, p.resource.version
+	verifiedAt := time.Now().UTC()
 	p.resource.mu.Unlock()
 	if executionID != req.ExecutionID {
 		return control.Verification{}, fmt.Errorf("execution is not bound to this resource state")
@@ -97,7 +99,7 @@ func (p *Provider) Verify(ctx context.Context, req control.VerifyRequest) (contr
 	return control.Verification{
 		Resource:   control.ResourceRef{ID: id, Fingerprint: fingerprint},
 		Evidence:   mustEvidence(id, fingerprint, version),
-		VerifiedAt: time.Now().UTC(),
+		VerifiedAt: verifiedAt,
 	}, nil
 }
 
