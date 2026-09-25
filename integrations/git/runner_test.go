@@ -145,6 +145,50 @@ func TestRun_RejectsUpdateRef(t *testing.T) {
 	}
 }
 
+func TestRun_RejectsExecutableOptions(t *testing.T) {
+	repo := initRepo(t)
+	r, err := NewRunner(repo)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	badInvocations := [][]string{
+		{"cat-file", "--textconv", "HEAD:file.txt"},
+		{"cat-file", "--textconv=driver", "HEAD:file.txt"},
+		{"commit", "-e", "-m", "msg"},
+		{"commit", "--edit", "-m", "msg"},
+	}
+	for _, args := range badInvocations {
+		_, err := r.Run(context.Background(), args...)
+		if err == nil || !errors.Is(err, ErrUnsafeArgument) {
+			t.Fatalf("expected ErrUnsafeArgument for %v, got: %v", args, err)
+		}
+	}
+}
+
+func TestRun_MitigatesPostConstructionSymlinkMutation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink test assumed on unix-like systems")
+	}
+
+	repo := initRepo(t)
+	r, err := NewRunner(repo)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	outsideDir := t.TempDir()
+	fanoutDir := filepath.Join(repo, ".git", "objects", "42")
+	if err := os.Symlink(outsideDir, fanoutDir); err != nil {
+		t.Fatalf("symlinking fanout: %v", err)
+	}
+
+	_, err = r.Run(context.Background(), "status")
+	if err == nil {
+		t.Fatal("expected pre-execution revalidation to reject execution after symlink mutation")
+	}
+}
+
 func TestRun_RejectsHashObjectPath(t *testing.T) {
 	repo := initRepo(t)
 	r, err := NewRunner(repo)
