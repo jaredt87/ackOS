@@ -74,8 +74,8 @@ func (h *Host) callProvider(ctx context.Context, providerName, ownerID string, f
 	done := make(chan error, 1)
 	var completed atomic.Bool
 	go func() {
-		defer gate.leave()
 		err := fn()
+		gate.leave()
 		completed.Store(true)
 		done <- err
 	}()
