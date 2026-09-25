@@ -400,3 +400,89 @@ func TestRun_PreservesSuccessIfCommandCompletesBeforeCancellation(t *testing.T) 
 		t.Fatal("expected non-empty stdout from rev-parse")
 	}
 }
+
+
+func TestRun_RejectsRepositoryAliases(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell alias execution assumed on unix-like systems")
+	}
+	repo := initRepo(t)
+	writeAndCommit(t, repo)
+
+	marker := filepath.Join(repo, "alias-fired")
+	runGit(t, repo, "config", "alias.pwn", "!touch "+marker)
+
+	r, err := NewRunner(repo)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	_, err = r.Run(context.Background(), "pwn")
+	if err == nil {
+		t.Fatal("expected Run to reject repository-defined alias 'pwn'")
+	}
+	if !errors.Is(err, ErrUnsafeArgument) {
+		t.Fatalf("expected ErrUnsafeArgument, got: %v", err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("hostile alias executed through Runner")
+	}
+}
+
+func TestRun_RejectsDisallowedSubcommands(t *testing.T) {
+	repo := initRepo(t)
+
+	r, err := NewRunner(repo)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	disallowed := [][]string{
+		{"push", "origin", "main"},
+		{"clone", "http://example.com/repo"},
+		{"config", "--list"},
+	}
+	for _, args := range disallowed {
+		if _, err := r.Run(context.Background(), args...); err == nil {
+			t.Fatalf("expected Run to reject disallowed subcommand %v", args)
+		}
+	}
+}
+
+func TestRun_AllowsSupportedPlumbingCommands(t *testing.T) {
+	repo := initRepo(t)
+	writeAndCommit(t, repo)
+
+	r, err := NewRunner(repo)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	commands := [][]string{
+		{"rev-parse", "--git-dir"},
+		{"cat-file", "-e", "HEAD"},
+		{"status", "--porcelain"},
+	}
+	for _, args := range commands {
+		if _, err := r.Run(context.Background(), args...); err != nil {
+			t.Fatalf("expected supported command %v to execute, got: %v", args, err)
+		}
+	}
+}
+
+func TestRun_RejectsEmptyArguments(t *testing.T) {
+	repo := initRepo(t)
+
+	r, err := NewRunner(repo)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	_, err = r.Run(context.Background())
+	if err == nil {
+		t.Fatal("expected empty argument list to be rejected")
+	}
+	if !errors.Is(err, ErrUnsafeArgument) {
+		t.Fatalf("expected ErrUnsafeArgument, got: %v", err)
+	}
+}
