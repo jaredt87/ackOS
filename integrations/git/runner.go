@@ -70,10 +70,10 @@ type Result struct {
 // execution (hash-object, write-tree, commit-tree, and similar) — the same
 // execution model the existing Git provider already uses.
 type Runner struct {
-	repoPath string
-	gitPath  string
-	baseArgs []string
-	env      []string
+	repoPath  string
+	gitPath   string
+	baseArgs  []string
+	env       []string
 	gitDirAbs string
 }
 
