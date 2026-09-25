@@ -98,6 +98,7 @@ func newRunnerWithGitPath(repoPath, gitPath string) (*Runner, error) {
 			"-C", abs,
 			"-c", "core.hooksPath=/dev/null",
 			"-c", "core.fsmonitor=false",
+			"-c", "diff.external=",
 		},
 		env: sanitizedEnv(),
 	}, nil
