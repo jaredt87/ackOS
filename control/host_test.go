@@ -264,3 +264,48 @@ func TestHostProviderVerificationTimeoutTransitionsToRecovery(t *testing.T) {
 		t.Fatalf("runtime phase = %s, want %s", got, kernel.PhaseRecovery)
 	}
 }
+
+
+func TestHostProviderTimeoutKeepsAdmissionGateOccupied(t *testing.T) {
+	release := make(chan struct{})
+	provider := newVerificationProvider(t, func(context.Context, control.VerifyRequest) (control.Verification, error) {
+		<-release
+		return control.Verification{
+			Resource: control.ResourceRef{ID: "resource-a", Fingerprint: "running"},
+			VerifiedAt: time.Now().UTC(),
+		}, nil
+	})
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	host, err := control.NewHost(runtime, 10*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Register("test", provider); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = host.Control(context.Background(), "test", controlRequest())
+	if !errors.Is(err, kernel.ErrVerificationFailed) {
+		t.Fatalf("error = %v, want ErrVerificationFailed", err)
+	}
+
+	_, err = host.Control(context.Background(), "test", controlRequest())
+	if !errors.Is(err, control.ErrCallbackInFlight) {
+		t.Fatalf("error = %v, want ErrCallbackInFlight", err)
+	}
+
+	close(release)
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		_, err = host.Control(context.Background(), "test", controlRequest())
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, control.ErrCallbackInFlight) {
+			t.Fatalf("error after releasing provider callback = %v", err)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("provider admission gate did not clear after callback returned")
+}
