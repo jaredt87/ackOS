@@ -74,6 +74,7 @@ type Runner struct {
 	gitPath  string
 	baseArgs []string
 	env      []string
+	gitDirAbs string
 }
 
 // NewRunner resolves the git executable, validates that repoPath is
@@ -97,29 +98,32 @@ func newRunnerWithGitPath(repoPath, gitPath string) (*Runner, error) {
 		return nil, fmt.Errorf("git: making repo path absolute: %w", err)
 	}
 
-	if err := validateRepoRoot(gitPath, abs); err != nil {
+	gitDirAbs, err := validateRepoRoot(gitPath, abs)
+	if err != nil {
 		return nil, err
 	}
 
 	return &Runner{
-		repoPath: abs,
-		gitPath:  gitPath,
+		repoPath:  abs,
+		gitPath:   gitPath,
+		gitDirAbs: gitDirAbs,
 		baseArgs: []string{
 			"--no-replace-objects",
 			"-C", abs,
 			"-c", "core.hooksPath=/dev/null",
 			"-c", "core.fsmonitor=false",
+			"-c", "core.editor=false",
 		},
 		env: sanitizedEnv(),
 	}, nil
 }
 
-func validateRepoRoot(gitPath, abs string) error {
+func validateRepoRoot(gitPath, abs string) (string, error) {
 	cmd := exec.Command(gitPath, "-C", abs, "rev-parse", "--git-dir")
 	cmd.Env = sanitizedEnv()
 	out, err := cmd.Output()
 	if err != nil {
-		return fmt.Errorf("%w: %s (%v)", ErrNotRepoRoot, abs, err)
+		return "", fmt.Errorf("%w: %s (%v)", ErrNotRepoRoot, abs, err)
 	}
 
 	gitDir := strings.TrimSpace(string(out))
@@ -128,37 +132,37 @@ func validateRepoRoot(gitPath, abs string) error {
 	}
 	resolvedGitDir, err := filepath.EvalSymlinks(gitDir)
 	if err != nil {
-		return fmt.Errorf("git: resolving git-dir symlinks: %w", err)
+		return "", fmt.Errorf("git: resolving git-dir symlinks: %w", err)
 	}
 	gitDirAbs, err := filepath.Abs(resolvedGitDir)
 	if err != nil {
-		return fmt.Errorf("git: making git-dir path absolute: %w", err)
+		return "", fmt.Errorf("git: making git-dir path absolute: %w", err)
 	}
 
 	resolvedRoot, err := filepath.EvalSymlinks(abs)
 	if err != nil {
-		return fmt.Errorf("git: resolving repository root symlinks: %w", err)
+		return "", fmt.Errorf("git: resolving repository root symlinks: %w", err)
 	}
 	bareForm, err := filepath.Abs(resolvedRoot)
 	if err != nil {
-		return fmt.Errorf("git: making repository root absolute: %w", err)
+		return "", fmt.Errorf("git: making repository root absolute: %w", err)
 	}
 
 	nonBareTarget := filepath.Join(abs, ".git")
 	nonBareForm, err := filepath.EvalSymlinks(nonBareTarget)
 	if err != nil {
-		return fmt.Errorf("git: resolving repository metadata symlinks: %w", err)
+		return "", fmt.Errorf("git: resolving repository metadata symlinks: %w", err)
 	}
 	nonBareForm, err = filepath.Abs(nonBareForm)
 	if err != nil {
-		return fmt.Errorf("git: making repository metadata path absolute: %w", err)
+		return "", fmt.Errorf("git: making repository metadata path absolute: %w", err)
 	}
 
 	if gitDirAbs != bareForm && gitDirAbs != nonBareForm {
-		return fmt.Errorf("%w: %s resolves to git-dir %s, not its own root", ErrNotRepoRoot, abs, gitDirAbs)
+		return "", fmt.Errorf("%w: %s resolves to git-dir %s, not its own root", ErrNotRepoRoot, abs, gitDirAbs)
 	}
 	if gitDirAbs == nonBareForm && nonBareForm != filepath.Join(bareForm, ".git") {
-		return fmt.Errorf("%w: %s uses git metadata outside its own root", ErrNotRepoRoot, abs)
+		return "", fmt.Errorf("%w: %s uses git metadata outside its own root", ErrNotRepoRoot, abs)
 	}
 	if err := validateGitMetadataSymlinks(gitDirAbs); err != nil {
 		return err
@@ -197,12 +201,19 @@ func sanitizedEnv() []string {
 		"TZ=UTC",
 		"LC_ALL=C",
 		"GIT_TERMINAL_PROMPT=0",
+		"GIT_EDITOR=false",
+		"VISUAL=false",
+		"EDITOR=false",
 	}
 }
 
 func (r *Runner) Run(ctx context.Context, args ...string) (Result, error) {
 	if err := checkSafeArgs(args); err != nil {
 		return Result{}, err
+	}
+
+	if err := validateGitMetadataSymlinks(r.gitDirAbs); err != nil {
+		return Result{}, fmt.Errorf("git: runtime metadata revalidation failed: %w", err)
 	}
 
 	fullArgs := make([]string, 0, len(r.baseArgs)+len(args)+1)
@@ -268,8 +279,12 @@ func checkSafeArgs(args []string) error {
 		if subCmd == "hash-object" && (a == "--path" || strings.HasPrefix(a, "--path=")) {
 			return fmt.Errorf("%w: hash-object --path is disallowed in generic Runner", ErrUnsafeArgument)
 		}
-		if subCmd == "cat-file" && (a == "--filters" || strings.HasPrefix(a, "--filters=")) {
-			return fmt.Errorf("%w: cat-file --filters is disallowed in generic Runner", ErrUnsafeArgument)
+		if subCmd == "cat-file" && (a == "--filters" || strings.HasPrefix(a, "--filters=") ||
+			a == "--textconv" || strings.HasPrefix(a, "--textconv=")) {
+			return fmt.Errorf("%w: cat-file %s is disallowed", ErrUnsafeArgument, a)
+		}
+		if subCmd == "commit" && (a == "-e" || a == "--edit") {
+			return fmt.Errorf("%w: commit interactive editor flag %q is disallowed", ErrUnsafeArgument, a)
 		}
 		if subCmd == "diff" && (a == "--ext-diff" || strings.HasPrefix(a, "--ext-diff=")) {
 			return fmt.Errorf("%w: diff --ext-diff is disallowed in generic Runner", ErrUnsafeArgument)
