@@ -207,10 +207,11 @@ func (r *Runner) Run(ctx context.Context, args ...string) (Result, error) {
 
 	fullArgs := make([]string, 0, len(r.baseArgs)+len(args)+1)
 	fullArgs = append(fullArgs, r.baseArgs...)
+	fullArgs = append(fullArgs, args[0])
 	if args[0] == "diff" {
 		fullArgs = append(fullArgs, "--no-ext-diff")
 	}
-	fullArgs = append(fullArgs, args...)
+	fullArgs = append(fullArgs, args[1:]...)
 
 	cmd := exec.CommandContext(ctx, r.gitPath, fullArgs...)
 	cmd.Env = r.env
