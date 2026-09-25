@@ -72,17 +72,23 @@ func (h *Host) callProvider(ctx context.Context, providerName, ownerID string, f
 	}
 
 	done := make(chan error, 1)
+	var completed atomic.Bool
 	go func() {
 		defer gate.leave()
-		done <- fn()
+		err := fn()
+		completed.Store(true)
+		done <- err
 	}()
 
 	select {
 	case err := <-done:
 		return err
 	case <-ctx.Done():
-		// Do not release the gate here. The callback goroutine owns release
-		// until it actually returns.
+		// If the callback completed before cancellation won the select, preserve
+		// its result. Otherwise the callback remains admitted until it returns.
+		if completed.Load() {
+			return <-done
+		}
 		return ctx.Err()
 	}
 }
