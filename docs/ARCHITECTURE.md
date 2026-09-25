@@ -57,14 +57,14 @@ The `git.Runner` package provides low-level, sandboxed subprocess execution for 
 - **Clean-Room Environment:** Constructs a minimal, explicit process environment (`sanitizedEnv`), discarding ambient environment variables.
 - **Hardened Execution Flags:** Enforces `core.hooksPath=/dev/null`, `core.fsmonitor=false`, `diff.external=`, and `--no-replace-objects` to prevent common repository-configured subprocess execution.
 - **Argument Boundaries:** Rejects caller-supplied global override flags including `-C`, `--git-dir`, `--work-tree`, `-c`, `--config`, `--exec-path`, `--config-env`, `--bare`, and replacement-object controls.
-- **Subcommand Allowlist:** `Runner.Run` accepts only the explicitly supported Git commands (`rev-parse`, `hash-object`, `cat-file`, `write-tree`, `commit-tree`, `update-ref`, `diff`, `status`, and `commit`). Repository-defined aliases and other Git subcommands are rejected before process dispatch.
+- **Subcommand Allowlist:** `Runner.Run` accepts only the explicitly supported Git commands (`rev-parse`, `hash-object`, `cat-file`, `write-tree`, `commit-tree`, `diff`, `status`, and `commit`). `update-ref` is intentionally excluded from the generic Runner surface. Repository-defined aliases and other Git subcommands are rejected before process dispatch.
 - **Deterministic Executable Resolution:** Resolves the `git` binary path once at construction time (`exec.LookPath`) and executes via that resolved path.
 - **Direct Process Cancellation:** Uses `exec.CommandContext` so cancellation terminates the direct Git subprocess. A successfully completed command remains successful even if the context expires in the race window after process completion.
 
 ### Intentionally Deferred Boundaries
 
 - **Process-Group Cleanup:** `Runner` manages and cancels the direct Git process spawned via `exec.CommandContext`. Cleanup of descendant process groups is deferred.
-- **Pathspec Interpretation:** `Runner` passes arguments directly to Git without evaluating pathspec magic (`:`, `!`, `*`). Path sanitization remains the responsibility of caller call sites. When the eventual Git Provider invokes `hash-object` with path specifications, it must supply `--no-filters` so repository `.gitattributes` clean drivers cannot execute.
+- **Pathspec Interpretation:** `Runner` passes arguments directly to Git without evaluating pathspec magic (`:`, `!`, `*`). Path sanitization remains the responsibility of caller call sites. The generic Runner rejects `hash-object --path` so repository `.gitattributes` clean drivers cannot execute through this boundary. When the eventual Git Provider needs path-based hashing, it must establish an explicit safe filtering policy rather than relying on the generic Runner.
 - **Provider & Abstraction Layers:** Higher-level Provider interfaces, working-tree operations, and plugin abstractions are deferred to PR #16.
 
 ## V0 guarantees and boundaries
