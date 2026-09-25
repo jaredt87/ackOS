@@ -57,6 +57,7 @@ The `git.Runner` package provides low-level, sandboxed subprocess execution for 
 - **Clean-Room Environment:** Constructs a minimal, explicit process environment (`sanitizedEnv`), discarding ambient environment variables.
 - **Hardened Execution Flags:** Enforces `core.hooksPath=/dev/null`, `core.fsmonitor=false`, `diff.external=`, and `--no-replace-objects` to prevent common repository-configured subprocess execution.
 - **Argument Boundaries:** Rejects caller-supplied global override flags including `-C`, `--git-dir`, `--work-tree`, `-c`, `--config`, `--exec-path`, `--config-env`, `--bare`, and replacement-object controls.
+- **Subcommand Allowlist:** `Runner.Run` accepts only the explicitly supported Git commands (`rev-parse`, `hash-object`, `cat-file`, `write-tree`, `commit-tree`, `update-ref`, `diff`, `status`, and `commit`). Repository-defined aliases and other Git subcommands are rejected before process dispatch.
 - **Deterministic Executable Resolution:** Resolves the `git` binary path once at construction time (`exec.LookPath`) and executes via that resolved path.
 - **Direct Process Cancellation:** Uses `exec.CommandContext` so cancellation terminates the direct Git subprocess. A successfully completed command remains successful even if the context expires in the race window after process completion.
 
