@@ -224,8 +224,8 @@ type providerExecutor struct {
 	host         *Host
 	providerName string
 	provider     Provider
-	execution *Execution
-	request   ExecuteRequest
+	execution    *Execution
+	request      ExecuteRequest
 }
 
 func (e providerExecutor) Execute(ctx context.Context, _ kernel.Transition, _ kernel.Authority) kernel.ExecutionResult {
