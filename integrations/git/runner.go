@@ -9,7 +9,7 @@
 //
 // Path arguments are intentionally not interpreted by Runner. Run accepts
 // git command arguments, not typed path arguments, so pathspec-magic
-// safety (leading \`:\`, \`!\`, \`*\` in a path being reinterpreted by git)
+// safety (leading `:`, `!`, `*` in a path being reinterpreted by git)
 // belongs at the eventual Git provider call sites, where the caller knows
 // a given argument is a literal path. See PR #15 notes for the reasoning.
 package git
@@ -19,6 +19,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -39,7 +40,6 @@ var allowedCommands = map[string]bool{
 	"cat-file":    true,
 	"write-tree":  true,
 	"commit-tree": true,
-	"update-ref":  true,
 	"diff":        true,
 	"status":      true,
 	"commit":      true,
@@ -67,9 +67,8 @@ type Result struct {
 
 // Runner executes git subprocesses against exactly one repository, inside a
 // clean-room environment. It supports plumbing-style, working-tree-free
-// execution (hash-object, write-tree, commit-tree, update-ref, and
-// similar) — the same execution model the existing Git provider already
-// uses.
+// execution (hash-object, write-tree, commit-tree, and similar) — the same
+// execution model the existing Git provider already uses.
 type Runner struct {
 	repoPath string
 	gitPath  string
@@ -162,6 +161,33 @@ func validateRepoRoot(gitPath, abs string) error {
 	if gitDirAbs == nonBareForm && nonBareForm != filepath.Join(bareForm, ".git") {
 		return fmt.Errorf("%w: %s uses git metadata outside its own root", ErrNotRepoRoot, abs)
 	}
+	if err := validateGitMetadataSymlinks(gitDirAbs); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateGitMetadataSymlinks(gitDirAbs string) error {
+	for _, sub := range []string{"refs", "objects", "HEAD"} {
+		target := filepath.Join(gitDirAbs, sub)
+
+		if _, err := os.Lstat(target); os.IsNotExist(err) {
+			continue
+		} else if err != nil {
+			return fmt.Errorf("git: inspecting metadata component %s: %w", sub, err)
+		}
+
+		resolved, err := filepath.EvalSymlinks(target)
+		if err != nil {
+			return fmt.Errorf("git: validating metadata symlink %s: %w", sub, err)
+		}
+
+		rel, err := filepath.Rel(gitDirAbs, resolved)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("%w: git metadata component %q escapes root via symlink", ErrNotRepoRoot, sub)
+		}
+	}
+
 	return nil
 }
 
@@ -226,21 +252,23 @@ func checkSafeArgs(args []string) error {
 		return fmt.Errorf("%w: empty argument list", ErrUnsafeArgument)
 	}
 
-	var subCmd string
-	for _, a := range args {
+	subCmd := args[0]
+	if strings.HasPrefix(subCmd, "-") {
+		return fmt.Errorf("%w: leading global options are not allowed: %q", ErrUnsafeArgument, subCmd)
+	}
+	if !allowedCommands[subCmd] {
+		return fmt.Errorf("%w: subcommand %q is not in the allowed plumbing set", ErrUnsafeArgument, subCmd)
+	}
+
+	for _, a := range args[1:] {
+		if subCmd == "hash-object" && (a == "--path" || strings.HasPrefix(a, "--path=")) {
+			return fmt.Errorf("%w: hash-object --path is disallowed in generic Runner", ErrUnsafeArgument)
+		}
 		for _, prefix := range unsafeArgPrefixes {
 			if a == prefix || strings.HasPrefix(a, prefix+"=") {
 				return fmt.Errorf("%w: %q", ErrUnsafeArgument, a)
 			}
 		}
-
-		if subCmd == "" && !strings.HasPrefix(a, "-") {
-			subCmd = a
-		}
-	}
-
-	if subCmd == "" || !allowedCommands[subCmd] {
-		return fmt.Errorf("%w: subcommand %q is not in the allowed plumbing set", ErrUnsafeArgument, subCmd)
 	}
 
 	return nil
