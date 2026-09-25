@@ -168,8 +168,8 @@ func TestHostRecoveryRunsAnotherLifecycle(t *testing.T) {
 	}
 	provider := &recoveryTestProvider{
 		verificationProvider: verificationProvider{
-			base:      base,
-			verifyFn:  base.Verify,
+			base:     base,
+			verifyFn: base.Verify,
 		},
 	}
 	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
