@@ -161,6 +161,18 @@ func TestRun_BlocksRepositoryConfiguredDiffExternal(t *testing.T) {
 	repo := initRepo(t)
 	writeAndCommit(t, repo)
 
+	file := filepath.Join(repo, "tracked.txt")
+	if err := os.WriteFile(file, []byte("first\n"), 0o644); err != nil {
+		t.Fatalf("writing first revision: %v", err)
+	}
+	runGit(t, repo, "add", "tracked.txt")
+	runGit(t, repo, "commit", "-m", "first tracked revision")
+	if err := os.WriteFile(file, []byte("second\n"), 0o644); err != nil {
+		t.Fatalf("writing second revision: %v", err)
+	}
+	runGit(t, repo, "add", "tracked.txt")
+	runGit(t, repo, "commit", "-m", "second tracked revision")
+
 	marker := filepath.Join(repo, "diff-external-fired")
 	script := filepath.Join(repo, "fake-diff.sh")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\ntouch "+marker+"\n"), 0o755); err != nil {
