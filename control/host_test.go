@@ -144,6 +144,19 @@ func TestHostProviderVerificationFailureTransitionsToRecovery(t *testing.T) {
 	}
 }
 
+type recoveryTestProvider struct {
+	verificationProvider
+	executeCount int
+}
+
+func (p *recoveryTestProvider) Execute(ctx context.Context, req control.ExecuteRequest) (control.Execution, error) {
+	p.executeCount++
+	if p.executeCount == 1 {
+		return control.Execution{}, errors.New("simulated initial execution failure")
+	}
+	return p.base.Execute(ctx, req)
+}
+
 func TestHostRecoveryRunsAnotherLifecycle(t *testing.T) {
 	resource, err := memory.NewResource("resource-a", "initial")
 	if err != nil {
@@ -152,10 +165,6 @@ func TestHostRecoveryRunsAnotherLifecycle(t *testing.T) {
 	base, err := memory.NewProvider(resource)
 	if err != nil {
 		t.Fatal(err)
-	}
-	type recoveryTestProvider struct {
-		verificationProvider
-		executeCount int
 	}
 	provider := &recoveryTestProvider{
 		verificationProvider: verificationProvider{
@@ -189,14 +198,6 @@ func TestHostRecoveryRunsAnotherLifecycle(t *testing.T) {
 	if got := runtime.Phase(); got != kernel.PhaseCommitted {
 		t.Fatalf("runtime phase = %s, want %s", got, kernel.PhaseCommitted)
 	}
-}
-
-func (p *recoveryTestProvider) Execute(ctx context.Context, req control.ExecuteRequest) (control.Execution, error) {
-	p.executeCount++
-	if p.executeCount == 1 {
-		return control.Execution{}, errors.New("simulated initial execution failure")
-	}
-	return p.base.Execute(ctx, req)
 }
 
 func TestHostCallerCancellationAfterExecuteStillVerifies(t *testing.T) {
