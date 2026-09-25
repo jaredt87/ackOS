@@ -53,9 +53,9 @@ The `git.Runner` package provides low-level, sandboxed subprocess execution for 
 
 ### Guarantees Enforced by Runner
 
-- **Repository Root Anchoring:** Validates that target paths resolve directly to a repository root (`.git` directory matches the root), preventing sub-directory escaping or target ambiguity.
+- **Repository Root Anchoring:** Validates that target paths resolve directly to a repository root and rejects `.git` metadata symlinks that escape the supplied root.
 - **Clean-Room Environment:** Constructs a minimal, explicit process environment (`sanitizedEnv`), discarding ambient environment variables.
-- **Hardened Execution Flags:** Enforces `core.hooksPath=/dev/null`, `core.fsmonitor=false`, and `--no-replace-objects`.
+- **Hardened Execution Flags:** Enforces `core.hooksPath=/dev/null`, `core.fsmonitor=false`, `diff.external=`, and `--no-replace-objects` to prevent common repository-configured subprocess execution.
 - **Argument Boundaries:** Rejects caller-supplied global override flags including `-C`, `--git-dir`, `--work-tree`, `-c`, `--config`, `--exec-path`, `--config-env`, `--bare`, and replacement-object controls.
 - **Deterministic Executable Resolution:** Resolves the `git` binary path once at construction time (`exec.LookPath`) and executes via that resolved path.
 - **Direct Process Cancellation:** Uses `exec.CommandContext` so cancellation terminates the direct Git subprocess. A successfully completed command remains successful even if the context expires in the race window after process completion.
@@ -63,7 +63,7 @@ The `git.Runner` package provides low-level, sandboxed subprocess execution for 
 ### Intentionally Deferred Boundaries
 
 - **Process-Group Cleanup:** `Runner` manages and cancels the direct Git process spawned via `exec.CommandContext`. Cleanup of descendant process groups is deferred.
-- **Pathspec Interpretation:** `Runner` passes arguments directly to Git without evaluating pathspec magic (`:`, `!`, `*`). Path sanitization remains the responsibility of caller call sites.
+- **Pathspec Interpretation:** `Runner` passes arguments directly to Git without evaluating pathspec magic (`:`, `!`, `*`). Path sanitization remains the responsibility of caller call sites. When the eventual Git Provider invokes `hash-object` with path specifications, it must supply `--no-filters` so repository `.gitattributes` clean drivers cannot execute.
 - **Provider & Abstraction Layers:** Higher-level Provider interfaces, working-tree operations, and plugin abstractions are deferred to PR #16.
 
 ## V0 guarantees and boundaries
