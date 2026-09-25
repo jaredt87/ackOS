@@ -401,7 +401,6 @@ func TestRun_PreservesSuccessIfCommandCompletesBeforeCancellation(t *testing.T) 
 	}
 }
 
-
 func TestRun_RejectsRepositoryAliases(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell alias execution assumed on unix-like systems")
