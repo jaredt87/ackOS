@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 )
 
 // ErrCallbackInFlight is returned when a provider callback cannot be admitted
@@ -13,17 +14,17 @@ var ErrCallbackInFlight = errors.New("control: provider callback still in flight
 
 type providerGate struct {
 	mu    sync.Mutex
-	busy  bool
+	busy  atomic.Bool
 	owner string
 }
 
 func (g *providerGate) tryEnter(owner string) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.busy {
+	if g.busy.Load() {
 		return false
 	}
-	g.busy = true
+	g.busy.Store(true)
 	g.owner = owner
 	return true
 }
@@ -31,7 +32,7 @@ func (g *providerGate) tryEnter(owner string) bool {
 func (g *providerGate) leave() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	g.busy = false
+	g.busy.Store(false)
 	g.owner = ""
 }
 
