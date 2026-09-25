@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -220,6 +221,56 @@ func TestRun_RejectsRepositoryEscapeArguments(t *testing.T) {
 	}
 }
 
+func TestRun_RejectsGlobalOptionEscapes(t *testing.T) {
+	repo := initRepo(t)
+
+	r, err := NewRunner(repo)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	escapeAttempts := [][]string{
+		{"--exec-path=/tmp", "status"},
+		{"--config-env=core.hooksPath=TZ", "status"},
+		{"--bare", "status"},
+	}
+	for _, args := range escapeAttempts {
+		if _, err := r.Run(context.Background(), args...); err == nil {
+			t.Fatalf("expected Run to reject escape attempt %v, got no error", args)
+		}
+	}
+}
+
+func TestRun_ConfigEnvCannotBypassHooksPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hook shebang execution assumed on unix-like systems")
+	}
+	repo := initRepo(t)
+	writeAndCommit(t, repo)
+
+	marker := filepath.Join(repo, "hook-fired")
+	hookPath := filepath.Join(repo, ".git", "hooks", "post-commit")
+	if err := os.WriteFile(hookPath, []byte("#!/bin/sh\ntouch "+marker+"\n"), 0o755); err != nil {
+		t.Fatalf("writing hook: %v", err)
+	}
+
+	r, err := NewRunner(repo)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	_, err = r.Run(context.Background(), "--config-env=core.hooksPath=TZ", "commit", "--allow-empty", "-m", "bypass attempt")
+	if err == nil {
+		t.Fatal("expected --config-env to be rejected by checkSafeArgs")
+	}
+	if !errors.Is(err, ErrUnsafeArgument) {
+		t.Fatalf("expected ErrUnsafeArgument, got: %v", err)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("hook executed via --config-env bypass")
+	}
+}
+
 func TestSanitizedEnv_DoesNotInheritAmbientEnvironment(t *testing.T) {
 	t.Setenv("GIT_RUNNER_TEST_CANARY", "should-not-leak")
 
@@ -272,5 +323,26 @@ exec sleep 10
 	}
 	if elapsed > 500*time.Millisecond {
 		t.Fatalf("Run did not return promptly on cancellation: took %v", elapsed)
+	}
+}
+
+func TestRun_PreservesSuccessIfCommandCompletesBeforeCancellation(t *testing.T) {
+	repo := initRepo(t)
+	writeAndCommit(t, repo)
+
+	r, err := NewRunner(repo)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result, err := r.Run(ctx, "rev-parse", "HEAD")
+	cancel()
+
+	if err != nil {
+		t.Fatalf("expected successful command completion to be preserved, got error: %v", err)
+	}
+	if result.Stdout == "" {
+		t.Fatal("expected non-empty stdout from rev-parse")
 	}
 }
