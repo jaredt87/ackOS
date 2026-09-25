@@ -116,15 +116,39 @@ func validateRepoRoot(gitPath, abs string) error {
 	if !filepath.IsAbs(gitDir) {
 		gitDir = filepath.Join(abs, gitDir)
 	}
-	gitDirAbs, err := filepath.Abs(gitDir)
+	resolvedGitDir, err := filepath.EvalSymlinks(gitDir)
 	if err != nil {
-		return fmt.Errorf("git: resolving git-dir: %w", err)
+		return fmt.Errorf("git: resolving git-dir symlinks: %w", err)
+	}
+	gitDirAbs, err := filepath.Abs(resolvedGitDir)
+	if err != nil {
+		return fmt.Errorf("git: making git-dir path absolute: %w", err)
 	}
 
-	bareForm := abs
-	nonBareForm := filepath.Join(abs, ".git")
+	resolvedRoot, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return fmt.Errorf("git: resolving repository root symlinks: %w", err)
+	}
+	bareForm, err := filepath.Abs(resolvedRoot)
+	if err != nil {
+		return fmt.Errorf("git: making repository root absolute: %w", err)
+	}
+
+	nonBareTarget := filepath.Join(abs, ".git")
+	nonBareForm, err := filepath.EvalSymlinks(nonBareTarget)
+	if err != nil {
+		return fmt.Errorf("git: resolving repository metadata symlinks: %w", err)
+	}
+	nonBareForm, err = filepath.Abs(nonBareForm)
+	if err != nil {
+		return fmt.Errorf("git: making repository metadata path absolute: %w", err)
+	}
+
 	if gitDirAbs != bareForm && gitDirAbs != nonBareForm {
 		return fmt.Errorf("%w: %s resolves to git-dir %s, not its own root", ErrNotRepoRoot, abs, gitDirAbs)
+	}
+	if gitDirAbs == nonBareForm && nonBareForm != filepath.Join(bareForm, ".git") {
+		return fmt.Errorf("%w: %s uses git metadata outside its own root", ErrNotRepoRoot, abs)
 	}
 	return nil
 }
