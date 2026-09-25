@@ -221,9 +221,9 @@ func (h *Host) verify(ctx context.Context, providerName string, p Provider, req 
 }
 
 type providerExecutor struct {
-	host      *Host
+	host         *Host
 	providerName string
-	provider  Provider
+	provider     Provider
 	execution *Execution
 	request   ExecuteRequest
 }
