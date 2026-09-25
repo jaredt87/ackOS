@@ -167,7 +167,7 @@ func validateRepoRoot(gitPath, abs string) (string, error) {
 	if err := validateGitMetadataSymlinks(gitDirAbs); err != nil {
 		return "", err
 	}
-	return nil
+	return gitDirAbs, nil
 }
 
 func validateGitMetadataSymlinks(gitDirAbs string) error {
