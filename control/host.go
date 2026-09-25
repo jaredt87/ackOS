@@ -17,6 +17,7 @@ type Host struct {
 	runtime   *kernel.Runtime
 	providers map[string]Provider
 	timeout   time.Duration
+	gates     providerGates
 }
 
 type ControlRequest struct {
@@ -82,7 +83,12 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 	defer h.runtime.ReleaseLifecycle()
 
 	observeCtx, cancel := context.WithTimeout(ctx, h.timeout)
-	observed, err := p.Observe(observeCtx, ObserveRequest{Target: req.Target})
+	var observed Observation
+	err = h.callProvider(observeCtx, providerName, "observe", func() error {
+		var callErr error
+		observed, callErr = p.Observe(observeCtx, ObserveRequest{Target: req.Target})
+		return callErr
+	})
 	cancel()
 	if err != nil {
 		return ControlResult{}, fmt.Errorf("observe: %w", err)
@@ -127,8 +133,9 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 	execCtx, cancel := context.WithTimeout(ctx, h.timeout)
 	defer cancel()
 	executionResult, err := h.runtime.Start(execCtx, providerExecutor{
-		host:      h,
-		provider:  p,
+		host:         h,
+		providerName: providerName,
+		provider:     p,
 		execution: &execution,
 		request: ExecuteRequest{
 			ExecutionID: authority.ExecutionID,
@@ -150,6 +157,7 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 	defer cancel()
 	if err := h.runtime.Verify(verifyCtx, providerVerifier{
 		host:         h,
+		providerName: providerName,
 		provider:     p,
 		verification: &verification,
 		request: VerifyRequest{
@@ -171,11 +179,16 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 	}, nil
 }
 
-func (h *Host) execute(ctx context.Context, p Provider, req ExecuteRequest) (Execution, error) {
+func (h *Host) execute(ctx context.Context, providerName string, p Provider, req ExecuteRequest) (Execution, error) {
 	if err := ctx.Err(); err != nil {
 		return Execution{}, err
 	}
-	result, err := p.Execute(ctx, req)
+	var result Execution
+	err := h.callProvider(ctx, providerName, req.ExecutionID, func() error {
+		var callErr error
+		result, callErr = p.Execute(ctx, req)
+		return callErr
+	})
 	if err != nil {
 		return Execution{}, err
 	}
@@ -185,11 +198,16 @@ func (h *Host) execute(ctx context.Context, p Provider, req ExecuteRequest) (Exe
 	return result, nil
 }
 
-func (h *Host) verify(ctx context.Context, p Provider, req VerifyRequest) (Verification, error) {
+func (h *Host) verify(ctx context.Context, providerName string, p Provider, req VerifyRequest) (Verification, error) {
 	if err := ctx.Err(); err != nil {
 		return Verification{}, err
 	}
-	result, err := p.Verify(ctx, req)
+	var result Verification
+	err := h.callProvider(ctx, providerName, req.ExecutionID, func() error {
+		var callErr error
+		result, callErr = p.Verify(ctx, req)
+		return callErr
+	})
 	if err != nil {
 		return Verification{}, err
 	}
@@ -204,13 +222,14 @@ func (h *Host) verify(ctx context.Context, p Provider, req VerifyRequest) (Verif
 
 type providerExecutor struct {
 	host      *Host
+	providerName string
 	provider  Provider
 	execution *Execution
 	request   ExecuteRequest
 }
 
 func (e providerExecutor) Execute(ctx context.Context, _ kernel.Transition, _ kernel.Authority) kernel.ExecutionResult {
-	result, err := e.host.execute(ctx, e.provider, e.request)
+	result, err := e.host.execute(ctx, e.providerName, e.provider, e.request)
 	if err != nil {
 		return kernel.ExecutionResult{Message: err.Error()}
 	}
@@ -226,7 +245,7 @@ type providerVerifier struct {
 }
 
 func (v providerVerifier) Verify(ctx context.Context, _ kernel.Transition, _ kernel.Authority) (kernel.Observation, error) {
-	result, err := v.host.verify(ctx, v.provider, v.request)
+	result, err := v.host.verify(ctx, v.providerName, v.provider, v.request)
 	if err != nil {
 		return kernel.Observation{}, err
 	}
