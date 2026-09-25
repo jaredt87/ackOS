@@ -33,6 +33,18 @@ var ErrUnsafeArgument = errors.New("git: argument would override a runner securi
 // unrelated directory, or a path git can't identify at all.
 var ErrNotRepoRoot = errors.New("git: path is not a git repository root")
 
+var allowedCommands = map[string]bool{
+	"rev-parse":   true,
+	"hash-object": true,
+	"cat-file":    true,
+	"write-tree":  true,
+	"commit-tree": true,
+	"update-ref":  true,
+	"diff":        true,
+	"status":      true,
+	"commit":      true,
+}
+
 var unsafeArgPrefixes = []string{
 	"-C",
 	"--git-dir",
@@ -210,12 +222,26 @@ func (r *Runner) Run(ctx context.Context, args ...string) (Result, error) {
 }
 
 func checkSafeArgs(args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("%w: empty argument list", ErrUnsafeArgument)
+	}
+
+	var subCmd string
 	for _, a := range args {
 		for _, prefix := range unsafeArgPrefixes {
 			if a == prefix || strings.HasPrefix(a, prefix+"=") {
 				return fmt.Errorf("%w: %q", ErrUnsafeArgument, a)
 			}
 		}
+
+		if subCmd == "" && !strings.HasPrefix(a, "-") {
+			subCmd = a
+		}
 	}
+
+	if subCmd == "" || !allowedCommands[subCmd] {
+		return fmt.Errorf("%w: subcommand %q is not in the allowed plumbing set", ErrUnsafeArgument, subCmd)
+	}
+
 	return nil
 }
