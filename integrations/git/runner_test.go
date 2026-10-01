@@ -652,7 +652,6 @@ func TestRun_RejectsEmptyArguments(t *testing.T) {
 	}
 }
 
-
 func TestRun_RejectsTextconvAndSigningOptions(t *testing.T) {
 	for _, args := range [][]string{
 		{"diff", "--textconv"},
