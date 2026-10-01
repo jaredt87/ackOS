@@ -115,6 +115,7 @@ func newRunnerWithGitPath(repoPath, gitPath string) (*Runner, error) {
 			"-c", "core.editor=false",
 			"-c", "commit.gpgSign=false",
 			"-c", "tag.gpgSign=false",
+			"-c", "diff.submodule=short",
 			"--git-dir", gitDirAbs,
 			"--work-tree", abs,
 		},
@@ -263,6 +264,16 @@ func (r *Runner) Run(ctx context.Context, args ...string) (Result, error) {
 	return result, nil
 }
 
+// isLongOptionAbbreviation reports whether arg names a long option using its
+// full spelling or a unique-prefix spelling. It also handles --option=value.
+func isLongOptionAbbreviation(arg, option string) bool {
+	if !strings.HasPrefix(arg, "--") {
+		return false
+	}
+	name := strings.SplitN(arg, "=", 2)[0]
+	return len(name) >= 3 && strings.HasPrefix(option, name)
+}
+
 func checkSafeArgs(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("%w: empty argument list", ErrUnsafeArgument)
@@ -283,15 +294,16 @@ func checkSafeArgs(args []string) error {
 		if subCmd == "hash-object" && (a == "--path" || strings.HasPrefix(a, "--path=")) {
 			return fmt.Errorf("%w: hash-object --path is disallowed in generic Runner", ErrUnsafeArgument)
 		}
-		if subCmd == "cat-file" && (a == "--filters" || strings.HasPrefix(a, "--filters=") ||
-			a == "--textconv" || strings.HasPrefix(a, "--textconv=")) {
+		if subCmd == "cat-file" && (isLongOptionAbbreviation(a, "--filters") ||
+			isLongOptionAbbreviation(a, "--textconv")) {
 			return fmt.Errorf("%w: cat-file %s is disallowed", ErrUnsafeArgument, a)
 		}
 		if subCmd == "commit" && (a == "-e" || a == "--edit") {
 			return fmt.Errorf("%w: commit interactive editor flag %q is disallowed", ErrUnsafeArgument, a)
 		}
-		if subCmd == "diff" && (a == "--ext-diff" || strings.HasPrefix(a, "--ext-diff=") ||
-			a == "--textconv" || strings.HasPrefix(a, "--textconv=")) {
+		if subCmd == "diff" && (isLongOptionAbbreviation(a, "--ext-diff") ||
+			isLongOptionAbbreviation(a, "--textconv") || isLongOptionAbbreviation(a, "--submodule") ||
+			isLongOptionAbbreviation(a, "--ignore-submodules")) {
 			return fmt.Errorf("%w: diff external execution option %q is disallowed in generic Runner", ErrUnsafeArgument, a)
 		}
 		if (subCmd == "commit" || subCmd == "commit-tree") &&
