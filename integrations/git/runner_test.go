@@ -662,11 +662,19 @@ func TestRun_RejectsAbbreviatedExecutableOptions(t *testing.T) {
 		{"diff", "--sub=diff"},
 		{"hash-object", "--path=some/file.txt", "some/file.txt"},
 		{"hash-object", "--pat=x.foo", "--stdin"},
+		{"hash-object", "-w", "/etc/hosts"},
+		{"hash-object", "--stdin-paths"},
 		{"commit", "--gpg-sign", "-m", "msg"},
 		{"commit", "--gpg-s", "-m", "msg"},
 		{"commit-tree", "--gpg-s", "tree", "-m", "msg"},
+		{"commit", "--trailer", "foo:bar"},
+		{"commit", "--trail", "foo:bar"},
+		{"commit-tree", "tree", "-F", "/etc/secret"},
+		{"commit-tree", "tree", "--fi=/etc/secret"},
 		{"diff", "--no-index", "/etc/hosts", "/etc/passwd"},
 		{"diff", "--no-i", "/etc/hosts", "/etc/passwd"},
+		{"diff", "--output=/tmp/result"},
+		{"diff", "--out=/tmp/result"},
 	} {
 		if err := checkSafeArgs(args); err == nil || !errors.Is(err, ErrUnsafeArgument) {
 			t.Errorf("checkSafeArgs(%q) = %v, want ErrUnsafeArgument", args, err)
