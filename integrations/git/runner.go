@@ -291,7 +291,7 @@ func checkSafeArgs(args []string) error {
 		if a == "--help" || a == "-h" || strings.HasPrefix(a, "--help=") {
 			return fmt.Errorf("%w: help flags are disallowed: %q", ErrUnsafeArgument, a)
 		}
-		if subCmd == "hash-object" && (a == "--path" || strings.HasPrefix(a, "--path=")) {
+		if subCmd == "hash-object" && isLongOptionAbbreviation(a, "--path") {
 			return fmt.Errorf("%w: hash-object --path is disallowed in generic Runner", ErrUnsafeArgument)
 		}
 		if subCmd == "cat-file" && (isLongOptionAbbreviation(a, "--filters") ||
@@ -303,11 +303,11 @@ func checkSafeArgs(args []string) error {
 		}
 		if subCmd == "diff" && (isLongOptionAbbreviation(a, "--ext-diff") ||
 			isLongOptionAbbreviation(a, "--textconv") || isLongOptionAbbreviation(a, "--submodule") ||
-			isLongOptionAbbreviation(a, "--ignore-submodules")) {
+			isLongOptionAbbreviation(a, "--ignore-submodules") || isLongOptionAbbreviation(a, "--no-index")) {
 			return fmt.Errorf("%w: diff external execution option %q is disallowed in generic Runner", ErrUnsafeArgument, a)
 		}
 		if (subCmd == "commit" || subCmd == "commit-tree") &&
-			(a == "-S" || strings.HasPrefix(a, "-S") || a == "--gpg-sign" || strings.HasPrefix(a, "--gpg-sign=") ||
+			(a == "-S" || strings.HasPrefix(a, "-S") || isLongOptionAbbreviation(a, "--gpg-sign") ||
 				a == "--no-gpg-sign") {
 			return fmt.Errorf("%w: commit signing option %q is disallowed in generic Runner", ErrUnsafeArgument, a)
 		}
