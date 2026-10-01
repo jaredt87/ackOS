@@ -652,6 +652,21 @@ func TestRun_RejectsEmptyArguments(t *testing.T) {
 	}
 }
 
+func TestRun_RejectsAbbreviatedExecutableOptions(t *testing.T) {
+	for _, args := range [][]string{
+		{"cat-file", "--filter", "HEAD:file.txt"},
+		{"cat-file", "--fil", "HEAD:file.txt"},
+		{"cat-file", "--textc", "HEAD:file.txt"},
+		{"diff", "--textc"},
+		{"diff", "--submodule=diff"},
+		{"diff", "--sub=diff"},
+	} {
+		if err := checkSafeArgs(args); err == nil || !errors.Is(err, ErrUnsafeArgument) {
+			t.Errorf("checkSafeArgs(%q) = %v, want ErrUnsafeArgument", args, err)
+		}
+	}
+}
+
 func TestRun_RejectsTextconvAndSigningOptions(t *testing.T) {
 	for _, args := range [][]string{
 		{"diff", "--textconv"},
