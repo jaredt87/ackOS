@@ -291,19 +291,31 @@ func checkSafeArgs(args []string) error {
 		if a == "--help" || a == "-h" || strings.HasPrefix(a, "--help=") {
 			return fmt.Errorf("%w: help flags are disallowed: %q", ErrUnsafeArgument, a)
 		}
-		if subCmd == "hash-object" && isLongOptionAbbreviation(a, "--path") {
-			return fmt.Errorf("%w: hash-object --path is disallowed in generic Runner", ErrUnsafeArgument)
+		if subCmd == "hash-object" {
+			if isLongOptionAbbreviation(a, "--path") || a == "--stdin-paths" {
+				return fmt.Errorf("%w: hash-object path-based input is disallowed in generic Runner", ErrUnsafeArgument)
+			}
+			if !strings.HasPrefix(a, "-") {
+				return fmt.Errorf("%w: hash-object file operands are disallowed; use --stdin", ErrUnsafeArgument)
+			}
 		}
 		if subCmd == "cat-file" && (isLongOptionAbbreviation(a, "--filters") ||
 			isLongOptionAbbreviation(a, "--textconv")) {
 			return fmt.Errorf("%w: cat-file %s is disallowed", ErrUnsafeArgument, a)
+		}
+		if (subCmd == "commit" || subCmd == "commit-tree") && isLongOptionAbbreviation(a, "--trailer") {
+			return fmt.Errorf("%w: commit trailer command options are disallowed in generic Runner", ErrUnsafeArgument)
+		}
+		if subCmd == "commit-tree" && isLongOptionAbbreviation(a, "--file") {
+			return fmt.Errorf("%w: commit-tree file-backed messages are disallowed; use -m", ErrUnsafeArgument)
 		}
 		if subCmd == "commit" && (a == "-e" || a == "--edit") {
 			return fmt.Errorf("%w: commit interactive editor flag %q is disallowed", ErrUnsafeArgument, a)
 		}
 		if subCmd == "diff" && (isLongOptionAbbreviation(a, "--ext-diff") ||
 			isLongOptionAbbreviation(a, "--textconv") || isLongOptionAbbreviation(a, "--submodule") ||
-			isLongOptionAbbreviation(a, "--ignore-submodules") || isLongOptionAbbreviation(a, "--no-index")) {
+			isLongOptionAbbreviation(a, "--ignore-submodules") || isLongOptionAbbreviation(a, "--no-index") ||
+			isLongOptionAbbreviation(a, "--output")) {
 			return fmt.Errorf("%w: diff external execution option %q is disallowed in generic Runner", ErrUnsafeArgument, a)
 		}
 		if (subCmd == "commit" || subCmd == "commit-tree") &&
