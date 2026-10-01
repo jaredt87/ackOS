@@ -306,7 +306,7 @@ func checkSafeArgs(args []string) error {
 		if (subCmd == "commit" || subCmd == "commit-tree") && isLongOptionAbbreviation(a, "--trailer") {
 			return fmt.Errorf("%w: commit trailer command options are disallowed in generic Runner", ErrUnsafeArgument)
 		}
-		if subCmd == "commit-tree" && isLongOptionAbbreviation(a, "--file") {
+		if subCmd == "commit-tree" && (a == "-F" || strings.HasPrefix(a, "-F") || isLongOptionAbbreviation(a, "--file")) {
 			return fmt.Errorf("%w: commit-tree file-backed messages are disallowed; use -m", ErrUnsafeArgument)
 		}
 		if subCmd == "commit" && (a == "-e" || a == "--edit") {
