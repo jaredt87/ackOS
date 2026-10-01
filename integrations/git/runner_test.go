@@ -651,3 +651,22 @@ func TestRun_RejectsEmptyArguments(t *testing.T) {
 		t.Fatalf("expected ErrUnsafeArgument, got: %v", err)
 	}
 }
+
+
+func TestRun_RejectsTextconvAndSigningOptions(t *testing.T) {
+	for _, args := range [][]string{
+		{"diff", "--textconv"},
+		{"diff", "--textconv=driver"},
+		{"commit", "-S"},
+		{"commit", "-Skey"},
+		{"commit", "--gpg-sign"},
+		{"commit", "--gpg-sign=key"},
+		{"commit", "--no-gpg-sign"},
+		{"commit-tree", "-S"},
+		{"commit-tree", "--gpg-sign=key"},
+	} {
+		if err := checkSafeArgs(args); err == nil || !errors.Is(err, ErrUnsafeArgument) {
+			t.Errorf("checkSafeArgs(%q) = %v, want ErrUnsafeArgument", args, err)
+		}
+	}
+}
