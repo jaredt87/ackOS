@@ -660,6 +660,13 @@ func TestRun_RejectsAbbreviatedExecutableOptions(t *testing.T) {
 		{"diff", "--textc"},
 		{"diff", "--submodule=diff"},
 		{"diff", "--sub=diff"},
+		{"hash-object", "--path=some/file.txt", "some/file.txt"},
+		{"hash-object", "--pat=x.foo", "--stdin"},
+		{"commit", "--gpg-sign", "-m", "msg"},
+		{"commit", "--gpg-s", "-m", "msg"},
+		{"commit-tree", "--gpg-s", "tree", "-m", "msg"},
+		{"diff", "--no-index", "/etc/hosts", "/etc/passwd"},
+		{"diff", "--no-i", "/etc/hosts", "/etc/passwd"},
 	} {
 		if err := checkSafeArgs(args); err == nil || !errors.Is(err, ErrUnsafeArgument) {
 			t.Errorf("checkSafeArgs(%q) = %v, want ErrUnsafeArgument", args, err)
