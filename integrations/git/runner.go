@@ -113,6 +113,10 @@ func newRunnerWithGitPath(repoPath, gitPath string) (*Runner, error) {
 			"-c", "core.hooksPath=/dev/null",
 			"-c", "core.fsmonitor=false",
 			"-c", "core.editor=false",
+			"-c", "commit.gpgSign=false",
+			"-c", "tag.gpgSign=false",
+			"--git-dir", gitDirAbs,
+			"--work-tree", abs,
 		},
 		env: sanitizedEnv(),
 	}, nil
@@ -220,7 +224,7 @@ func (r *Runner) Run(ctx context.Context, args ...string) (Result, error) {
 	fullArgs = append(fullArgs, r.baseArgs...)
 	fullArgs = append(fullArgs, args[0])
 	if args[0] == "diff" {
-		fullArgs = append(fullArgs, "--no-ext-diff")
+		fullArgs = append(fullArgs, "--no-ext-diff", "--no-textconv")
 	}
 	fullArgs = append(fullArgs, args[1:]...)
 
@@ -286,8 +290,14 @@ func checkSafeArgs(args []string) error {
 		if subCmd == "commit" && (a == "-e" || a == "--edit") {
 			return fmt.Errorf("%w: commit interactive editor flag %q is disallowed", ErrUnsafeArgument, a)
 		}
-		if subCmd == "diff" && (a == "--ext-diff" || strings.HasPrefix(a, "--ext-diff=")) {
-			return fmt.Errorf("%w: diff --ext-diff is disallowed in generic Runner", ErrUnsafeArgument)
+		if subCmd == "diff" && (a == "--ext-diff" || strings.HasPrefix(a, "--ext-diff=") ||
+			a == "--textconv" || strings.HasPrefix(a, "--textconv=")) {
+			return fmt.Errorf("%w: diff external execution option %q is disallowed in generic Runner", ErrUnsafeArgument, a)
+		}
+		if (subCmd == "commit" || subCmd == "commit-tree") &&
+			(a == "-S" || strings.HasPrefix(a, "-S") || a == "--gpg-sign" || strings.HasPrefix(a, "--gpg-sign=") ||
+				a == "--no-gpg-sign") {
+			return fmt.Errorf("%w: commit signing option %q is disallowed in generic Runner", ErrUnsafeArgument, a)
 		}
 		for _, prefix := range unsafeArgPrefixes {
 			if a == prefix || strings.HasPrefix(a, prefix+"=") {
