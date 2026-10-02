@@ -1,17 +1,4 @@
-// Package git provides an isolated Runner for executing git subprocesses.
-//
-// This package intentionally does NOT provide a Provider, a plugin
-// interface, or working-tree operations. It proves one thing: that git
-// subprocess execution can be sandboxed against the failure modes PR #13
-// surfaced. PR #16 decides what shape the real Provider needs on top of
-// this — building that shape now would be guessing at a caller that
-// doesn't exist yet.
-//
-// Path arguments are intentionally not interpreted by Runner. Run accepts
-// git command arguments, not typed path arguments, so pathspec-magic
-// safety (leading `:`, `!`, `*` in a path being reinterpreted by git)
-// belongs at the eventual Git provider call sites, where the caller knows
-// a given argument is a literal path. See PR #15 notes for the reasoning.
+// Package git provides a narrowly scoped, repository-bound Git plumbing runner.
 package git
 
 import (
@@ -25,310 +12,81 @@ import (
 	"strings"
 )
 
-// ErrUnsafeArgument is returned when a caller-supplied git argument would
-// override one of the Runner's security-boundary settings.
-var ErrUnsafeArgument = errors.New("git: argument would override a runner security boundary")
+var (
+	ErrUnsafeArgument = errors.New("git: unsafe argument")
+	ErrNotRepoRoot = errors.New("git: path is not a git repository root")
+)
 
-// ErrNotRepoRoot is returned by NewRunner when the supplied path does not
-// resolve to a git repository root — e.g. a subdirectory of a repo, an
-// unrelated directory, or a path git can't identify at all.
-var ErrNotRepoRoot = errors.New("git: path is not a git repository root")
-
-var allowedCommands = map[string]bool{
-	"rev-parse":   true,
-	"hash-object": true,
-	"cat-file":    true,
-	"write-tree":  true,
-	"commit-tree": true,
-	"diff":        true,
-	"status":      true,
-	"commit":      true,
-}
-
-var unsafeArgPrefixes = []string{
-	"-C",
-	"--git-dir",
-	"--work-tree",
-	"-c",
-	"--config",
-	"--no-replace-objects",
-	"--replace-objects",
-	"--exec-path",
-	"--config-env",
-	"--bare",
-}
-
-// Result is the outcome of one Runner.Run call.
 type Result struct {
-	Stdout   string
-	Stderr   string
+	Stdout string
+	Stderr string
 	ExitCode int
 }
 
-// Runner executes git subprocesses against exactly one repository, inside a
-// clean-room environment. It supports plumbing-style, working-tree-free
-// execution (hash-object, write-tree, commit-tree, and similar) — the same
-// execution model the existing Git provider already uses.
 type Runner struct {
-	repoPath  string
-	gitPath   string
-	baseArgs  []string
-	env       []string
-	gitDirAbs string
+	root string
+	gitDir string
+	git string
 }
 
-// NewRunner resolves the git executable, validates that repoPath is
-// actually a git repository root (not a subdirectory, not merely a path
-// that exists), and anchors a Runner to it.
-func NewRunner(repoPath string) (*Runner, error) {
-	gitPath, err := exec.LookPath("git")
-	if err != nil {
-		return nil, fmt.Errorf("git: resolving git executable: %w", err)
-	}
-	return newRunnerWithGitPath(repoPath, gitPath)
+var commands = map[string]bool{
+	"rev-parse": true, "hash-object": true, "cat-file": true,
+	"write-tree": true, "commit-tree": true, "update-ref": true,
 }
 
-func newRunnerWithGitPath(repoPath, gitPath string) (*Runner, error) {
-	resolved, err := filepath.EvalSymlinks(repoPath)
-	if err != nil {
-		return nil, fmt.Errorf("git: resolving repo path: %w", err)
-	}
-	abs, err := filepath.Abs(resolved)
-	if err != nil {
-		return nil, fmt.Errorf("git: making repo path absolute: %w", err)
-	}
-
-	gitDirAbs, err := validateRepoRoot(gitPath, abs)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Runner{
-		repoPath:  abs,
-		gitPath:   gitPath,
-		gitDirAbs: gitDirAbs,
-		baseArgs: []string{
-			"--no-replace-objects",
-			"-C", abs,
-			"-c", "core.hooksPath=/dev/null",
-			"-c", "core.fsmonitor=false",
-			"-c", "core.editor=false",
-			"-c", "commit.gpgSign=false",
-			"-c", "tag.gpgSign=false",
-			"-c", "diff.submodule=short",
-			"--git-dir", gitDirAbs,
-			"--work-tree", abs,
-		},
-		env: sanitizedEnv(),
-	}, nil
-}
-
-func validateRepoRoot(gitPath, abs string) (string, error) {
-	cmd := exec.Command(gitPath, "-C", abs, "rev-parse", "--git-dir")
-	cmd.Env = sanitizedEnv()
+func NewRunner(root string) (*Runner, error) {
+	git, err := exec.LookPath("git")
+	if err != nil { return nil, fmt.Errorf("git: locate executable: %w", err) }
+	root, err = filepath.Abs(root)
+	if err != nil { return nil, err }
+	root, err = filepath.EvalSymlinks(root)
+	if err != nil { return nil, err }
+	cmd := exec.Command(git, "-C", root, "rev-parse", "--show-toplevel", "--absolute-git-dir")
+	cmd.Env = cleanEnv()
 	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("%w: %s (%v)", ErrNotRepoRoot, abs, err)
-	}
-
-	gitDir := strings.TrimSpace(string(out))
-	if !filepath.IsAbs(gitDir) {
-		gitDir = filepath.Join(abs, gitDir)
-	}
-	resolvedGitDir, err := filepath.EvalSymlinks(gitDir)
-	if err != nil {
-		return "", fmt.Errorf("git: resolving git-dir symlinks: %w", err)
-	}
-	gitDirAbs, err := filepath.Abs(resolvedGitDir)
-	if err != nil {
-		return "", fmt.Errorf("git: making git-dir path absolute: %w", err)
-	}
-
-	resolvedRoot, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return "", fmt.Errorf("git: resolving repository root symlinks: %w", err)
-	}
-	bareForm, err := filepath.Abs(resolvedRoot)
-	if err != nil {
-		return "", fmt.Errorf("git: making repository root absolute: %w", err)
-	}
-
-	nonBareTarget := filepath.Join(abs, ".git")
-	nonBareForm, err := filepath.EvalSymlinks(nonBareTarget)
-	if err != nil {
-		return "", fmt.Errorf("git: resolving repository metadata symlinks: %w", err)
-	}
-	nonBareForm, err = filepath.Abs(nonBareForm)
-	if err != nil {
-		return "", fmt.Errorf("git: making repository metadata path absolute: %w", err)
-	}
-
-	if gitDirAbs != bareForm && gitDirAbs != nonBareForm {
-		return "", fmt.Errorf("%w: %s resolves to git-dir %s, not its own root", ErrNotRepoRoot, abs, gitDirAbs)
-	}
-	if gitDirAbs == nonBareForm && nonBareForm != filepath.Join(bareForm, ".git") {
-		return "", fmt.Errorf("%w: %s uses git metadata outside its own root", ErrNotRepoRoot, abs)
-	}
-	if err := validateGitMetadataSymlinks(gitDirAbs); err != nil {
-		return "", err
-	}
-	return gitDirAbs, nil
+	if err != nil { return nil, fmt.Errorf("%w: %s: %v", ErrNotRepoRoot, root, err) }
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 2 { return nil, ErrNotRepoRoot }
+	top, _ := filepath.EvalSymlinks(lines[0])
+	if filepath.Clean(top) != filepath.Clean(root) { return nil, fmt.Errorf("%w: %s", ErrNotRepoRoot, root) }
+	return &Runner{root: root, gitDir: lines[1], git: git}, nil
 }
 
-func validateGitMetadataSymlinks(gitDirAbs string) error {
-	return filepath.WalkDir(gitDirAbs, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return fmt.Errorf("git: inspecting metadata path %s: %w", path, err)
-		}
-		if d.Type()&os.ModeSymlink == 0 {
-			return nil
-		}
-
-		resolved, err := filepath.EvalSymlinks(path)
-		if err != nil {
-			return fmt.Errorf("git: resolving metadata symlink %s: %w", path, err)
-		}
-
-		rel, err := filepath.Rel(gitDirAbs, resolved)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return fmt.Errorf("%w: git metadata symlink at %q escapes root to %q", ErrNotRepoRoot, path, resolved)
-		}
-		return nil
-	})
+func cleanEnv() []string {
+	return []string{"PATH=/usr/bin:/bin", "HOME=/nonexistent", "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "LC_ALL=C", "TZ=UTC"}
 }
 
-func sanitizedEnv() []string {
-	return []string{
-		"PATH=/usr/bin:/bin",
-		"HOME=/nonexistent",
-		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_CONFIG_GLOBAL=/dev/null",
-		"TZ=UTC",
-		"LC_ALL=C",
-		"GIT_TERMINAL_PROMPT=0",
-		"GIT_EDITOR=false",
-		"VISUAL=false",
-		"EDITOR=false",
-	}
-}
-
+// Run accepts only explicitly supported plumbing commands. Callers must pass
+// structured, validated operands; this method never invokes a shell.
 func (r *Runner) Run(ctx context.Context, args ...string) (Result, error) {
-	if err := checkSafeArgs(args); err != nil {
-		return Result{}, err
+	if len(args) == 0 || !commands[args[0]] { return Result{}, fmt.Errorf("%w: unsupported command", ErrUnsafeArgument) }
+	for _, a := range args {
+		if a == "" || strings.HasPrefix(a, "--git-dir") || strings.HasPrefix(a, "--work-tree") ||
+			a == "-C" || a == "-c" || strings.HasPrefix(a, "--config") ||
+			strings.HasPrefix(a, "--exec-path") || strings.HasPrefix(a, "--replace-objects") ||
+			a == "--no-replace-objects" {
+			return Result{}, fmt.Errorf("%w: %q", ErrUnsafeArgument, a)
+		}
 	}
-
-	if err := validateGitMetadataSymlinks(r.gitDirAbs); err != nil {
-		return Result{}, fmt.Errorf("git: runtime metadata revalidation failed: %w", err)
-	}
-
-	fullArgs := make([]string, 0, len(r.baseArgs)+len(args)+1)
-	fullArgs = append(fullArgs, r.baseArgs...)
-	fullArgs = append(fullArgs, args[0])
-	if args[0] == "diff" {
-		fullArgs = append(fullArgs, "--no-ext-diff", "--no-textconv")
-	}
-	fullArgs = append(fullArgs, args[1:]...)
-
-	cmd := exec.CommandContext(ctx, r.gitPath, fullArgs...)
-	cmd.Env = r.env
-	cmd.Dir = r.repoPath
-
+	full := []string{"--no-replace-objects", "-C", r.root,
+		"-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+		"-c", "commit.gpgSign=false", "--git-dir", r.gitDir}
+	full = append(full, args...)
+	cmd := exec.CommandContext(ctx, r.git, full...)
+	cmd.Dir, cmd.Env = r.root, cleanEnv()
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	runErr := cmd.Run()
-
-	result := Result{
-		Stdout: stdout.String(),
-		Stderr: stderr.String(),
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	res := Result{Stdout: stdout.String(), Stderr: stderr.String()}
+	if err == nil { return res, nil }
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		res.ExitCode = exit.ExitCode()
+		return res, fmt.Errorf("git %s: %w: %s", args[0], err, res.Stderr)
 	}
-
-	var exitErr *exec.ExitError
-	if errors.As(runErr, &exitErr) {
-		result.ExitCode = exitErr.ExitCode()
-		if ctx.Err() != nil {
-			return result, ctx.Err()
-		}
-		return result, fmt.Errorf("git %s: %w: %s", strings.Join(args, " "), runErr, result.Stderr)
-	}
-	if runErr != nil {
-		if ctx.Err() != nil {
-			return result, ctx.Err()
-		}
-		return result, fmt.Errorf("git %s: %w", strings.Join(args, " "), runErr)
-	}
-
-	// Execution succeeded completely (runErr == nil). Preserve success even if
-	// the context expired in the race window after the process completed.
-	return result, nil
+	if ctx.Err() != nil { return res, ctx.Err() }
+	return res, fmt.Errorf("git %s: %w", args[0], err)
 }
 
-// isLongOptionAbbreviation reports whether arg names a long option using its
-// full spelling or a unique-prefix spelling. It also handles --option=value.
-func isLongOptionAbbreviation(arg, option string) bool {
-	if !strings.HasPrefix(arg, "--") {
-		return false
-	}
-	name := strings.SplitN(arg, "=", 2)[0]
-	return len(name) >= 3 && strings.HasPrefix(option, name)
-}
-
-func checkSafeArgs(args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("%w: empty argument list", ErrUnsafeArgument)
-	}
-
-	subCmd := args[0]
-	if strings.HasPrefix(subCmd, "-") {
-		return fmt.Errorf("%w: leading global options are not allowed: %q", ErrUnsafeArgument, subCmd)
-	}
-	if !allowedCommands[subCmd] {
-		return fmt.Errorf("%w: subcommand %q is not in the allowed plumbing set", ErrUnsafeArgument, subCmd)
-	}
-
-	for _, a := range args[1:] {
-		if a == "--help" || a == "-h" || strings.HasPrefix(a, "--help=") {
-			return fmt.Errorf("%w: help flags are disallowed: %q", ErrUnsafeArgument, a)
-		}
-		if subCmd == "hash-object" {
-			if isLongOptionAbbreviation(a, "--path") || a == "--stdin-paths" {
-				return fmt.Errorf("%w: hash-object path-based input is disallowed in generic Runner", ErrUnsafeArgument)
-			}
-			if !strings.HasPrefix(a, "-") {
-				return fmt.Errorf("%w: hash-object file operands are disallowed; use --stdin", ErrUnsafeArgument)
-			}
-		}
-		if subCmd == "cat-file" && (isLongOptionAbbreviation(a, "--filters") ||
-			isLongOptionAbbreviation(a, "--textconv")) {
-			return fmt.Errorf("%w: cat-file %s is disallowed", ErrUnsafeArgument, a)
-		}
-		if (subCmd == "commit" || subCmd == "commit-tree") && isLongOptionAbbreviation(a, "--trailer") {
-			return fmt.Errorf("%w: commit trailer command options are disallowed in generic Runner", ErrUnsafeArgument)
-		}
-		if subCmd == "commit-tree" && (a == "-F" || strings.HasPrefix(a, "-F") || isLongOptionAbbreviation(a, "--file")) {
-			return fmt.Errorf("%w: commit-tree file-backed messages are disallowed; use -m", ErrUnsafeArgument)
-		}
-		if subCmd == "commit" && (a == "-e" || a == "--edit") {
-			return fmt.Errorf("%w: commit interactive editor flag %q is disallowed", ErrUnsafeArgument, a)
-		}
-		if subCmd == "diff" && (isLongOptionAbbreviation(a, "--ext-diff") ||
-			isLongOptionAbbreviation(a, "--textconv") || isLongOptionAbbreviation(a, "--submodule") ||
-			isLongOptionAbbreviation(a, "--ignore-submodules") || isLongOptionAbbreviation(a, "--no-index") ||
-			isLongOptionAbbreviation(a, "--output")) {
-			return fmt.Errorf("%w: diff external execution option %q is disallowed in generic Runner", ErrUnsafeArgument, a)
-		}
-		if (subCmd == "commit" || subCmd == "commit-tree") &&
-			(a == "-S" || strings.HasPrefix(a, "-S") || isLongOptionAbbreviation(a, "--gpg-sign") ||
-				a == "--no-gpg-sign") {
-			return fmt.Errorf("%w: commit signing option %q is disallowed in generic Runner", ErrUnsafeArgument, a)
-		}
-		for _, prefix := range unsafeArgPrefixes {
-			if a == prefix || strings.HasPrefix(a, prefix+"=") {
-				return fmt.Errorf("%w: %q", ErrUnsafeArgument, a)
-			}
-		}
-	}
-
-	return nil
-}
+var _ = os.ErrNotExist
