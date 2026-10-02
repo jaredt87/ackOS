@@ -47,26 +47,13 @@ Recovery applies the same temporal boundary. An observation used to recover from
 
 Only one verification callback may be active for an execution attempt. This prevents competing verifiers from racing one another and moving a committed lifecycle backward into recovery.
 
-## Git Execution Architecture & Security Boundary
+## Git Execution Boundary
 
-The `git.Runner` package provides low-level, sandboxed subprocess execution for Git plumbing commands against a single repository root. It is an integration boundary, not a Provider or kernel abstraction.
+The Git integration is a small host-side adapter around a repository-bound subprocess runner. It is not part of the kernel and does not define a provider or plugin abstraction.
 
-### Guarantees Enforced by Runner
+The runner resolves Git once, validates that its configured directory is the repository root, uses a minimal environment, disables hooks, fsmonitor, and replacement objects, and invokes Git without a shell. Its public surface is limited to a short list of plumbing commands. Callers are responsible for validating command-specific operands; this is not a general-purpose command execution API.
 
-- **Repository Root Anchoring:** Validates that target paths resolve directly to a repository root and rejects any `.git` metadata symlink that escapes the canonical Git metadata root, including nested refs and object fan-out paths. Metadata is also revalidated immediately before each Git execution to mitigate post-construction symlink mutations; this is defense-in-depth, not an OS-level lifetime confinement guarantee.
-- **Clean-Room Environment:** Constructs a minimal, explicit process environment (`sanitizedEnv`), discarding ambient environment variables.
-- **Hardened Execution Flags:** Enforces `core.hooksPath=/dev/null`, `core.fsmonitor=false`, `core.editor=false`, `commit.gpgSign=false`, `tag.gpgSign=false`, `--no-replace-objects`, and explicit `--git-dir`/`--work-tree` pins to the validated repository; `diff` receives `--no-ext-diff` and `--no-textconv`, and repository submodule diff formatting is pinned to `short` to prevent nested external diff execution.
-- **Argument Boundaries:** Rejects caller-supplied global override flags including `-C`, `--git-dir`, `--work-tree`, `-c`, `--config`, `--exec-path`, `--config-env`, `--bare`, and replacement-object controls. It also rejects command options that can invoke external programs, including `cat-file --filters` (including accepted abbreviated spellings), `cat-file --textconv`, `hash-object --path` and file-backed input modes, `commit-tree` file-backed messages, executable commit trailer options, `diff --textconv`, inline submodule-diff overrides, `diff --no-index`, `diff --output`, and commit-signing/editor options (including accepted abbreviated spellings). Editor environment variables are neutralized as defense-in-depth.
-- **Subcommand Allowlist:** `Runner.Run` accepts only the explicitly supported Git commands (`rev-parse`, `hash-object`, `cat-file`, `write-tree`, `commit-tree`, `diff`, `status`, and `commit`). `update-ref` is intentionally excluded from the generic Runner surface. Repository-defined aliases and other Git subcommands are rejected before process dispatch.
-- **Deterministic Executable Resolution:** Resolves the `git` binary path once at construction time (`exec.LookPath`) and executes via that resolved path.
-- **Direct Process Cancellation:** Uses `exec.CommandContext` so cancellation terminates the direct Git subprocess. A successfully completed command remains successful even if the context expires in the race window after process completion.
-
-### Intentionally Deferred Boundaries
-
-- **Process-Group Cleanup:** `Runner` manages and cancels the direct Git process spawned via `exec.CommandContext`. Cleanup of descendant process groups is deferred.
-- **Pathspec Interpretation:** `Runner` passes arguments directly to Git without evaluating pathspec magic (`:`, `!`, `*`). Path sanitization remains the responsibility of caller call sites. The generic Runner rejects help options, file-backed `hash-object` inputs (including `--path` and `--stdin-paths`), `commit-tree -F` file-backed messages, executable `commit --trailer` options, `cat-file --filters`, and `cat-file --textconv` so repository-controlled filter drivers, trailer commands, and text conversion drivers cannot execute through this boundary. `diff --no-index` and `diff --output` are also rejected to prevent external file reads and writes. Interactive commit editing is likewise rejected with `-e`/`--edit`. When the eventual Git Provider needs path-based hashing or filtered object access, it must establish an explicit safe filtering policy rather than relying on the generic Runner.
-- **Metadata Lifetime Confinement:** Metadata symlinks are revalidated before each `Run` call, but the validation is not held open for the Runner's lifetime; a symlink swap between validation and `exec.Command` starting is not prevented. This is a residual filesystem race, not an OS-level confinement guarantee.
-- **Provider & Abstraction Layers:** Higher-level Provider interfaces, working-tree operations, and plugin abstractions are deferred to PR #16.
+The runner does not provide working-tree mutation, provider migration, independent read/verification, process-group confinement, or lifetime filesystem confinement. Those concerns remain outside this PR and must be designed at the relevant integration boundary rather than added to the kernel.
 
 ## V0 guarantees and boundaries
 
