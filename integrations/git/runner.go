@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -89,4 +88,3 @@ func (r *Runner) Run(ctx context.Context, args ...string) (Result, error) {
 	return res, fmt.Errorf("git %s: %w", args[0], err)
 }
 
-var _ = os.ErrNotExist
