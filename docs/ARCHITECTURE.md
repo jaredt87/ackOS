@@ -47,6 +47,14 @@ Recovery applies the same temporal boundary. An observation used to recover from
 
 Only one verification callback may be active for an execution attempt. This prevents competing verifiers from racing one another and moving a committed lifecycle backward into recovery.
 
+## Git Execution Boundary
+
+The Git integration is a small host-side adapter around a repository-bound subprocess runner. It is not part of the kernel and does not define a provider or plugin abstraction.
+
+The runner resolves Git once, validates that its configured directory is the repository root, uses a minimal environment, disables hooks, fsmonitor, and replacement objects, and invokes Git without a shell. Its public surface is limited to a short list of plumbing commands. Callers are responsible for validating command-specific operands; this is not a general-purpose command execution API.
+
+The runner does not provide working-tree mutation, provider migration, independent read/verification, process-group confinement, or lifetime filesystem confinement. Those concerns remain outside this PR and must be designed at the relevant integration boundary rather than added to the kernel.
+
 ## V0 guarantees and boundaries
 
 V0 is a single-process, in-memory implementation. Authority consumption is atomic within the runtime and concurrent attempts cannot both cross the same execution boundary. CAS is atomic within the in-memory state store.
