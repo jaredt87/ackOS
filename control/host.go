@@ -283,7 +283,7 @@ func (v providerVerifier) Verify(ctx context.Context, _ kernel.Transition, autho
 	request := v.request
 	request.ExecutionID = authority.ExecutionID
 	request.Before = Observation{
-		Resource: ResourceRef{ID: before.Subject, Fingerprint: before.State},
+		Resource:   ResourceRef{ID: before.Subject, Fingerprint: before.State},
 		ObservedAt: before.ObservedAt,
 	}
 	request.Execution = Execution{
