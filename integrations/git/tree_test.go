@@ -2,8 +2,8 @@ package git
 
 import (
 	"context"
-	"strings"
 	"testing"
+	"time"
 )
 
 func TestWriteTree(t *testing.T) {
@@ -55,15 +55,31 @@ func TestWriteTreeAcceptsGitlink(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blob, err := r.WriteBlob(context.Background(), []byte("not-a-commit"))
+	blob, err := r.WriteBlob(context.Background(), []byte("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := r.WriteTree(context.Background(), []TreeEntry{
+		{Mode: "100644", Path: "file.txt", Object: blob},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	when := time.Unix(0, 0).UTC()
+	commit, err := r.CommitTree(
+		context.Background(),
+		tree,
+		nil,
+		"message",
+		Identity{Name: "Author", Email: "author@example.com", When: when},
+		Identity{Name: "Committer", Email: "committer@example.com", When: when},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.WriteTree(context.Background(), []TreeEntry{
-		{Mode: "160000", Path: "submodule", Object: blob},
+		{Mode: "160000", Path: "submodule", Object: commit},
 	}); err != nil {
-		if !strings.Contains(err.Error(), "not a valid object") {
-			t.Fatal(err)
-		}
+		t.Fatal(err)
 	}
 }
