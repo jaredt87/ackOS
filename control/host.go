@@ -262,7 +262,12 @@ func (e providerExecutor) Execute(ctx context.Context, _ kernel.Transition, _ ke
 		return kernel.ExecutionResult{Message: err.Error()}
 	}
 	*e.execution = result
-	return kernel.ExecutionResult{Success: true, Message: "provider execution completed"}
+	return kernel.ExecutionResult{
+		ExecutionID: execution.ExecutionID,
+		Success:     true,
+		Message:     "provider execution completed",
+		Evidence:    append([]byte(nil), execution.Evidence...),
+	}
 }
 
 type providerVerifier struct {
@@ -274,8 +279,18 @@ type providerVerifier struct {
 	request      VerifyRequest
 }
 
-func (v providerVerifier) Verify(ctx context.Context, _ kernel.Transition, _ kernel.Authority) (kernel.Observation, error) {
-	result, err := v.host.verify(ctx, v.providerName, v.provider, v.request, v.invocation)
+func (v providerVerifier) Verify(ctx context.Context, _ kernel.Transition, authority kernel.Authority, before kernel.Observation, execution kernel.ExecutionResult) (kernel.Observation, error) {
+	request := v.request
+	request.ExecutionID = authority.ExecutionID
+	request.Before = Observation{
+		Resource: ResourceRef{ID: before.Subject, Fingerprint: before.State},
+		ObservedAt: before.ObservedAt,
+	}
+	request.Execution = Execution{
+		ExecutionID: execution.ExecutionID,
+		Evidence:   append([]byte(nil), execution.Evidence...),
+	}
+	result, err := v.host.verify(ctx, v.providerName, v.provider, request, v.invocation)
 	if err != nil {
 		return kernel.Observation{}, err
 	}
