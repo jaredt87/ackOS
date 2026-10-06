@@ -1,6 +1,7 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"sort"
@@ -26,7 +27,7 @@ func (r *Repository) WriteTree(ctx context.Context, entries []TreeEntry) (Object
 			return "", fmt.Errorf("git: duplicate tree path %q", copyEntries[i].Path)
 		}
 	}
-	var b strings.Builder
+	var b bytes.Buffer
 	for _, e := range copyEntries {
 		typ := "blob"
 		if e.Mode == "040000" || e.Mode == "40000" {
@@ -34,9 +35,9 @@ func (r *Repository) WriteTree(ctx context.Context, entries []TreeEntry) (Object
 		} else if e.Mode == "160000" {
 			typ = "commit"
 		}
-		fmt.Fprintf(&b, "%s %s %s\t%s\n", e.Mode, typ, e.Object, e.Path)
+		fmt.Fprintf(&b, "%s %s %s\t%s\x00", e.Mode, typ, e.Object, e.Path)
 	}
-	out, err := r.exec(ctx, []string{"mktree", "--missing"}, []byte(b.String()))
+	out, err := r.exec(ctx, []string{"mktree", "--missing", "-z"}, b.Bytes())
 	if err != nil {
 		return "", err
 	}
@@ -59,7 +60,7 @@ func validateTreePath(path string) error {
 		return fmt.Errorf("git: invalid tree path")
 	}
 	for _, part := range strings.Split(path, "/") {
-		if part == "." || part == ".." || part == ".git" {
+		if part == "." || part == ".." || strings.EqualFold(part, ".git") {
 			return fmt.Errorf("git: invalid tree path")
 		}
 	}
