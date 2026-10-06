@@ -93,9 +93,9 @@ func (r *Repository) ReadTree(ctx context.Context, id ObjectID) ([]TreeEntry, er
 			return nil, fmt.Errorf("git: invalid tree object: %w", err)
 		}
 		entries = append(entries, TreeEntry{
-			Mode: string(fields[0]),
+			Mode:   string(fields[0]),
 			Object: object,
-			Path: string(path),
+			Path:   string(path),
 		})
 	}
 	return entries, nil
