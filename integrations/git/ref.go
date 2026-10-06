@@ -16,7 +16,7 @@ func (r *Repository) UpdateRef(ctx context.Context, ref RefName, newValue, expec
 	if err := r.validateObject(expectedOld); err != nil {
 		return err
 	}
-	_, err := r.exec(ctx, []string{"update-ref", string(ref), string(newValue), string(expectedOld)}, nil)
+	_, err := r.exec(ctx, []string{"update-ref", "--no-deref", string(ref), string(newValue), string(expectedOld)}, nil)
 	return err
 }
 
