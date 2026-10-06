@@ -282,7 +282,7 @@ type Runtime struct {
 	executionDone        chan struct{}
 	executionCompletedAt time.Time
 	verificationActive   bool
-	executionResult      ExecutionResult
+	executionResult     ExecutionResult
 }
 
 func NewRuntime(initialRoot string, policy Policy) *Runtime {
