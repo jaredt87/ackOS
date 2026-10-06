@@ -18,7 +18,7 @@ func TestUpdateRefUsesExpectedOld(t *testing.T) {
 	}
 	if err := r.UpdateRef(
 		context.Background(),
-		RefName("refs/heads/test"),
+		RefName("refs/tags/test"),
 		newID,
 		id,
 	); err != nil {
@@ -26,7 +26,7 @@ func TestUpdateRefUsesExpectedOld(t *testing.T) {
 	}
 	if err := r.UpdateRef(
 		context.Background(),
-		RefName("refs/heads/test"),
+		RefName("refs/tags/test"),
 		id,
 		id,
 	); err == nil {
