@@ -49,7 +49,7 @@ func validateIdentity(i Identity) error {
 	if strings.TrimSpace(i.Name) == "" || strings.TrimSpace(i.Email) == "" || i.When.IsZero() {
 		return fmt.Errorf("missing commit identity")
 	}
-	if strings.ContainsAny(i.Name+"\n"+i.Email, "\r\n\x00") {
+	if strings.ContainsAny(i.Name+i.Email, "\r\n\x00") {
 		return fmt.Errorf("invalid commit identity")
 	}
 	return nil
