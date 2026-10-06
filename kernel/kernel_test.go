@@ -97,7 +97,7 @@ func TestVerifyReceivesAuthorizedObservationAndExecutionResult(t *testing.T) {
 	clockNow := now.Add(2 * time.Second)
 	r.clock = func() time.Time { return clockNow }
 	post := observation(t, "resource", "B", 2, now.Add(time.Second))
-	verifier := capturingVerifier{observation: post}
+	verifier := &capturingVerifier{observation: post}
 	if err := r.Verify(context.Background(), verifier); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ type capturingVerifier struct {
 	execution   ExecutionResult
 }
 
-func (v capturingVerifier) Verify(_ context.Context, _ Transition, _ Authority, before Observation, execution ExecutionResult) (Observation, error) {
+func (v *capturingVerifier) Verify(_ context.Context, _ Transition, _ Authority, before Observation, execution ExecutionResult) (Observation, error) {
 	v.before = before
 	v.execution = execution
 	return v.observation, nil
