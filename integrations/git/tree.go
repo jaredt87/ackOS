@@ -21,12 +21,14 @@ func (r *Repository) WriteTree(ctx context.Context, entries []TreeEntry) (Object
 			return "", err
 		}
 	}
-	sort.Slice(copyEntries, func(i, j int) bool { return treeKey(copyEntries[i]) < treeKey(copyEntries[j]) })
-	for i := 1; i < len(copyEntries); i++ {
-		if copyEntries[i-1].Path == copyEntries[i].Path {
-			return "", fmt.Errorf("git: duplicate tree path %q", copyEntries[i].Path)
+	seen := make(map[string]struct{}, len(copyEntries))
+	for _, e := range copyEntries {
+		if _, ok := seen[e.Path]; ok {
+			return "", fmt.Errorf("git: duplicate tree path %q", e.Path)
 		}
+		seen[e.Path] = struct{}{}
 	}
+	sort.Slice(copyEntries, func(i, j int) bool { return treeKey(copyEntries[i]) < treeKey(copyEntries[j]) })
 	var b bytes.Buffer
 	for _, e := range copyEntries {
 		typ := "blob"
