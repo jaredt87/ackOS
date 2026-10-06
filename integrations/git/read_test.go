@@ -76,10 +76,29 @@ func TestReadRejectsInvalidInputs(t *testing.T) {
 	if _, err := r.ReadRef(context.Background(), RefName("main")); err == nil {
 		t.Fatal("accepted unqualified ref")
 	}
+	if _, err := r.ReadRef(context.Background(), RefName("refs/heads/main@{1}")); err == nil {
+		t.Fatal("accepted reflog selector")
+	}
 	if _, err := r.ReadCommit(context.Background(), ObjectID("bad")); err == nil {
 		t.Fatal("accepted invalid commit id")
 	}
 	if _, err := r.ReadTree(context.Background(), ObjectID("bad")); err == nil {
 		t.Fatal("accepted invalid tree id")
+	}
+
+	blob, err := r.WriteBlob(context.Background(), []byte("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := r.WriteTree(context.Background(), []TreeEntry{{Mode: "100644", Path: "file.txt", Object: blob}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := r.CommitTree(context.Background(), tree, nil, "message\n", Identity{Name: "Author", Email: "author@example.com"}, Identity{Name: "Committer", Email: "committer@example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ReadTree(context.Background(), commit); err == nil {
+		t.Fatal("accepted commit as tree")
 	}
 }
