@@ -39,6 +39,8 @@ type Execution struct {
 type VerifyRequest struct {
 	ExecutionID string
 	Expected    ResourceRef
+	Before      Observation
+	Execution   Execution
 }
 
 type Verification struct {
