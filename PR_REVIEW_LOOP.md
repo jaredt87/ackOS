@@ -2,10 +2,10 @@
 
 This is the canonical workflow for reviewing and advancing pull requests.
 
-1. **Gate every action on the current PR HEAD and green CI.**
+1. **Gate review requests and merges on the current PR HEAD and green CI.**
    - Treat the current PR HEAD as authoritative.
    - Do not act on stale review state or stale commits.
-   - Do not proceed when required CI is not green.
+   - Diagnostic work and fixes are allowed when CI is red; restore green CI before requesting another review or merging.
 
 2. **Treat one Codex review as one complete review batch.**
    - Collect **all** findings from the review before taking action.
@@ -24,9 +24,10 @@ This is the canonical workflow for reviewing and advancing pull requests.
    - Run the required checks and get CI green again.
    - The next review must be against the resulting current HEAD.
 
-5. **Wait for GitHub to mark the completed review outdated.**
-   - Do not request another review while the prior review is still current.
-   - Once the review is outdated because the PR HEAD changed, request **exactly one** new `@codex` review.
+5. **After the batch changes the PR HEAD, request exactly one new review.**
+   - Do not request another review against the same HEAD.
+   - After the fixes are pushed and required CI is green, confirm the PR HEAD changed from the reviewed HEAD.
+   - Then request **exactly one** new `@codex` review.
 
 6. **Never review a stale HEAD.**
    - Every review request must target the current PR HEAD.
