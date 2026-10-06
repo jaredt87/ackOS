@@ -94,7 +94,8 @@ func TestReadRejectsInvalidInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	commit, err := r.CommitTree(context.Background(), tree, nil, "message\n", Identity{Name: "Author", Email: "author@example.com"}, Identity{Name: "Committer", Email: "committer@example.com"})
+	when := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	commit, err := r.CommitTree(context.Background(), tree, nil, "message\n", Identity{Name: "Author", Email: "author@example.com", When: when}, Identity{Name: "Committer", Email: "committer@example.com", When: when})
 	if err != nil {
 		t.Fatal(err)
 	}
