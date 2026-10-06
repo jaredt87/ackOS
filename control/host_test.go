@@ -214,12 +214,15 @@ func TestHostCallerCancellationAfterExecuteStillVerifies(t *testing.T) {
 		base: base,
 		executeFn: func(ctx context.Context, req control.ExecuteRequest) (control.Execution, error) {
 			result, err := base.Execute(ctx, req)
-			if err == nil {
-				cancel()
-			}
 			return result, err
 		},
-		verifyFn: base.Verify,
+		verifyFn: func(ctx context.Context, req control.VerifyRequest) (control.Verification, error) {
+			// Cancel only after Execute has returned to the Host and the
+			// verification phase has begun. This tests caller cancellation
+			// after successful execution, not a race inside the callback.
+			cancel()
+			return base.Verify(ctx, req)
+		},
 	}
 	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
 	host, err := control.NewHost(runtime, time.Second)
