@@ -32,7 +32,7 @@ func (r *Repository) CommitTree(ctx context.Context, tree ObjectID, parents []Ob
 		"GIT_AUTHOR_DATE=" + author.When.Format("2006-01-02T15:04:05-0700"),
 		"GIT_COMMITTER_NAME=" + committer.Name,
 		"GIT_COMMITTER_EMAIL=" + committer.Email,
-		"GIT_COMMITTER_DATE=" + committer.When.Format("2006-01-02T15:04:05Z07:00"),
+		"GIT_COMMITTER_DATE=" + committer.When.Format("2006-01-02T15:04:05-0700"),
 	}
 	out, err := r.exec(ctx, args, []byte(message), env...)
 	if err != nil {
