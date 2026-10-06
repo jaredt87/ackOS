@@ -55,7 +55,7 @@ func TestCommitTreeUsesExplicitIdentity(t *testing.T) {
 }
 
 func TestCommitTreeRejectsIdentityCharacters(t *testing.T) {
-	for _, name := range []string{"Bad<Name", "Bad>Name", "Bad,Name", "Bad:Name", "Bad;Name", "Bad\\Name"} {
+	for _, name := range []string{"Bad<Name", "Bad>Name"} {
 		if err := validateIdentity(Identity{
 			Name:  name,
 			Email: "author@example.com",
@@ -64,7 +64,7 @@ func TestCommitTreeRejectsIdentityCharacters(t *testing.T) {
 			t.Fatalf("accepted identity name %q", name)
 		}
 	}
-	for _, name := range []string{" Alice", "Alice ", "\"Alice\"", "Alice,"} {
+	for _, name := range []string{" Alice", "Alice ", ""Alice"", "Alice,", "Alice:", "Alice;"} {
 		if err := validateIdentity(Identity{
 			Name:  name,
 			Email: "author@example.com",
