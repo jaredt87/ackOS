@@ -44,7 +44,7 @@ func (v *testVerifier) callCount() int64 {
 	return v.calls.Load()
 }
 
-func (v *testVerifier) Verify(ctx context.Context, _ kernel.Transition, _ kernel.Authority) (kernel.Observation, error) {
+func (v *testVerifier) Verify(ctx context.Context, _ kernel.Transition, _ kernel.Authority, _ kernel.Observation, _ kernel.ExecutionResult) (kernel.Observation, error) {
 	v.calls.Add(1)
 	if v.block != nil {
 		if v.ignoreBlockCancellation {

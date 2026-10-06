@@ -122,7 +122,7 @@ func (s *Server) observeRecovery(ctx context.Context, subject string) (kernel.Ob
 	}
 }
 
-func (v boundedVerifier) Verify(ctx context.Context, transition kernel.Transition, authority kernel.Authority) (kernel.Observation, error) {
+func (v boundedVerifier) Verify(ctx context.Context, transition kernel.Transition, authority kernel.Authority, before kernel.Observation, execution kernel.ExecutionResult) (kernel.Observation, error) {
 	verificationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), v.server.verifyTimeout)
 	defer cancel()
 	if err := v.server.acquireProvider(verificationCtx); err != nil {
@@ -136,7 +136,7 @@ func (v boundedVerifier) Verify(ctx context.Context, transition kernel.Transitio
 	results := make(chan result, 1)
 	go func() {
 		defer v.server.releaseProvider()
-		observation, err := v.server.verifier.Verify(verificationCtx, transition, authority)
+		observation, err := v.server.verifier.Verify(verificationCtx, transition, authority, before, execution)
 		results <- result{observation: observation, err: err}
 	}()
 

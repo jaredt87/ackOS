@@ -94,7 +94,7 @@ type Verifier struct {
 	Resource *Resource
 }
 
-func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority kernel.Authority) (kernel.Observation, error) {
+func (v Verifier) Verify(ctx context.Context, t kernel.Transition, authority kernel.Authority, _ kernel.Observation, _ kernel.ExecutionResult) (kernel.Observation, error) {
 	if v.Resource == nil {
 		return kernel.Observation{}, fmt.Errorf("synthetic resource is required")
 	}
