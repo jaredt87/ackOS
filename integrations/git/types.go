@@ -11,6 +11,13 @@ type TreeEntry struct {
 	Object ObjectID
 }
 
+type Commit struct {
+	ID      ObjectID
+	Tree    ObjectID
+	Parents []ObjectID
+	Message string
+}
+
 type Identity struct {
 	Name  string
 	Email string
