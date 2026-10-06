@@ -49,11 +49,11 @@ Only one verification callback may be active for an execution attempt. This prev
 
 ## Git Execution Boundary
 
-The Git integration is a small host-side adapter around a repository-bound subprocess runner. It is not part of the kernel and does not define a provider or plugin abstraction.
+The Git integration is a small host-side adapter exposing typed plumbing operations rather than a general command runner. It is not part of the kernel and does not define a provider or plugin abstraction.
 
-The runner resolves Git once, validates that its configured directory is the repository root, uses a minimal environment, disables hooks, fsmonitor, and replacement objects, and invokes Git without a shell. Its public surface is limited to a short list of plumbing commands. Callers are responsible for validating command-specific operands; this is not a general-purpose command execution API.
+The public SDK is limited to repository-bound operations for writing blobs and trees, creating commits with explicit identities, and atomically updating refs with caller-supplied expected-old values. Git invocation is private to the adapter: fixed repository/configuration controls are supplied internally, caller content and commit messages use stdin, and there is no public subprocess or arbitrary-argument API.
 
-The runner does not provide working-tree mutation, provider migration, independent read/verification, process-group confinement, or lifetime filesystem confinement. Those concerns remain outside this PR and must be designed at the relevant integration boundary rather than added to the kernel.
+The adapter resolves Git once, validates that its configured directory is the repository root, uses a minimal environment, disables hooks, fsmonitor, and replacement objects, and validates object IDs, ref names, tree entries, and commit identities at the boundary. Working-tree mutation, provider migration, independent read/verification, process-group confinement, and lifetime filesystem confinement remain outside this PR.
 
 ## V0 guarantees and boundaries
 
