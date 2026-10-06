@@ -69,11 +69,19 @@ func TestWriteTreeRejectsUnsafePathsAndDuplicates(t *testing.T) {
 			t.Fatalf("accepted unsafe tree path %q", path)
 		}
 	}
-	if _, err := r.WriteTree(context.Background(), []TreeEntry{
-		{Mode: "100644", Path: "file.txt", Object: blob},
-		{Mode: "100644", Path: "file.txt", Object: blob},
-	}); err == nil {
-		t.Fatal("accepted duplicate tree path")
+	for _, entries := range [][]TreeEntry{
+		{
+			{Mode: "100644", Path: "file.txt", Object: blob},
+			{Mode: "100644", Path: "file.txt", Object: blob},
+		},
+		{
+			{Mode: "100644", Path: "foo", Object: blob},
+			{Mode: "040000", Path: "foo", Object: blob},
+		},
+	} {
+		if _, err := r.WriteTree(context.Background(), entries); err == nil {
+			t.Fatal("accepted duplicate tree path")
+		}
 	}
 }
 
