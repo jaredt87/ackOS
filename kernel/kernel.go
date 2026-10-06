@@ -230,8 +230,10 @@ func (a Authority) validFor(t Transition, o Observation, now time.Time) error {
 }
 
 type ExecutionResult struct {
-	Success bool
-	Message string
+	ExecutionID string
+	Success     bool
+	Message     string
+	Evidence    []byte
 }
 
 type Executor interface {
@@ -239,7 +241,7 @@ type Executor interface {
 }
 
 type Verifier interface {
-	Verify(context.Context, Transition, Authority) (Observation, error)
+	Verify(context.Context, Transition, Authority, Observation, ExecutionResult) (Observation, error)
 }
 
 type StateStore struct {
@@ -280,6 +282,7 @@ type Runtime struct {
 	executionDone        chan struct{}
 	executionCompletedAt time.Time
 	verificationActive   bool
+	executionResult      ExecutionResult
 }
 
 func NewRuntime(initialRoot string, policy Policy) *Runtime {
@@ -332,6 +335,7 @@ func (r *Runtime) resetLifecycleLocked() {
 	r.executionDone = nil
 	r.executionCompletedAt = time.Time{}
 	r.verificationActive = false
+	r.executionResult = ExecutionResult{}
 }
 
 func (r *Runtime) Observe(o Observation) error {
@@ -463,6 +467,7 @@ func (r *Runtime) Start(ctx context.Context, e Executor) (ExecutionResult, error
 		return result, nil
 	}
 	r.executionCompletedAt = r.clock().UTC()
+	r.executionResult = result
 	if !result.Success {
 		r.phase = PhaseRecovery
 	}
@@ -518,7 +523,7 @@ func (r *Runtime) Verify(ctx context.Context, v Verifier) error {
 	completedAt := r.executionCompletedAt
 	r.mu.Unlock()
 
-	o, err := v.Verify(ctx, t, a)
+	o, err := v.Verify(ctx, t, a, *r.observation, r.executionResult)
 	now := r.clock().UTC()
 	if err != nil {
 		r.failVerification(done)
