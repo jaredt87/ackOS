@@ -29,7 +29,8 @@ func Open(path string) (*Repository, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrNotRepoRoot, root)
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	lines := strings.Split(strings.TrimSpace(string(out)), "
+")
 	if len(lines) != 3 || lines[2] == "" {
 		return nil, ErrNotRepoRoot
 	}
@@ -72,5 +73,5 @@ func runRaw(ctx context.Context, git, root string, args ...string) ([]byte, erro
 }
 
 func cleanEnv(extra ...string) []string {
-	return append([]string{"PATH=/usr/bin:/bin", "HOME=/nonexistent", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "LC_ALL=C", "TZ=UTC"}, extra...)
+	return append([]string{"PATH=/usr/bin:/bin", "HOME=/nonexistent", "GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "GIT_TERMINAL_PROMPT=0", "GIT_NO_LAZY_FETCH=1", "LC_ALL=C", "TZ=UTC"}, extra...)
 }
