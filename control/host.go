@@ -263,10 +263,10 @@ func (e providerExecutor) Execute(ctx context.Context, _ kernel.Transition, _ ke
 	}
 	*e.execution = result
 	return kernel.ExecutionResult{
-		ExecutionID: execution.ExecutionID,
+		ExecutionID: e.execution.ExecutionID,
 		Success:     true,
 		Message:     "provider execution completed",
-		Evidence:    append([]byte(nil), execution.Evidence...),
+		Evidence:    append([]byte(nil), e.execution.Evidence...),
 	}
 }
 
