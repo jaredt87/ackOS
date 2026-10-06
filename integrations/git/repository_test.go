@@ -33,3 +33,12 @@ func TestOpenRequiresRepositoryRoot(t *testing.T) {
 		t.Fatal("accepted non-root path")
 	}
 }
+
+func TestCleanEnvDisablesLazyFetch(t *testing.T) {
+	for _, value := range cleanEnv() {
+		if value == "GIT_NO_LAZY_FETCH=1" {
+			return
+		}
+	}
+	t.Fatal("GIT_NO_LAZY_FETCH=1 is missing")
+}
