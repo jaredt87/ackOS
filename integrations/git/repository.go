@@ -25,23 +25,40 @@ func Open(path string) (*Repository, error) {
 	if err != nil {
 		return nil, err
 	}
-	out, err := runRaw(context.Background(), git, root, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--show-object-format")
+	out, err := runRaw(context.Background(), git, root, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--git-common-dir", "--show-object-format")
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrNotRepoRoot, root)
 	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(lines) != 3 || lines[2] == "" {
+	if len(lines) != 4 || lines[2] == "" || lines[3] == "" {
 		return nil, ErrNotRepoRoot
 	}
 	top, err := filepath.EvalSymlinks(lines[0])
 	if err != nil || filepath.Clean(top) != filepath.Clean(root) {
 		return nil, fmt.Errorf("%w: %s", ErrNotRepoRoot, root)
 	}
-	hashLen := map[string]int{"sha1": 40, "sha256": 64}[lines[2]]
-	if hashLen == 0 {
-		return nil, fmt.Errorf("git: unsupported object format %q", lines[2])
+	common := lines[2]
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(root, common)
 	}
-	return &Repository{root: root, gitDir: lines[1], git: git, objectHash: hashLen}, nil
+	common, err = filepath.EvalSymlinks(common)
+	if err != nil || !pathWithin(root, common) {
+		return nil, fmt.Errorf("%w: %s", ErrNotRepoRoot, root)
+	}
+	hashLen := map[string]int{"sha1": 40, "sha256": 64}[lines[3]]
+	if hashLen == 0 {
+		return nil, fmt.Errorf("git: unsupported object format %q", lines[3])
+	}
+	gitDir, err := filepath.EvalSymlinks(lines[1])
+	if err != nil || !pathWithin(root, gitDir) {
+		return nil, fmt.Errorf("%w: %s", ErrNotRepoRoot, root)
+	}
+	return &Repository{root: root, gitDir: gitDir, git: git, objectHash: hashLen}, nil
+}
+
+func pathWithin(root, path string) bool {
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ""
 }
 
 func (r *Repository) exec(ctx context.Context, args []string, stdin []byte, env ...string) ([]byte, error) {
