@@ -124,29 +124,28 @@ func controlRequest() control.ControlRequest {
 func TestHostPassesVerificationInputsThroughUnchanged(t *testing.T) {
 	var gotBefore control.Observation
 	var gotExecution control.Execution
-	provider := newVerificationProvider(t, func(_ context.Context, req control.VerifyRequest) (control.Verification, error) {
+	provider := verificationProvider{}
+	resource, err := memory.NewResource("resource-a", "initial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := memory.NewProvider(resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.base = base
+	provider.executeFn = func(_ context.Context, req control.ExecuteRequest) (control.Execution, error) {
+		return control.Execution{ExecutionID: req.ExecutionID, Evidence: []byte("claimed-result")}, nil
+	}
+	provider.verifyFn = func(_ context.Context, req control.VerifyRequest) (control.Verification, error) {
 		gotBefore = req.Before
 		gotExecution = req.Execution
 		return control.Verification{
 			Resource:   control.ResourceRef{ID: "resource-a", Fingerprint: "running"},
 			VerifiedAt: time.Now().UTC(),
 		}, nil
-	})
-	base := provider.(verificationProvider)
-	provider = verificationProvider{
-		base: base.base,
-		executeFn: func(_ context.Context, req control.ExecuteRequest) (control.Execution, error) {
-			return control.Execution{ExecutionID: req.ExecutionID, Evidence: []byte("claimed-result")}, nil
-		},
-		verifyFn: func(ctx context.Context, req control.VerifyRequest) (control.Verification, error) {
-			gotBefore = req.Before
-			gotExecution = req.Execution
-			return control.Verification{
-				Resource:   control.ResourceRef{ID: "resource-a", Fingerprint: "running"},
-				VerifiedAt: time.Now().UTC(),
-			}, nil
-		},
 	}
+
 	host, err := control.NewHost(kernel.NewRuntime("initial", kernel.AllowPolicy{}), time.Second)
 	if err != nil {
 		t.Fatal(err)
