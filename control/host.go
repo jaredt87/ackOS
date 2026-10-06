@@ -288,7 +288,7 @@ func (v providerVerifier) Verify(ctx context.Context, _ kernel.Transition, autho
 	}
 	request.Execution = Execution{
 		ExecutionID: execution.ExecutionID,
-		Evidence:   append([]byte(nil), execution.Evidence...),
+		Evidence:    append([]byte(nil), execution.Evidence...),
 	}
 	result, err := v.host.verify(ctx, v.providerName, v.provider, request, v.invocation)
 	if err != nil {
