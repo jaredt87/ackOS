@@ -39,7 +39,7 @@ type fakeVerifier struct {
 	called      chan struct{}
 }
 
-func (f fakeVerifier) Verify(context.Context, Transition, Authority) (Observation, error) {
+func (f fakeVerifier) Verify(context.Context, Transition, Authority, Observation, ExecutionResult) (Observation, error) {
 	if f.called != nil {
 		close(f.called)
 	}
@@ -75,6 +75,61 @@ func authorize(t *testing.T, r *Runtime, o Observation, target string) (Transiti
 		t.Fatal(err)
 	}
 	return tr, a
+}
+
+func TestVerifyReceivesAuthorizedObservationAndExecutionResult(t *testing.T) {
+	now := time.Unix(100, 0)
+	r := NewRuntime("A", nil)
+	r.clock = func() time.Time { return now }
+	o := observation(t, "resource", "A", 1, now)
+	authorize(t, r, o, "B")
+
+	expectedExecution := ExecutionResult{
+		ExecutionID: "execution-1",
+		Success:     true,
+		Message:     "provider execution completed",
+		Evidence:    []byte("claimed-commit"),
+	}
+	if _, err := r.Start(context.Background(), &fakeExecutorWithResult{result: expectedExecution}); err != nil {
+		t.Fatal(err)
+	}
+
+	clockNow := now.Add(2 * time.Second)
+	r.clock = func() time.Time { return clockNow }
+	post := observation(t, "resource", "B", 2, now.Add(time.Second))
+	verifier := capturingVerifier{observation: post}
+	if err := r.Verify(context.Background(), verifier); err != nil {
+		t.Fatal(err)
+	}
+	if verifier.before != o {
+		t.Fatalf("before observation changed: got %+v, want %+v", verifier.before, o)
+	}
+	if verifier.execution.ExecutionID != expectedExecution.ExecutionID ||
+		verifier.execution.Success != expectedExecution.Success ||
+		verifier.execution.Message != expectedExecution.Message ||
+		string(verifier.execution.Evidence) != string(expectedExecution.Evidence) {
+		t.Fatalf("execution result changed: got %+v, want %+v", verifier.execution, expectedExecution)
+	}
+}
+
+type fakeExecutorWithResult struct {
+	result ExecutionResult
+}
+
+func (f fakeExecutorWithResult) Execute(context.Context, Transition, Authority) ExecutionResult {
+	return f.result
+}
+
+type capturingVerifier struct {
+	observation Observation
+	before      Observation
+	execution   ExecutionResult
+}
+
+func (v capturingVerifier) Verify(_ context.Context, _ Transition, _ Authority, before Observation, execution ExecutionResult) (Observation, error) {
+	v.before = before
+	v.execution = execution
+	return v.observation, nil
 }
 
 func TestLifecycleCommitRequiresIndependentVerification(t *testing.T) {
@@ -235,7 +290,7 @@ type blockingVerifier struct {
 	observation Observation
 }
 
-func (v *blockingVerifier) Verify(context.Context, Transition, Authority) (Observation, error) {
+func (v *blockingVerifier) Verify(context.Context, Transition, Authority, Observation, ExecutionResult) (Observation, error) {
 	close(v.entered)
 	<-v.release
 	return v.observation, nil
