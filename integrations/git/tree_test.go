@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"os/exec"
 	"testing"
 	"time"
 )
@@ -26,6 +27,32 @@ func TestWriteTree(t *testing.T) {
 	}
 }
 
+func TestWriteTreePreservesQuotedPath(t *testing.T) {
+	root := testRepo(t)
+	r, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := r.WriteBlob(context.Background(), []byte("hello"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := r.WriteTree(context.Background(), []TreeEntry{
+		{Mode: "100644", Path: "\"file\"", Object: blob},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("git", "-C", root, "ls-tree", "-z", "--name-only", string(tree)).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte("\"file\"\x00")
+	if string(out) != string(want) {
+		t.Fatalf("path mismatch: got %q want %q", out, want)
+	}
+}
+
 func TestWriteTreeRejectsUnsafePathsAndDuplicates(t *testing.T) {
 	r, err := Open(testRepo(t))
 	if err != nil {
@@ -35,7 +62,7 @@ func TestWriteTreeRejectsUnsafePathsAndDuplicates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{".", "..", ".git", "dir/../file"} {
+	for _, path := range []string{".", "..", ".git", ".GIT", "dir/../file"} {
 		if _, err := r.WriteTree(context.Background(), []TreeEntry{
 			{Mode: "100644", Path: path, Object: blob},
 		}); err == nil {
