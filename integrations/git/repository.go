@@ -29,8 +29,7 @@ func Open(path string) (*Repository, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrNotRepoRoot, root)
 	}
-	lines := strings.Split(strings.TrimSpace(string(out)), "
-")
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	if len(lines) != 3 || lines[2] == "" {
 		return nil, ErrNotRepoRoot
 	}
