@@ -44,36 +44,33 @@ func TestCommitTreeUsesExplicitIdentity(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(
-		"git",
-		"-C",
-		root,
-		"show",
-		"-s",
-		"--format=%an <%ae>|%cn <%ce>|%ad",
-		"--date=iso-strict",
-		string(id),
-	)
+	cmd := exec.Command("git", "-C", root, "show", "-s", "--format=%an <%ae>|%cn <%ce>|%ad", "--date=iso-strict", string(id))
 	out, err := cmd.Output()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(
-		string(out),
-		"Author <author@example.com>|Committer <committer@example.com>",
-	) {
+	if !strings.Contains(string(out), "Author <author@example.com>|Committer <committer@example.com>") {
 		t.Fatalf("identity mismatch: %s", out)
 	}
 }
 
 func TestCommitTreeRejectsIdentityCharacters(t *testing.T) {
-	for _, name := range []string{"Bad<Name", "Bad>Name"} {
+	for _, name := range []string{"Bad<Name", "Bad>Name", "Bad,Name", "Bad:Name", "Bad;Name", "Bad\\Name"} {
 		if err := validateIdentity(Identity{
 			Name:  name,
 			Email: "author@example.com",
 			When:  time.Unix(0, 0).UTC(),
 		}); err == nil {
 			t.Fatalf("accepted identity name %q", name)
+		}
+	}
+	for _, name := range []string{" Alice", "Alice ", "\"Alice\"", "Alice,"} {
+		if err := validateIdentity(Identity{
+			Name:  name,
+			Email: "author@example.com",
+			When:  time.Unix(0, 0).UTC(),
+		}); err == nil {
+			t.Fatalf("accepted normalized identity name %q", name)
 		}
 	}
 }
