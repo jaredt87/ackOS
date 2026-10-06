@@ -34,6 +34,21 @@ func TestOpenRequiresRepositoryRoot(t *testing.T) {
 	}
 }
 
+func TestOpenRejectsExternalCommonDir(t *testing.T) {
+	root := testRepo(t)
+	external := testRepo(t)
+	common, err := filepath.Abs(filepath.Join(external, ".git"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git", "commondir"), []byte(common+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(root); err == nil {
+		t.Fatal("accepted external common git directory")
+	}
+}
+
 func TestCleanEnvDisablesLazyFetch(t *testing.T) {
 	for _, value := range cleanEnv() {
 		if value == "GIT_NO_LAZY_FETCH=1" {
