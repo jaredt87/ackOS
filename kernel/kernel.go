@@ -468,6 +468,7 @@ func (r *Runtime) Start(ctx context.Context, e Executor) (ExecutionResult, error
 	}
 	r.executionCompletedAt = r.clock().UTC()
 	r.executionResult = result
+	r.executionResult.Evidence = append([]byte(nil), result.Evidence...)
 	if !result.Success {
 		r.phase = PhaseRecovery
 	}
@@ -520,10 +521,13 @@ func (r *Runtime) Verify(ctx context.Context, v Verifier) error {
 		return ErrInvalidLifecycle
 	}
 	a, t := *r.authority, *r.transition
+	before := *r.observation
+	execution := r.executionResult
+	execution.Evidence = append([]byte(nil), execution.Evidence...)
 	completedAt := r.executionCompletedAt
 	r.mu.Unlock()
 
-	o, err := v.Verify(ctx, t, a, *r.observation, r.executionResult)
+	o, err := v.Verify(ctx, t, a, before, execution)
 	now := r.clock().UTC()
 	if err != nil {
 		r.failVerification(done)
