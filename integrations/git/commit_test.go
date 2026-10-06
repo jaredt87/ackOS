@@ -64,7 +64,7 @@ func TestCommitTreeRejectsIdentityCharacters(t *testing.T) {
 			t.Fatalf("accepted identity name %q", name)
 		}
 	}
-	for _, name := range []string{" Alice", "Alice ", ""Alice"", "Alice,", "Alice:", "Alice;"} {
+	for _, name := range []string{" Alice", "Alice ", "\"Alice\"", "Alice,", "Alice:", "Alice;"} {
 		if err := validateIdentity(Identity{
 			Name:  name,
 			Email: "author@example.com",
