@@ -29,7 +29,7 @@ func (r *Repository) CommitTree(ctx context.Context, tree ObjectID, parents []Ob
 	env := []string{
 		"GIT_AUTHOR_NAME=" + author.Name,
 		"GIT_AUTHOR_EMAIL=" + author.Email,
-		"GIT_AUTHOR_DATE=" + author.When.Format("2006-01-02T15:04:05Z07:00"),
+		"GIT_AUTHOR_DATE=" + author.When.Format("2006-01-02T15:04:05-0700"),
 		"GIT_COMMITTER_NAME=" + committer.Name,
 		"GIT_COMMITTER_EMAIL=" + committer.Email,
 		"GIT_COMMITTER_DATE=" + committer.When.Format("2006-01-02T15:04:05Z07:00"),
