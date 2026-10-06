@@ -121,6 +121,70 @@ func controlRequest() control.ControlRequest {
 	}
 }
 
+func TestHostPassesVerificationInputsThroughUnchanged(t *testing.T) {
+	var gotBefore control.Observation
+	var gotExecution control.Execution
+	provider := newVerificationProvider(t, func(_ context.Context, req control.VerifyRequest) (control.Verification, error) {
+		gotBefore = req.Before
+		gotExecution = req.Execution
+		return control.Verification{
+			Resource:   control.ResourceRef{ID: "resource-a", Fingerprint: "running"},
+			VerifiedAt: time.Now().UTC(),
+		}, nil
+	})
+	base := provider.(verificationProvider)
+	provider = verificationProvider{
+		base: base.base,
+		executeFn: func(_ context.Context, req control.ExecuteRequest) (control.Execution, error) {
+			return control.Execution{ExecutionID: req.ExecutionID, Evidence: []byte("claimed-result")}, nil
+		},
+		verifyFn: func(ctx context.Context, req control.VerifyRequest) (control.Verification, error) {
+			gotBefore = req.Before
+			gotExecution = req.Execution
+			return control.Verification{
+				Resource:   control.ResourceRef{ID: "resource-a", Fingerprint: "running"},
+				VerifiedAt: time.Now().UTC(),
+			}, nil
+		},
+	}
+	host, err := control.NewHost(kernel.NewRuntime("initial", kernel.AllowPolicy{}), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Register("test", provider); err != nil {
+		t.Fatal(err)
+	}
+	result, err := host.Control(context.Background(), "test", controlRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotBefore.Resource.ID != "resource-a" || gotBefore.Resource.Fingerprint != "initial" {
+		t.Fatalf("before observation = %+v", gotBefore)
+	}
+	if gotExecution.ExecutionID != result.Execution.ExecutionID || string(gotExecution.Evidence) != "claimed-result" {
+		t.Fatalf("execution = %+v, want %+v", gotExecution, result.Execution)
+	}
+}
+
+func TestHostPinsVerificationFingerprintEquality(t *testing.T) {
+	provider := newVerificationProvider(t, func(_ context.Context, _ control.VerifyRequest) (control.Verification, error) {
+		return control.Verification{
+			Resource:   control.ResourceRef{ID: "resource-a", Fingerprint: "not-running"},
+			VerifiedAt: time.Now().UTC(),
+		}, nil
+	})
+	host, err := control.NewHost(kernel.NewRuntime("initial", kernel.AllowPolicy{}), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Register("test", provider); err != nil {
+		t.Fatal(err)
+	}
+	_, err = host.Control(context.Background(), "test", controlRequest())
+	if err == nil {
+		t.Fatal("Host accepted verification with a mismatched desired fingerprint")
+	}
+}
 func TestHostProviderVerificationFailureTransitionsToRecovery(t *testing.T) {
 	expected := errors.New("verification failed")
 	provider := newVerificationProvider(t, func(context.Context, control.VerifyRequest) (control.Verification, error) {
