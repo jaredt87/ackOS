@@ -65,3 +65,19 @@ func TestCommitTreeUsesExplicitIdentity(t *testing.T) {
 		t.Fatalf("identity mismatch: %s", out)
 	}
 }
+
+func TestCommitTreeRejectsIdentityCharacters(t *testing.T) {
+	r, err := Open(testRepo(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	when := time.Unix(0, 0).UTC()
+	for _, name := range []string{"Bad<Name", "Bad>Name"} {
+		_, err := r.CommitTree(context.Background(), ObjectID(strings.Repeat("0", 40)), nil, "message",
+			Identity{Name: name, Email: "author@example.com", When: when},
+			Identity{Name: "Committer", Email: "committer@example.com", When: when})
+		if err == nil {
+			t.Fatalf("accepted identity name %q", name)
+		}
+	}
+}
