@@ -64,6 +64,13 @@ func (r *Repository) ReadTree(ctx context.Context, id ObjectID) ([]TreeEntry, er
 	if err := r.validateObject(id); err != nil {
 		return nil, err
 	}
+	typeOut, err := r.exec(ctx, []string{"cat-file", "-t", string(id)}, nil)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(string(typeOut)) != "tree" {
+		return nil, fmt.Errorf("git: object %q is not a tree", id)
+	}
 	out, err := r.exec(ctx, []string{"ls-tree", "-z", string(id)}, nil)
 	if err != nil {
 		return nil, err
