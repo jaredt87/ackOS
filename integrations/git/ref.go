@@ -22,7 +22,7 @@ func (r *Repository) UpdateRef(ctx context.Context, ref RefName, newValue, expec
 
 func validateRef(ref RefName) error {
 	s := string(ref)
-	if s == "" || !strings.HasPrefix(s, "refs/") || strings.ContainsAny(s, "\x00\n\r ~^:?*[\\") {
+	if s == "" || !strings.HasPrefix(s, "refs/") || strings.Contains(s, "@{") || strings.ContainsAny(s, "\x00\n\r ~^:?*[\\") {
 		return fmt.Errorf("git: invalid ref name")
 	}
 	parts := strings.Split(s, "/")
