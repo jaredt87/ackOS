@@ -143,6 +143,9 @@ func TestHostPassesVerificationInputsThroughUnchanged(t *testing.T) {
 	provider.verifyFn = func(_ context.Context, req control.VerifyRequest) (control.Verification, error) {
 		gotVerifyBefore = req.Before
 		gotExecution = req.Execution
+		if len(req.Execution.Evidence) > 0 {
+			req.Execution.Evidence[0] = 'X'
+		}
 		return control.Verification{
 			Resource:   control.ResourceRef{ID: "resource-a", Fingerprint: "running"},
 			VerifiedAt: time.Now().UTC(),
@@ -179,6 +182,9 @@ func TestHostPassesVerificationInputsThroughUnchanged(t *testing.T) {
 	}
 	if gotExecution.ExecutionID != result.Execution.ExecutionID || string(gotExecution.Evidence) != "claimed-result" {
 		t.Fatalf("execution = %+v, want %+v", gotExecution, result.Execution)
+	}
+	if string(result.Execution.Evidence) != "claimed-result" {
+		t.Fatalf("provider mutation escaped verification boundary: %q", result.Execution.Evidence)
 	}
 }
 
