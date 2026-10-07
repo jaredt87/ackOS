@@ -28,7 +28,7 @@ V0 exposes one high-level tool:
 
 - `ackos_control` — accepts a subject, observed state, desired state, and optional authority lifetime, then runs the transition through the kernel.
 
-The MCP adapter owns the call to the configured `kernel.Executor` and requires a configured `kernel.Verifier`. A skill or LLM response cannot authorize a separate side-effecting call around the MCP server.
+The MCP adapter obtains the authorization observation from a configured provider observer, then owns the call to the configured `kernel.Executor` and requires a configured `kernel.Verifier`. A skill or LLM response cannot authorize a separate side-effecting call around the MCP server.
 
 If execution or independent verification fails, the kernel enters `RECOVERY`. A later `ackos_control` call obtains post-failure evidence from an independent recovery observer. The caller's `observed_state` is not used as recovery evidence, and the failed transition's authority is never reused.
 
@@ -49,7 +49,7 @@ The standalone `cmd/ackos-mcp` binary uses one synthetic resource whose stable s
 
 The standalone `cmd/ackos-mcp` binary uses in-memory demonstration executor, verifier, and recovery-observer adapters. It is intentionally a development/demo server, not a production infrastructure adapter.
 
-For real use, embed the integration and provide an executor that performs the actual side effect, an independent verifier that obtains fresh evidence from the target system, and an independent recovery observer that obtains provider-captured post-failure evidence.
+For real use, embed the integration and provide an observer that obtains the authorization observation from the target system, an executor that performs the actual side effect, an independent verifier that obtains fresh evidence from the target system, and an independent recovery observer that obtains provider-captured post-failure evidence.
 
 ## Security boundary
 
