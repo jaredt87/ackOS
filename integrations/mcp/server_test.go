@@ -357,7 +357,8 @@ func TestControlRecoversAfterExecutionFailure(t *testing.T) {
 
 func TestControlBoundsRecoveryObservation(t *testing.T) {
 	executor := &testExecutor{}
-	verifier := &testVerifier{observeDone: make(chan struct{})}
+	observeDone := make(chan struct{})
+	verifier := &testVerifier{observeDone: observeDone}
 	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
 	server := newTestServer(t, runtime, executor, verifier)
 	server.verifyTimeout = 10 * time.Millisecond
@@ -370,7 +371,7 @@ func TestControlBoundsRecoveryObservation(t *testing.T) {
 	if err == nil || out.Phase != kernel.PhaseRecovery {
 		t.Fatalf("expected bounded recovery observation failure, out=%+v err=%v", out, err)
 	}
-	close(verifier.observeDone)
+	close(observeDone)
 }
 
 func TestControlDoesNotOverlapTimedOutProviderCall(t *testing.T) {
