@@ -103,8 +103,6 @@ func TestProviderVerifyTimestampFollowsLockedSnapshot(t *testing.T) {
 	}
 }
 
-
-
 func TestProviderRejectsStaleBeforeObservation(t *testing.T) {
 	resource, _ := NewResource("resource-a", "state:v1")
 	provider, _ := NewProvider(resource)
