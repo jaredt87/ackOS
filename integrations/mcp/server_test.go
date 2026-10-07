@@ -101,6 +101,7 @@ func TestNewServerRequiresExecutorVerifierAndRecoveryObserver(t *testing.T) {
 func newTestServer(t *testing.T, runtime *kernel.Runtime, executor *testExecutor, verifier *testVerifier) *Server {
 	t.Helper()
 	recoveryObserver := *verifier
+	verifier.observeDone = nil
 	server, err := NewServer(runtime, executor, verifier, verifier, &recoveryObserver)
 	if err != nil {
 		t.Fatal(err)
