@@ -122,7 +122,7 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 		return ControlResult{}, fmt.Errorf("provider returned invalid observation")
 	}
 
-	kernelObservation, err := kernel.NewObservation(observed.Resource.ID, observed.Resource.Fingerprint, 0, observed.ObservedAt)
+	kernelObservation, err := kernel.NewObservation(observed.Resource.ID, observed.Resource.Fingerprint, observed.Version, observed.ObservedAt)
 	if err != nil {
 		return ControlResult{}, err
 	}
@@ -250,6 +250,7 @@ func (h *Host) verify(ctx context.Context, providerName string, p Provider, req 
 func beforeObservation(before kernel.Observation) Observation {
 	return Observation{
 		Resource:   ResourceRef{ID: before.Subject, Fingerprint: before.State},
+		Version:    before.Version,
 		ObservedAt: before.ObservedAt,
 	}
 }
@@ -304,7 +305,7 @@ func (v providerVerifier) Verify(ctx context.Context, _ kernel.Transition, autho
 	return kernel.NewObservation(
 		result.Resource.ID,
 		result.Resource.Fingerprint,
-		0,
+		result.Version,
 		result.VerifiedAt,
 	)
 }
