@@ -108,7 +108,7 @@ func TestExecutorRejectsTOCTOUStateChange(t *testing.T) {
 
 type noOpExecutor struct{}
 
-func (noOpExecutor) Execute(context.Context, kernel.Transition, kernel.Authority) kernel.ExecutionResult {
+func (noOpExecutor) Execute(context.Context, kernel.Transition, kernel.Authority, kernel.Observation) kernel.ExecutionResult {
 	return kernel.ExecutionResult{Success: true, Message: "claimed success without changing the resource"}
 }
 
