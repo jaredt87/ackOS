@@ -236,6 +236,8 @@ type ExecutionResult struct {
 	Evidence    []byte
 }
 
+// Executor performs the authorized transition using the kernel-authorized pre-execution observation.
+// The before observation is the same snapshot later supplied to Verify; providers must treat it as read-only authority evidence, not current state.
 type Executor interface {
 	Execute(context.Context, Transition, Authority, Observation) ExecutionResult
 }
