@@ -122,7 +122,8 @@ func controlRequest() control.ControlRequest {
 }
 
 func TestHostPassesVerificationInputsThroughUnchanged(t *testing.T) {
-	var gotBefore control.Observation
+	var gotExecuteBefore control.Observation
+	var gotVerifyBefore control.Observation
 	var gotExecution control.Execution
 	provider := verificationProvider{}
 	resource, err := memory.NewResource("resource-a", "initial")
@@ -135,10 +136,12 @@ func TestHostPassesVerificationInputsThroughUnchanged(t *testing.T) {
 	}
 	provider.base = base
 	provider.executeFn = func(_ context.Context, req control.ExecuteRequest) (control.Execution, error) {
+		gotExecuteBefore = req.Before
+		req.Before.Resource.Fingerprint = "mutated"
 		return control.Execution{ExecutionID: req.ExecutionID, Evidence: []byte("claimed-result")}, nil
 	}
 	provider.verifyFn = func(_ context.Context, req control.VerifyRequest) (control.Verification, error) {
-		gotBefore = req.Before
+		gotVerifyBefore = req.Before
 		gotExecution = req.Execution
 		return control.Verification{
 			Resource:   control.ResourceRef{ID: "resource-a", Fingerprint: "running"},
@@ -157,8 +160,14 @@ func TestHostPassesVerificationInputsThroughUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotBefore.Resource.ID != "resource-a" || gotBefore.Resource.Fingerprint != "initial" {
-		t.Fatalf("before observation = %+v", gotBefore)
+	if gotExecuteBefore.Resource.ID != "resource-a" || gotExecuteBefore.Resource.Fingerprint != "initial" {
+		t.Fatalf("execute before observation = %+v", gotExecuteBefore)
+	}
+	if gotVerifyBefore.Resource.ID != "resource-a" || gotVerifyBefore.Resource.Fingerprint != "initial" {
+		t.Fatalf("verify before observation = %+v", gotVerifyBefore)
+	}
+	if gotExecuteBefore != gotVerifyBefore {
+		t.Fatalf("execute and verify before observations differ: execute=%+v verify=%+v", gotExecuteBefore, gotVerifyBefore)
 	}
 	if gotExecution.ExecutionID != result.Execution.ExecutionID || string(gotExecution.Evidence) != "claimed-result" {
 		t.Fatalf("execution = %+v, want %+v", gotExecution, result.Execution)
