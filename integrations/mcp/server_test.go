@@ -3,10 +3,13 @@ package mcp
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jaredt87/ackOS/control"
+	"github.com/jaredt87/ackOS/integrations/synthetic"
 	"github.com/jaredt87/ackOS/kernel"
 )
 
@@ -79,20 +82,20 @@ func (v *testVerifier) Observe(ctx context.Context, subject string) (kernel.Obse
 
 func TestNewServerRequiresExecutorVerifierAndRecoveryObserver(t *testing.T) {
 	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
-	if _, err := NewServer(runtime, nil, &testVerifier{}, &testVerifier{}); err == nil {
+	if _, err := NewServer(runtime, nil, &testVerifier{}, &testVerifier{}, &testVerifier{}); err == nil {
 		t.Fatal("expected executor requirement")
 	}
-	if _, err := NewServer(runtime, &testExecutor{success: true}, nil, &testVerifier{}); err == nil {
+	if _, err := NewServer(runtime, &testExecutor{success: true}, nil, &testVerifier{}, &testVerifier{}); err == nil {
 		t.Fatal("expected independent verifier requirement")
 	}
-	if _, err := NewServer(runtime, &testExecutor{success: true}, &testVerifier{}, nil); err == nil {
+	if _, err := NewServer(runtime, &testExecutor{success: true}, &testVerifier{}, &testVerifier{}, nil); err == nil {
 		t.Fatal("expected independent recovery observer requirement")
 	}
 }
 
 func newTestServer(t *testing.T, runtime *kernel.Runtime, executor *testExecutor, verifier *testVerifier) *Server {
 	t.Helper()
-	server, err := NewServer(runtime, executor, verifier, verifier)
+	server, err := NewServer(runtime, executor, verifier, verifier, verifier)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -378,4 +381,90 @@ func TestControlDoesNotOverlapTimedOutProviderCall(t *testing.T) {
 	}
 
 	close(verifier.block)
+}
+
+
+func TestControlUsesProviderObservationForFreshTransition(t *testing.T) {
+	resource := synthetic.NewResource("resource-a", "initial")
+	observer := synthetic.RecoveryObserver{Resource: resource}
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	server, err := NewServer(runtime, synthetic.Executor{Resource: resource}, synthetic.Verifier{Resource: resource}, observer, observer)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, out, err := server.control(context.Background(), nil, ControlRequest{
+		Subject: "resource-a", ObservedState: "ignored", DesiredState: "running",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Committed || out.Observation.Version != 1 {
+		t.Fatalf("unexpected first transition: %+v", out)
+	}
+	if out.Observation.State != "initial" {
+		t.Fatalf("observation = %+v, want provider state initial", out.Observation)
+	}
+}
+
+func TestControlUsesFreshProviderObservationForSequentialTransition(t *testing.T) {
+	resource := synthetic.NewResource("resource-a", "initial")
+	observer := synthetic.RecoveryObserver{Resource: resource}
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	server, err := NewServer(runtime, synthetic.Executor{Resource: resource}, synthetic.Verifier{Resource: resource}, observer, observer)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := server.control(context.Background(), nil, ControlRequest{
+		Subject: "resource-a", ObservedState: "ignored", DesiredState: "running",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, out, err := server.control(context.Background(), nil, ControlRequest{
+		Subject: "resource-a", ObservedState: "still-ignored", DesiredState: "done",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Committed || out.Observation.Version != 2 || out.Observation.State != "running" {
+		t.Fatalf("unexpected second transition: %+v", out)
+	}
+}
+
+type mutatingObserver struct {
+	resource *synthetic.Resource
+}
+
+func (o mutatingObserver) Observe(ctx context.Context, subject string) (kernel.Observation, error) {
+	observation, err := (synthetic.RecoveryObserver{Resource: o.resource}).Observe(ctx, subject)
+	if err != nil {
+		return kernel.Observation{}, err
+	}
+	o.resource.Set(subject, "changed-outside-ackos")
+	return observation, nil
+}
+
+func TestControlRejectsMutationAfterProviderObservation(t *testing.T) {
+	resource := synthetic.NewResource("resource-a", "initial")
+	observer := mutatingObserver{resource: resource}
+	recoveryObserver := synthetic.RecoveryObserver{Resource: resource}
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	server, err := NewServer(runtime, synthetic.Executor{Resource: resource}, synthetic.Verifier{Resource: resource}, observer, recoveryObserver)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, out, err := server.control(context.Background(), nil, ControlRequest{
+		Subject: "resource-a", ObservedState: "ignored", DesiredState: "running",
+	})
+	if err == nil {
+		t.Fatal("expected stale-observation execution failure")
+	}
+	if !strings.Contains(err.Error(), control.ErrStaleObservation.Error()) {
+		t.Fatalf("err = %v, want stale-observation sentinel in tool failure", err)
+	}
+	if out.Execution.Success || out.Committed || out.Phase != kernel.PhaseRecovery {
+		t.Fatalf("unexpected stale result: %+v", out)
+	}
 }
