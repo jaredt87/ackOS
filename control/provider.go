@@ -23,8 +23,11 @@ type ObserveRequest struct {
 }
 
 type Observation struct {
-	Resource   ResourceRef
-	Version    uint64
+	Resource ResourceRef
+	Version  uint64
+	// Evidence is informational provider output from Observe. It does not cross
+	// the Kernel observation boundary; precondition data belongs in Fingerprint
+	// or Version.
 	Evidence   []byte
 	ObservedAt time.Time
 }
@@ -34,6 +37,7 @@ type ExecuteRequest struct {
 	Target      ResourceRef
 	// Before is the Kernel-authorized pre-execution observation. Providers must
 	// treat it as read-only evidence and still observe current state before acting.
+	// Its informational Evidence is not carried across the Kernel boundary.
 	Before  Observation
 	Payload []byte
 }
@@ -46,8 +50,10 @@ type Execution struct {
 type VerifyRequest struct {
 	ExecutionID string
 	Expected    ResourceRef
-	Before      Observation
-	Execution   Execution
+	// Before is the same Kernel-authorized pre-execution observation supplied to
+	// Execute. Its informational Evidence is not carried across the Kernel boundary.
+	Before    Observation
+	Execution Execution
 }
 
 type Verification struct {
