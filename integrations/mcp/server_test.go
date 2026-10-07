@@ -41,6 +41,7 @@ type testVerifier struct {
 	ignoreBlockCancellation bool
 	observeErr              error
 	observeDone             chan struct{}
+	observeState            string
 }
 
 func (v *testVerifier) callCount() int64 {
@@ -77,7 +78,11 @@ func (v *testVerifier) Observe(ctx context.Context, subject string) (kernel.Obse
 	if v.observeErr != nil {
 		return kernel.Observation{}, v.observeErr
 	}
-	return kernel.NewObservation(subject, "initial", 1, time.Now().UTC())
+	state := v.observeState
+	if state == "" {
+		state = "initial"
+	}
+	return kernel.NewObservation(subject, state, 1, time.Now().UTC())
 }
 
 func TestNewServerRequiresExecutorVerifierAndRecoveryObserver(t *testing.T) {
@@ -95,7 +100,8 @@ func TestNewServerRequiresExecutorVerifierAndRecoveryObserver(t *testing.T) {
 
 func newTestServer(t *testing.T, runtime *kernel.Runtime, executor *testExecutor, verifier *testVerifier) *Server {
 	t.Helper()
-	server, err := NewServer(runtime, executor, verifier, verifier, verifier)
+	recoveryObserver := *verifier
+	server, err := NewServer(runtime, executor, verifier, verifier, &recoveryObserver)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +246,9 @@ func TestControlRejectsNoopBeforeExecution(t *testing.T) {
 	executor := &testExecutor{success: true}
 	verifier := &testVerifier{}
 	runtime := kernel.NewRuntime("ready", kernel.AllowPolicy{})
+	verifier.observeErr = nil
 	server := newTestServer(t, runtime, executor, verifier)
+	verifier.observeState = "ready"
 
 	_, _, err := server.control(context.Background(), nil, ControlRequest{Subject: "svc", ObservedState: "ready", DesiredState: "ready"})
 	if !errors.Is(err, kernel.ErrGovernanceDenied) {
