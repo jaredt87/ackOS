@@ -163,12 +163,18 @@ func TestHostPassesVerificationInputsThroughUnchanged(t *testing.T) {
 	if gotExecuteBefore.Resource.ID != "resource-a" || gotExecuteBefore.Resource.Fingerprint != "initial" {
 		t.Fatalf("execute before observation = %+v", gotExecuteBefore)
 	}
+	if gotExecuteBefore.Version != 1 {
+		t.Fatalf("execute before version = %d, want 1", gotExecuteBefore.Version)
+	}
 	if gotVerifyBefore.Resource.ID != "resource-a" || gotVerifyBefore.Resource.Fingerprint != "initial" {
 		t.Fatalf("verify before observation = %+v", gotVerifyBefore)
 	}
+	if gotVerifyBefore.Version != 1 {
+		t.Fatalf("verify before version = %d, want 1", gotVerifyBefore.Version)
+	}
 	if gotExecuteBefore.Resource != gotVerifyBefore.Resource ||
-		!gotExecuteBefore.ObservedAt.Equal(gotVerifyBefore.ObservedAt) ||
-		string(gotExecuteBefore.Evidence) != string(gotVerifyBefore.Evidence) {
+		gotExecuteBefore.Version != gotVerifyBefore.Version ||
+		!gotExecuteBefore.ObservedAt.Equal(gotVerifyBefore.ObservedAt) {
 		t.Fatalf("execute and verify before observations differ: execute=%+v verify=%+v", gotExecuteBefore, gotVerifyBefore)
 	}
 	if gotExecution.ExecutionID != result.Execution.ExecutionID || string(gotExecution.Evidence) != "claimed-result" {
