@@ -188,7 +188,6 @@ func TestVerifierUsesFreshExternalObservation(t *testing.T) {
 	}
 }
 
-
 func TestExecutorRejectsABAStateChange(t *testing.T) {
 	resource := NewResource("resource-a", "initial")
 	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
