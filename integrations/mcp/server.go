@@ -148,7 +148,7 @@ func (v boundedVerifier) Verify(ctx context.Context, transition kernel.Transitio
 	}
 }
 
-func (e boundedExecutor) Execute(ctx context.Context, transition kernel.Transition, authority kernel.Authority) kernel.ExecutionResult {
+func (e boundedExecutor) Execute(ctx context.Context, transition kernel.Transition, authority kernel.Authority, before kernel.Observation) kernel.ExecutionResult {
 	executionCtx, cancel := context.WithTimeout(ctx, e.server.verifyTimeout)
 	defer cancel()
 	if err := e.server.acquireProvider(executionCtx); err != nil {
@@ -158,7 +158,7 @@ func (e boundedExecutor) Execute(ctx context.Context, transition kernel.Transiti
 	results := make(chan kernel.ExecutionResult, 1)
 	go func() {
 		defer e.server.releaseProvider()
-		results <- e.server.executor.Execute(executionCtx, transition, authority)
+		results <- e.server.executor.Execute(executionCtx, transition, authority, before)
 	}()
 
 	select {
