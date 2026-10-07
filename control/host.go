@@ -122,7 +122,7 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 		return ControlResult{}, fmt.Errorf("provider returned invalid observation")
 	}
 
-	kernelObservation, err := kernel.NewObservation(observed.Resource.ID, observed.Resource.Fingerprint, 0, observed.ObservedAt)
+	kernelObservation, err := kernel.NewObservation(observed.Resource.ID, observed.Resource.Fingerprint, observed.Version, observed.ObservedAt)
 	if err != nil {
 		return ControlResult{}, err
 	}
@@ -247,6 +247,14 @@ func (h *Host) verify(ctx context.Context, providerName string, p Provider, req 
 	return result, nil
 }
 
+func beforeObservation(before kernel.Observation) Observation {
+	return Observation{
+		Resource:   ResourceRef{ID: before.Subject, Fingerprint: before.State},
+		Version:    before.Version,
+		ObservedAt: before.ObservedAt,
+	}
+}
+
 type providerExecutor struct {
 	host         *Host
 	invocation   *invocation
@@ -256,8 +264,10 @@ type providerExecutor struct {
 	request      ExecuteRequest
 }
 
-func (e providerExecutor) Execute(ctx context.Context, _ kernel.Transition, _ kernel.Authority) kernel.ExecutionResult {
-	result, err := e.host.execute(ctx, e.providerName, e.provider, e.request, e.invocation)
+func (e providerExecutor) Execute(ctx context.Context, _ kernel.Transition, _ kernel.Authority, before kernel.Observation) kernel.ExecutionResult {
+	request := e.request
+	request.Before = beforeObservation(before)
+	result, err := e.host.execute(ctx, e.providerName, e.provider, request, e.invocation)
 	if err != nil {
 		return kernel.ExecutionResult{Message: err.Error()}
 	}
@@ -282,10 +292,7 @@ type providerVerifier struct {
 func (v providerVerifier) Verify(ctx context.Context, _ kernel.Transition, authority kernel.Authority, before kernel.Observation, execution kernel.ExecutionResult) (kernel.Observation, error) {
 	request := v.request
 	request.ExecutionID = authority.ExecutionID
-	request.Before = Observation{
-		Resource:   ResourceRef{ID: before.Subject, Fingerprint: before.State},
-		ObservedAt: before.ObservedAt,
-	}
+	request.Before = beforeObservation(before)
 	request.Execution = Execution{
 		ExecutionID: execution.ExecutionID,
 		Evidence:    append([]byte(nil), execution.Evidence...),
@@ -298,7 +305,7 @@ func (v providerVerifier) Verify(ctx context.Context, _ kernel.Transition, autho
 	return kernel.NewObservation(
 		result.Resource.ID,
 		result.Resource.Fingerprint,
-		0,
+		result.Version,
 		result.VerifiedAt,
 	)
 }

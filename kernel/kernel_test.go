@@ -14,7 +14,7 @@ type fakeExecutor struct {
 	calls  int
 }
 
-func (f *fakeExecutor) Execute(context.Context, Transition, Authority) ExecutionResult {
+func (f *fakeExecutor) Execute(context.Context, Transition, Authority, Observation) ExecutionResult {
 	f.mu.Lock()
 	f.calls++
 	f.mu.Unlock()
@@ -27,7 +27,7 @@ type blockingExecutor struct {
 	result  ExecutionResult
 }
 
-func (e *blockingExecutor) Execute(context.Context, Transition, Authority) ExecutionResult {
+func (e *blockingExecutor) Execute(context.Context, Transition, Authority, Observation) ExecutionResult {
 	close(e.started)
 	<-e.release
 	return e.result
@@ -115,8 +115,37 @@ func TestVerifyReceivesAuthorizedObservationAndExecutionResult(t *testing.T) {
 type fakeExecutorWithResult struct {
 	result ExecutionResult
 }
+type capturingExecutor struct {
+	result ExecutionResult
+	before Observation
+}
 
-func (f fakeExecutorWithResult) Execute(context.Context, Transition, Authority) ExecutionResult {
+func (e *capturingExecutor) Execute(_ context.Context, _ Transition, _ Authority, before Observation) ExecutionResult {
+	e.before = before
+	before.State = "mutated"
+	return e.result
+}
+
+func TestStartPassesAuthorizedObservationDefensively(t *testing.T) {
+	now := time.Unix(100, 0)
+	r := NewRuntime("A", nil)
+	r.clock = func() time.Time { return now }
+	o := observation(t, "resource", "A", 1, now)
+	authorize(t, r, o, "B")
+
+	executor := &capturingExecutor{result: ExecutionResult{Success: true}}
+	if _, err := r.Start(context.Background(), executor); err != nil {
+		t.Fatal(err)
+	}
+	if executor.before != o {
+		t.Fatalf("executor before = %+v, want %+v", executor.before, o)
+	}
+	if r.observation == nil || *r.observation != o {
+		t.Fatalf("kernel observation mutated through executor input: %+v", r.observation)
+	}
+}
+
+func (f fakeExecutorWithResult) Execute(context.Context, Transition, Authority, Observation) ExecutionResult {
 	return f.result
 }
 

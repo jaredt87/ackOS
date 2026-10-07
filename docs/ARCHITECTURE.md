@@ -37,6 +37,8 @@ Execution is not commitment. A provider may report successful execution without 
 
 Providers implement the execution and observation boundaries. The kernel decides whether an execution is authorized and whether verified evidence permits commitment.
 
+The observation passed to an executor is the Kernel-authorized pre-execution snapshot. It is the same snapshot later passed to verification as `Before`, and providers must not mutate it. It is authoritative only as to what was authorized before execution, not as a statement of current resource state; providers must still observe current state and compare it against `Before` before acting.
+
 ## Evidence freshness
 
 Verification is gated on completion of the execution attempt. A verifier cannot advance the lifecycle while the provider execution is still running, and a failed execution moves the runtime directly to recovery. Observations are also rejected while an execution is in flight so a new observation cannot discard an active execution boundary.

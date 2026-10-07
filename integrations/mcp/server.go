@@ -37,6 +37,10 @@ type ControlResponse struct {
 
 // RecoveryObserver obtains fresh provider evidence after a failed attempt.
 // Recovery must never manufacture a new observation from caller-supplied state.
+type Observer interface {
+	Observe(context.Context, string) (kernel.Observation, error)
+}
+
 type RecoveryObserver interface {
 	Observe(context.Context, string) (kernel.Observation, error)
 }
@@ -45,6 +49,7 @@ type Server struct {
 	runtime          *kernel.Runtime
 	executor         kernel.Executor
 	verifier         kernel.Verifier
+	observer         Observer
 	recoveryObserver RecoveryObserver
 	providerGate     chan struct{}
 	verifyTimeout    time.Duration
@@ -58,7 +63,7 @@ type boundedExecutor struct {
 	server *Server
 }
 
-func NewServer(runtime *kernel.Runtime, executor kernel.Executor, verifier kernel.Verifier, recoveryObserver RecoveryObserver) (*Server, error) {
+func NewServer(runtime *kernel.Runtime, executor kernel.Executor, verifier kernel.Verifier, observer Observer, recoveryObserver RecoveryObserver) (*Server, error) {
 	if runtime == nil {
 		return nil, fmt.Errorf("runtime is required")
 	}
@@ -67,6 +72,9 @@ func NewServer(runtime *kernel.Runtime, executor kernel.Executor, verifier kerne
 	}
 	if verifier == nil {
 		return nil, fmt.Errorf("independent verifier is required")
+	}
+	if observer == nil {
+		return nil, fmt.Errorf("provider observer is required")
 	}
 	if recoveryObserver == nil {
 		return nil, fmt.Errorf("independent recovery observer is required")
@@ -77,6 +85,7 @@ func NewServer(runtime *kernel.Runtime, executor kernel.Executor, verifier kerne
 		runtime:          runtime,
 		executor:         executor,
 		verifier:         verifier,
+		observer:         observer,
 		recoveryObserver: recoveryObserver,
 		providerGate:     providerGate,
 		verifyTimeout:    defaultVerifyTimeout,
@@ -96,6 +105,31 @@ func (s *Server) releaseProvider() {
 	s.providerGate <- struct{}{}
 }
 
+func (s *Server) observeProvider(ctx context.Context, subject string) (kernel.Observation, error) {
+	observeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.verifyTimeout)
+	defer cancel()
+	if err := s.acquireProvider(observeCtx); err != nil {
+		return kernel.Observation{}, err
+	}
+
+	type result struct {
+		observation kernel.Observation
+		err         error
+	}
+	results := make(chan result, 1)
+	go func() {
+		defer s.releaseProvider()
+		observation, err := s.observer.Observe(observeCtx, subject)
+		results <- result{observation: observation, err: err}
+	}()
+
+	select {
+	case result := <-results:
+		return result.observation, result.err
+	case <-observeCtx.Done():
+		return kernel.Observation{}, fmt.Errorf("recovery observation timed out after %s: %w", s.verifyTimeout, observeCtx.Err())
+	}
+}
 func (s *Server) observeRecovery(ctx context.Context, subject string) (kernel.Observation, error) {
 	observeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.verifyTimeout)
 	defer cancel()
@@ -148,7 +182,7 @@ func (v boundedVerifier) Verify(ctx context.Context, transition kernel.Transitio
 	}
 }
 
-func (e boundedExecutor) Execute(ctx context.Context, transition kernel.Transition, authority kernel.Authority) kernel.ExecutionResult {
+func (e boundedExecutor) Execute(ctx context.Context, transition kernel.Transition, authority kernel.Authority, before kernel.Observation) kernel.ExecutionResult {
 	executionCtx, cancel := context.WithTimeout(ctx, e.server.verifyTimeout)
 	defer cancel()
 	if err := e.server.acquireProvider(executionCtx); err != nil {
@@ -158,7 +192,10 @@ func (e boundedExecutor) Execute(ctx context.Context, transition kernel.Transiti
 	results := make(chan kernel.ExecutionResult, 1)
 	go func() {
 		defer e.server.releaseProvider()
-		results <- e.server.executor.Execute(executionCtx, transition, authority)
+		// The MCP wrapper only transports the authorized snapshot to the remote
+		// executor; the remote tool owns the mutating resource boundary and must
+		// enforce Before itself.
+		results <- e.server.executor.Execute(executionCtx, transition, authority, before)
 	}()
 
 	select {
@@ -213,10 +250,12 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 			return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Root: s.runtime.Root()}, err
 		}
 	} else {
-		now := time.Now().UTC()
-		observation, err = kernel.NewObservation(in.Subject, in.ObservedState, 0, now)
+		observation, err = s.observeProvider(ctx, in.Subject)
 		if err != nil {
-			return nil, ControlResponse{}, err
+			return nil, ControlResponse{Phase: s.runtime.Phase(), Root: s.runtime.Root()}, err
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Root: s.runtime.Root()}, err
 		}
 	}
 

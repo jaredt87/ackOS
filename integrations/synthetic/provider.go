@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jaredt87/ackOS/control"
 	"github.com/jaredt87/ackOS/kernel"
 )
 
@@ -54,20 +55,12 @@ type Executor struct {
 	Resource *Resource
 }
 
-func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority kernel.Authority) kernel.ExecutionResult {
+func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority kernel.Authority, before kernel.Observation) kernel.ExecutionResult {
 	if e.Resource == nil {
 		return kernel.ExecutionResult{Message: "synthetic resource is required"}
 	}
 	if err := ctx.Err(); err != nil {
 		return kernel.ExecutionResult{Message: err.Error()}
-	}
-
-	subject, state, _ := e.Resource.Observe()
-	if subject != t.Subject {
-		return kernel.ExecutionResult{Message: fmt.Sprintf("resource subject mismatch: got %q, want %q", subject, t.Subject)}
-	}
-	if state != t.Before {
-		return kernel.ExecutionResult{Message: fmt.Sprintf("resource state changed before execution: got %q, want %q", state, t.Before)}
 	}
 	if authority.ExecutionID == "" {
 		return kernel.ExecutionResult{Message: "execution authority ID is required"}
@@ -78,8 +71,11 @@ func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority ke
 	if err := ctx.Err(); err != nil {
 		return kernel.ExecutionResult{Message: err.Error()}
 	}
-	if e.Resource.subject != t.Subject || e.Resource.state != t.Before {
-		return kernel.ExecutionResult{Message: "resource changed during execution precondition check"}
+	if before.Subject != t.Subject ||
+		e.Resource.subject != before.Subject ||
+		e.Resource.state != before.State ||
+		e.Resource.version != before.Version {
+		return kernel.ExecutionResult{Message: fmt.Errorf("%w: synthetic resource changed before execution", control.ErrStaleObservation).Error()}
 	}
 	e.Resource.state = t.After
 	e.Resource.version++

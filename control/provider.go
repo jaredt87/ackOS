@@ -2,8 +2,11 @@ package control
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+var ErrStaleObservation = errors.New("stale pre-execution observation")
 
 // ResourceRef identifies an opaque provider resource state.
 // Fingerprint is compared for equality only; its contents have no meaning to
@@ -20,7 +23,11 @@ type ObserveRequest struct {
 }
 
 type Observation struct {
-	Resource   ResourceRef
+	Resource ResourceRef
+	Version  uint64
+	// Evidence is informational provider output from Observe. It does not cross
+	// the Kernel observation boundary; precondition data belongs in Fingerprint
+	// or Version.
 	Evidence   []byte
 	ObservedAt time.Time
 }
@@ -28,7 +35,11 @@ type Observation struct {
 type ExecuteRequest struct {
 	ExecutionID string
 	Target      ResourceRef
-	Payload     []byte
+	// Before is the Kernel-authorized pre-execution observation. Providers must
+	// treat it as read-only evidence and still observe current state before acting.
+	// Its informational Evidence is not carried across the Kernel boundary.
+	Before  Observation
+	Payload []byte
 }
 
 type Execution struct {
@@ -39,12 +50,15 @@ type Execution struct {
 type VerifyRequest struct {
 	ExecutionID string
 	Expected    ResourceRef
-	Before      Observation
-	Execution   Execution
+	// Before is the same Kernel-authorized pre-execution observation supplied to
+	// Execute. Its informational Evidence is not carried across the Kernel boundary.
+	Before    Observation
+	Execution Execution
 }
 
 type Verification struct {
 	Resource   ResourceRef
+	Version    uint64
 	Evidence   []byte
 	VerifiedAt time.Time
 }

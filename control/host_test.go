@@ -122,8 +122,10 @@ func controlRequest() control.ControlRequest {
 }
 
 func TestHostPassesVerificationInputsThroughUnchanged(t *testing.T) {
-	var gotBefore control.Observation
-	var gotExecution control.Execution
+	var gotExecuteBefore control.Observation
+	var gotVerifyBefore control.Observation
+	var gotVerifyExecution control.Execution
+	var gotVerifyEvidence []byte
 	provider := verificationProvider{}
 	resource, err := memory.NewResource("resource-a", "initial")
 	if err != nil {
@@ -135,11 +137,17 @@ func TestHostPassesVerificationInputsThroughUnchanged(t *testing.T) {
 	}
 	provider.base = base
 	provider.executeFn = func(_ context.Context, req control.ExecuteRequest) (control.Execution, error) {
+		gotExecuteBefore = req.Before
+		req.Before.Resource.Fingerprint = "mutated"
 		return control.Execution{ExecutionID: req.ExecutionID, Evidence: []byte("claimed-result")}, nil
 	}
 	provider.verifyFn = func(_ context.Context, req control.VerifyRequest) (control.Verification, error) {
-		gotBefore = req.Before
-		gotExecution = req.Execution
+		gotVerifyBefore = req.Before
+		gotVerifyExecution = req.Execution
+		gotVerifyEvidence = append([]byte(nil), req.Execution.Evidence...)
+		if len(req.Execution.Evidence) > 0 {
+			req.Execution.Evidence[0] = 'X'
+		}
 		return control.Verification{
 			Resource:   control.ResourceRef{ID: "resource-a", Fingerprint: "running"},
 			VerifiedAt: time.Now().UTC(),
@@ -157,11 +165,30 @@ func TestHostPassesVerificationInputsThroughUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotBefore.Resource.ID != "resource-a" || gotBefore.Resource.Fingerprint != "initial" {
-		t.Fatalf("before observation = %+v", gotBefore)
+	if gotExecuteBefore.Resource.ID != "resource-a" || gotExecuteBefore.Resource.Fingerprint != "initial" {
+		t.Fatalf("execute before observation = %+v", gotExecuteBefore)
 	}
-	if gotExecution.ExecutionID != result.Execution.ExecutionID || string(gotExecution.Evidence) != "claimed-result" {
-		t.Fatalf("execution = %+v, want %+v", gotExecution, result.Execution)
+	if gotExecuteBefore.Version != 1 {
+		t.Fatalf("execute before version = %d, want 1", gotExecuteBefore.Version)
+	}
+	if gotVerifyBefore.Resource.ID != "resource-a" || gotVerifyBefore.Resource.Fingerprint != "initial" {
+		t.Fatalf("verify before observation = %+v", gotVerifyBefore)
+	}
+	if gotVerifyBefore.Version != 1 {
+		t.Fatalf("verify before version = %d, want 1", gotVerifyBefore.Version)
+	}
+	if gotExecuteBefore.Resource != gotVerifyBefore.Resource ||
+		gotExecuteBefore.Version != gotVerifyBefore.Version ||
+		!gotExecuteBefore.ObservedAt.Equal(gotVerifyBefore.ObservedAt) {
+		t.Fatalf("execute and verify before observations differ: execute=%+v verify=%+v", gotExecuteBefore, gotVerifyBefore)
+	}
+	if gotVerifyExecution.ExecutionID != result.Execution.ExecutionID || string(gotVerifyEvidence) != "claimed-result" {
+		t.Fatalf("verification execution = %+v, want evidence %q", gotVerifyExecution, "claimed-result")
+	}
+	// This is a coarse canary for the Host-visible execution boundary; the downstream
+	// Kernel evidence copies are not independently observable through this API.
+	if string(result.Execution.Evidence) != "claimed-result" {
+		t.Fatalf("provider mutation escaped verification boundary: %q", result.Execution.Evidence)
 	}
 }
 

@@ -26,7 +26,7 @@ func main() {
 	recoveryObserver := synthetic.RecoveryObserver{Resource: resource}
 
 	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
-	server, err := mcp.NewServer(runtime, executor, verifier, recoveryObserver)
+	server, err := mcp.NewServer(runtime, executor, verifier, recoveryObserver, recoveryObserver)
 	if err != nil {
 		log.Fatal(err)
 	}
