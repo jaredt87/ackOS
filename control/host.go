@@ -166,8 +166,7 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 		request: ExecuteRequest{
 			ExecutionID: authority.ExecutionID,
 			Target:      req.Target,
-			Before:      beforeObservation(observed),
-			Payload:     []byte(req.Desired.Fingerprint),
+						Payload:     []byte(req.Desired.Fingerprint),
 		},
 	})
 	if err != nil {
@@ -248,10 +247,10 @@ func (h *Host) verify(ctx context.Context, providerName string, p Provider, req 
 	return result, nil
 }
 
-func beforeObservation(observed Observation) Observation {
+func beforeObservation(before kernel.Observation) Observation {
 	return Observation{
-		Resource:   observed.Resource,
-		ObservedAt: observed.ObservedAt,
+		Resource:   ResourceRef{ID: before.Subject, Fingerprint: before.State},
+		ObservedAt: before.ObservedAt,
 	}
 }
 
@@ -264,8 +263,10 @@ type providerExecutor struct {
 	request      ExecuteRequest
 }
 
-func (e providerExecutor) Execute(ctx context.Context, _ kernel.Transition, _ kernel.Authority) kernel.ExecutionResult {
-	result, err := e.host.execute(ctx, e.providerName, e.provider, e.request, e.invocation)
+func (e providerExecutor) Execute(ctx context.Context, _ kernel.Transition, _ kernel.Authority, before kernel.Observation) kernel.ExecutionResult {
+	request := e.request
+	request.Before = beforeObservation(before)
+	result, err := e.host.execute(ctx, e.providerName, e.provider, request, e.invocation)
 	if err != nil {
 		return kernel.ExecutionResult{Message: err.Error()}
 	}
@@ -290,10 +291,7 @@ type providerVerifier struct {
 func (v providerVerifier) Verify(ctx context.Context, _ kernel.Transition, authority kernel.Authority, before kernel.Observation, execution kernel.ExecutionResult) (kernel.Observation, error) {
 	request := v.request
 	request.ExecutionID = authority.ExecutionID
-	request.Before = Observation{
-		Resource:   ResourceRef{ID: before.Subject, Fingerprint: before.State},
-		ObservedAt: before.ObservedAt,
-	}
+	request.Before = beforeObservation(before)
 	request.Execution = Execution{
 		ExecutionID: execution.ExecutionID,
 		Evidence:    append([]byte(nil), execution.Evidence...),
