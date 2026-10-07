@@ -101,8 +101,8 @@ func TestExecutorRejectsTOCTOUStateChange(t *testing.T) {
 	if runtime.Phase() != kernel.PhaseRecovery {
 		t.Fatalf("phase = %s, want RECOVERY", runtime.Phase())
 	}
-	if _, state, _ := resource.Observe(); state != "changed-outside-ackos" {
-		t.Fatalf("resource state was unexpectedly overwritten")
+	if subject, state, version := resource.Observe(); subject != "resource-a" || state != "changed-outside-ackos" || version != 2 {
+		t.Fatalf("resource = (%q, %q, %d), want unchanged (%q, %q, %d)", subject, state, version, "resource-a", "changed-outside-ackos", 2)
 	}
 }
 
@@ -185,5 +185,32 @@ func TestVerifierUsesFreshExternalObservation(t *testing.T) {
 	}
 	if got := runtime.Root(); got != "initial" {
 		t.Fatalf("root = %q, want initial", got)
+	}
+}
+
+
+func TestExecutorRejectsABAStateChange(t *testing.T) {
+	resource := NewResource("resource-a", "initial")
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+
+	authorize(t, runtime, "resource-a", "initial", "running")
+	resource.Set("resource-a", "changed-outside-ackos")
+	resource.Set("resource-a", "initial")
+
+	result, err := runtime.Start(context.Background(), Executor{Resource: resource})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Success {
+		t.Fatal("execution unexpectedly succeeded after ABA mutation")
+	}
+	if runtime.Phase() != kernel.PhaseRecovery {
+		t.Fatalf("phase = %s, want RECOVERY", runtime.Phase())
+	}
+	if got := runtime.Root(); got != "initial" {
+		t.Fatalf("root = %q, want initial", got)
+	}
+	if subject, state, version := resource.Observe(); subject != "resource-a" || state != "initial" || version != 3 {
+		t.Fatalf("resource = (%q, %q, %d), want unchanged (%q, %q, %d)", subject, state, version, "resource-a", "initial", 3)
 	}
 }
