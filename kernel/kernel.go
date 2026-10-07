@@ -237,7 +237,7 @@ type ExecutionResult struct {
 }
 
 type Executor interface {
-	Execute(context.Context, Transition, Authority) ExecutionResult
+	Execute(context.Context, Transition, Authority, Observation) ExecutionResult
 }
 
 type Verifier interface {
