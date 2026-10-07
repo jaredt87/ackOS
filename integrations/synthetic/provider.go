@@ -54,7 +54,7 @@ type Executor struct {
 	Resource *Resource
 }
 
-func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority kernel.Authority) kernel.ExecutionResult {
+func (e Executor) Execute(ctx context.Context, t kernel.Transition, authority kernel.Authority, _ kernel.Observation) kernel.ExecutionResult {
 	if e.Resource == nil {
 		return kernel.ExecutionResult{Message: "synthetic resource is required"}
 	}
