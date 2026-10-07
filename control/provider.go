@@ -28,6 +28,7 @@ type Observation struct {
 type ExecuteRequest struct {
 	ExecutionID string
 	Target      ResourceRef
+	Before      Observation
 	Payload     []byte
 }
 
