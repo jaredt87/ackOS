@@ -16,7 +16,7 @@ type testExecutor struct {
 	block   chan struct{}
 }
 
-func (e *testExecutor) Execute(ctx context.Context, _ kernel.Transition, _ kernel.Authority) kernel.ExecutionResult {
+func (e *testExecutor) Execute(ctx context.Context, _ kernel.Transition, _ kernel.Authority, _ kernel.Observation) kernel.ExecutionResult {
 	e.calls++
 	if e.block != nil {
 		select {
