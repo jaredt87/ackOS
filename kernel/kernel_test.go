@@ -145,8 +145,6 @@ func TestStartPassesAuthorizedObservationDefensively(t *testing.T) {
 	}
 }
 
-
-
 func (f fakeExecutorWithResult) Execute(context.Context, Transition, Authority, Observation) ExecutionResult {
 	return f.result
 }
