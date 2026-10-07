@@ -158,6 +158,9 @@ func (e boundedExecutor) Execute(ctx context.Context, transition kernel.Transiti
 	results := make(chan kernel.ExecutionResult, 1)
 	go func() {
 		defer e.server.releaseProvider()
+		// The MCP wrapper only transports the authorized snapshot to the remote
+		// executor; the remote tool owns the mutating resource boundary and must
+		// enforce Before itself.
 		results <- e.server.executor.Execute(executionCtx, transition, authority, before)
 	}()
 
