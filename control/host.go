@@ -166,6 +166,7 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 		request: ExecuteRequest{
 			ExecutionID: authority.ExecutionID,
 			Target:      req.Target,
+			Before:      beforeObservation(observed),
 			Payload:     []byte(req.Desired.Fingerprint),
 		},
 	})
