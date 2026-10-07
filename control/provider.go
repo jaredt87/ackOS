@@ -2,8 +2,11 @@ package control
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+var ErrStaleObservation = errors.New("stale pre-execution observation")
 
 // ResourceRef identifies an opaque provider resource state.
 // Fingerprint is compared for equality only; its contents have no meaning to
@@ -21,6 +24,7 @@ type ObserveRequest struct {
 
 type Observation struct {
 	Resource   ResourceRef
+	Version    uint64
 	Evidence   []byte
 	ObservedAt time.Time
 }
@@ -48,6 +52,7 @@ type VerifyRequest struct {
 
 type Verification struct {
 	Resource   ResourceRef
+	Version    uint64
 	Evidence   []byte
 	VerifiedAt time.Time
 }
