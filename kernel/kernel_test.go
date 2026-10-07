@@ -14,7 +14,7 @@ type fakeExecutor struct {
 	calls  int
 }
 
-func (f *fakeExecutor) Execute(context.Context, Transition, Authority) ExecutionResult {
+func (f *fakeExecutor) Execute(context.Context, Transition, Authority, Observation) ExecutionResult {
 	f.mu.Lock()
 	f.calls++
 	f.mu.Unlock()
@@ -27,7 +27,7 @@ type blockingExecutor struct {
 	result  ExecutionResult
 }
 
-func (e *blockingExecutor) Execute(context.Context, Transition, Authority) ExecutionResult {
+func (e *blockingExecutor) Execute(context.Context, Transition, Authority, Observation) ExecutionResult {
 	close(e.started)
 	<-e.release
 	return e.result
@@ -116,7 +116,7 @@ type fakeExecutorWithResult struct {
 	result ExecutionResult
 }
 
-func (f fakeExecutorWithResult) Execute(context.Context, Transition, Authority) ExecutionResult {
+func (f fakeExecutorWithResult) Execute(context.Context, Transition, Authority, Observation) ExecutionResult {
 	return f.result
 }
 
