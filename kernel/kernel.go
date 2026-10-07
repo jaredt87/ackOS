@@ -459,7 +459,8 @@ func (r *Runtime) Start(ctx context.Context, e Executor) (ExecutionResult, error
 	done := r.executionDone
 	r.mu.Unlock()
 
-	result := e.Execute(ctx, t, a)
+	before := *r.observation
+	result := e.Execute(ctx, t, a, before)
 
 	r.mu.Lock()
 	if r.phase != PhaseStarted || r.executionDone != done {
