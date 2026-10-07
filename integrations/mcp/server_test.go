@@ -383,7 +383,6 @@ func TestControlDoesNotOverlapTimedOutProviderCall(t *testing.T) {
 	close(verifier.block)
 }
 
-
 func TestControlUsesProviderObservationForFreshTransition(t *testing.T) {
 	resource := synthetic.NewResource("resource-a", "initial")
 	observer := synthetic.RecoveryObserver{Resource: resource}
