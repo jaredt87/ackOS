@@ -53,6 +53,7 @@ func (p *Provider) Observe(ctx context.Context, req control.ObserveRequest) (con
 	}
 	return control.Observation{
 		Resource:   control.ResourceRef{ID: id, Fingerprint: fingerprint},
+		Version:    version,
 		Evidence:   mustEvidence(id, fingerprint, version),
 		ObservedAt: observedAt,
 	}, nil
@@ -67,8 +68,11 @@ func (p *Provider) Execute(ctx context.Context, req control.ExecuteRequest) (con
 	}
 	p.resource.mu.Lock()
 	defer p.resource.mu.Unlock()
-	if p.resource.id != req.Target.ID || p.resource.fingerprint != req.Target.Fingerprint {
-		return control.Execution{}, fmt.Errorf("resource changed before execution")
+	if req.Before.Resource.ID != req.Target.ID ||
+		p.resource.id != req.Before.Resource.ID ||
+		p.resource.fingerprint != req.Before.Resource.Fingerprint ||
+		p.resource.version != req.Before.Version {
+		return control.Execution{}, fmt.Errorf("%w: memory resource changed before execution", control.ErrStaleObservation)
 	}
 	if string(req.Payload) == "" {
 		return control.Execution{}, fmt.Errorf("payload is required")
@@ -98,6 +102,7 @@ func (p *Provider) Verify(ctx context.Context, req control.VerifyRequest) (contr
 	}
 	return control.Verification{
 		Resource:   control.ResourceRef{ID: id, Fingerprint: fingerprint},
+		Version:    version,
 		Evidence:   mustEvidence(id, fingerprint, version),
 		VerifiedAt: verifiedAt,
 	}, nil
