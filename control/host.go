@@ -251,7 +251,6 @@ func (h *Host) verify(ctx context.Context, providerName string, p Provider, req 
 func beforeObservation(observed Observation) Observation {
 	return Observation{
 		Resource:   observed.Resource,
-		Evidence:   append([]byte(nil), observed.Evidence...),
 		ObservedAt: observed.ObservedAt,
 	}
 }
