@@ -124,7 +124,8 @@ func controlRequest() control.ControlRequest {
 func TestHostPassesVerificationInputsThroughUnchanged(t *testing.T) {
 	var gotExecuteBefore control.Observation
 	var gotVerifyBefore control.Observation
-	var gotExecution control.Execution
+	var gotVerifyExecution control.Execution
+	var gotVerifyEvidence []byte
 	provider := verificationProvider{}
 	resource, err := memory.NewResource("resource-a", "initial")
 	if err != nil {
@@ -142,7 +143,8 @@ func TestHostPassesVerificationInputsThroughUnchanged(t *testing.T) {
 	}
 	provider.verifyFn = func(_ context.Context, req control.VerifyRequest) (control.Verification, error) {
 		gotVerifyBefore = req.Before
-		gotExecution = req.Execution
+		gotVerifyExecution = req.Execution
+		gotVerifyEvidence = append([]byte(nil), req.Execution.Evidence...)
 		if len(req.Execution.Evidence) > 0 {
 			req.Execution.Evidence[0] = 'X'
 		}
@@ -180,9 +182,11 @@ func TestHostPassesVerificationInputsThroughUnchanged(t *testing.T) {
 		!gotExecuteBefore.ObservedAt.Equal(gotVerifyBefore.ObservedAt) {
 		t.Fatalf("execute and verify before observations differ: execute=%+v verify=%+v", gotExecuteBefore, gotVerifyBefore)
 	}
-	if gotExecution.ExecutionID != result.Execution.ExecutionID || string(gotExecution.Evidence) != "claimed-result" {
-		t.Fatalf("execution = %+v, want %+v", gotExecution, result.Execution)
+	if gotVerifyExecution.ExecutionID != result.Execution.ExecutionID || string(gotVerifyEvidence) != "claimed-result" {
+		t.Fatalf("verification execution = %+v, want evidence %q", gotVerifyExecution, "claimed-result")
 	}
+	// This is a coarse canary for the Host-visible execution boundary; the downstream
+	// Kernel evidence copies are not independently observable through this API.
 	if string(result.Execution.Evidence) != "claimed-result" {
 		t.Fatalf("provider mutation escaped verification boundary: %q", result.Execution.Evidence)
 	}
