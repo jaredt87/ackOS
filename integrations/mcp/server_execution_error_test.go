@@ -3,20 +3,22 @@ package mcp
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/jaredt87/ackOS/kernel"
 )
 
-func TestControlExecutionFailureResponseRemainsOriginalAcrossRecoveryOutcomes(t *testing.T) {
+func TestControlExecutionFailureResponseAcrossRecoveryOutcomes(t *testing.T) {
 	cases := []struct {
-		name          string
-		recoveryErr   error
-		recoveryState string
+		name                string
+		recoveryErr         error
+		recoveryState       string
+		expectedRecoveryErr string
 	}{
 		{name: "recovery succeeds"},
-		{name: "recovery errors", recoveryErr: errors.New("recovery unavailable")},
-		{name: "recovery observes different state", recoveryState: "different"},
+		{name: "recovery error surfaces", recoveryErr: errors.New("recovery unavailable"), expectedRecoveryErr: "recovery unavailable"},
+		{name: "recovery conflict surfaces", recoveryState: "different", expectedRecoveryErr: "compare-and-swap conflict"},
 	}
 
 	for _, tc := range cases {
@@ -47,8 +49,11 @@ func TestControlExecutionFailureResponseRemainsOriginalAcrossRecoveryOutcomes(t 
 				if recoveryErr == nil {
 					t.Fatal("expected recovery error")
 				}
+				if !strings.Contains(recoveryErr.Error(), tc.expectedRecoveryErr) {
+					t.Fatalf("recovery err = %q, want substring %q", recoveryErr, tc.expectedRecoveryErr)
+				}
 				if second.Execution.Message != "" {
-					t.Fatalf("second execution = %+v, want no relabeling of first failure", second.Execution)
+					t.Fatalf("second execution = %+v, want no execution result from recovery attempt", second.Execution)
 				}
 				return
 			}
