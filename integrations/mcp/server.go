@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"net/http"
 	"time"
 
@@ -278,7 +279,7 @@ func (s *Server) controlTool(ctx context.Context, req *mcpsdk.CallToolRequest, i
 	if err == nil {
 		return result, response, nil
 	}
-	if executionError == nil {
+	if executionError == nil && (s.provider == nil || !strings.HasPrefix(err.Error(), "execution failed: ")) {
 		return nil, response, err
 	}
 	code := "execution_failed"
