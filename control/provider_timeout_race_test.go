@@ -25,12 +25,12 @@ func (p timeoutRaceProvider) Execute(_ context.Context, req ExecuteRequest) (Exe
 	return Execution{ExecutionID: req.ExecutionID}, nil
 }
 
-func (p timeoutRaceProvider) Verify(<-chan struct{}, VerifyRequest) (Verification, error) {
+func (p timeoutRaceProvider) Verify(context.Context, VerifyRequest) (Verification, error) {
 	panic("unreachable")
 }
 
 func TestInvocationProviderReturnsBeforeReadingTimedOutObserveResult(t *testing.T) {
-	for range 100 {
+	for range 1000 {
 		release := make(chan struct{})
 		provider := timeoutRaceProvider{release: release}
 		host, err := NewHost(kernel.NewRuntime("initial", kernel.AllowPolicy{}), time.Millisecond)
