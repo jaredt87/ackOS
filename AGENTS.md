@@ -9,7 +9,7 @@
 ### 2. Environment & Commands
 
 * Go 1.25. Run these exact commands to verify changes — they mirror `.github/workflows/ci.yml` exactly. Do not substitute tools or omit flags.
-* **Format check:** `test -z "$(gofmt -l .)"`
+* **Format check:** `files="$(gofmt -l .)"; if [ -n "$files" ]; then printf '%s\\n' "$files"; gofmt -d .; exit 1; fi`
 * **Vet:** `go vet ./...`
 * **Unit Testing:** `go test ./...`
 * **Race Testing:** `go test -race ./...` (required — the kernel's atomicity/CAS guarantees are meaningless if this doesn't pass)
