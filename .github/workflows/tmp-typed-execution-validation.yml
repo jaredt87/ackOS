@@ -1,0 +1,54 @@
+name: Temporary typed execution validation
+on:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout final PR HEAD
+        uses: actions/checkout@v4
+        with:
+          ref: ca3ca51eec0af0012c0f33cfef52e4b21ad0cd5e
+      - name: Print SHAs
+        run: |
+          echo "GITHUB_SHA=$GITHUB_SHA"
+          echo "PR_HEAD_SHA=${{ github.event.pull_request.head.sha }}"
+          echo "CHECKED_OUT_SHA=$(git rev-parse HEAD)"
+      - name: Run new race test
+        run: go test -race ./integrations/mcp -run '^TestControlExecutionTimeoutStructuredError$' -count=1
+      - name: Mutation — unconditional holder read
+        shell: bash
+        run: |
+          set +e
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('integrations/mcp/server.go')
+          s = p.read_text()
+          old = 'executionErrorValue(executionError, completed && !timedOut)'
+          new = 'executionErrorValue(executionError, true)'
+          if old not in s:
+              raise SystemExit('mutation target not found')
+          p.write_text(s.replace(old, new, 1))
+
+          p = Path('integrations/mcp/server_execution_error_test.go')
+          s = p.read_text()
+          old = 'return control.Execution{}, nil\\n\\t\\t},\\n\\t})'
+          new = 'return control.Execution{}, control.ErrStaleObservation\\n\\t\\t},\\n\\t})'
+          if old not in s:
+              raise SystemExit('timeout test mutation target not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          set -o pipefail
+          go test -race ./integrations/mcp -run '^TestControlExecutionTimeoutStructuredError$' -count=1 2>&1 | tee /tmp/mutation.log
+          status=${PIPESTATUS[0]}
+          grep -F -- '--- FAIL: TestControlExecutionTimeoutStructuredError' /tmp/mutation.log
+          grep -F -- 'DATA RACE' /tmp/mutation.log
+          if [ "$status" -eq 0 ]; then
+            echo 'mutation unexpectedly passed'
+            exit 1
+          fi
+      - name: Restore mutation and verify clean tree
+        run: |
+          git restore -- integrations/mcp/server.go integrations/mcp/server_execution_error_test.go
+          git diff --exit-code
