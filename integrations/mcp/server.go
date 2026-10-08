@@ -65,8 +65,9 @@ type boundedVerifier struct {
 }
 
 type boundedExecutor struct {
-	server   *Server
-	executor kernel.Executor
+	server           *Server
+	executor         kernel.Executor
+	executionOutcome chan<- bool
 }
 
 func NewServer(runtime *kernel.Runtime, executor kernel.Executor, verifier kernel.Verifier, observer Observer, recoveryObserver RecoveryObserver) (*Server, error) {
@@ -236,6 +237,7 @@ func (e boundedExecutor) Execute(ctx context.Context, transition kernel.Transiti
 	executionCtx, cancel := context.WithTimeout(ctx, e.server.verifyTimeout)
 	defer cancel()
 	if err := e.server.acquireProvider(executionCtx); err != nil {
+		e.reportExecutionOutcome(false)
 		return kernel.ExecutionResult{Success: false, Message: fmt.Sprintf("executor admission failed: %v", err)}
 	}
 
@@ -254,9 +256,17 @@ func (e boundedExecutor) Execute(ctx context.Context, transition kernel.Transiti
 
 	select {
 	case result := <-results:
+		e.reportExecutionOutcome(false)
 		return result
 	case <-executionCtx.Done():
+		e.reportExecutionOutcome(true)
 		return kernel.ExecutionResult{Success: false, Message: fmt.Sprintf("executor timed out after %s: %v", e.server.verifyTimeout, executionCtx.Err())}
+	}
+}
+
+func (e boundedExecutor) reportExecutionOutcome(timedOut bool) {
+	if e.executionOutcome != nil {
+		e.executionOutcome <- timedOut
 	}
 }
 
@@ -270,22 +280,29 @@ func (s *Server) MCPServer() *mcpsdk.Server {
 }
 
 func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in ControlRequest) (*mcpsdk.CallToolResult, ControlResponse, error) {
-	return s.controlWithExecutionError(ctx, in, nil)
+	return s.controlWithExecutionError(ctx, in, nil, nil)
 }
 
 func (s *Server) controlTool(ctx context.Context, req *mcpsdk.CallToolRequest, in ControlRequest) (*mcpsdk.CallToolResult, any, error) {
 	var executionError error
-	result, response, err := s.controlWithExecutionError(ctx, in, &executionError)
+	executionOutcomes := make(chan bool, 1)
+	result, response, err := s.controlWithExecutionError(ctx, in, &executionError, executionOutcomes)
 	if err == nil {
 		return result, response, nil
 	}
-	if executionError == nil && (s.provider == nil || !strings.HasPrefix(err.Error(), "execution failed: ")) {
+	if s.provider == nil || !strings.HasPrefix(err.Error(), "execution failed: ") {
 		return nil, response, err
 	}
-	code := "execution_failed"
-	if errors.Is(executionError, control.ErrStaleObservation) {
-		code = "stale_observation"
+	timedOut, completed := false, false
+	select {
+	case timedOut = <-executionOutcomes:
+		completed = true
+	default:
 	}
+	if !completed {
+		timedOut = false
+	}
+	code := executionFailureCode(executionErrorValue(&executionError, completed && !timedOut), timedOut)
 	return &mcpsdk.CallToolResult{
 		Content: []mcpsdk.Content{
 			&mcpsdk.TextContent{Text: err.Error()},
@@ -300,7 +317,7 @@ func (s *Server) controlTool(ctx context.Context, req *mcpsdk.CallToolRequest, i
 	}, nil, nil
 }
 
-func (s *Server) controlWithExecutionError(ctx context.Context, in ControlRequest, executionError *error) (*mcpsdk.CallToolResult, ControlResponse, error) {
+func (s *Server) controlWithExecutionError(ctx context.Context, in ControlRequest, executionError *error, executionOutcomes chan<- bool) (*mcpsdk.CallToolResult, ControlResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, ControlResponse{}, err
 	}
@@ -382,7 +399,7 @@ func (s *Server) controlWithExecutionError(ctx context.Context, in ControlReques
 			executionError,
 		)
 	}
-	execution, err := s.runtime.Start(ctx, boundedExecutor{server: s, executor: executor})
+	execution, err := s.runtime.Start(ctx, boundedExecutor{server: s, executor: executor, executionOutcome: executionOutcomes})
 	if err != nil {
 		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority}, err
 	}
@@ -421,6 +438,23 @@ func (s *Server) controlWithExecutionError(ctx context.Context, in ControlReques
 		Committed:   true,
 		Root:        s.runtime.Root(),
 	}, nil
+}
+
+func executionErrorValue(executionError *error, completed bool) error {
+	if !completed || executionError == nil {
+		return nil
+	}
+	return *executionError
+}
+
+func executionFailureCode(executionError error, timedOut bool) string {
+	if timedOut {
+		return "execution_failed"
+	}
+	if errors.Is(executionError, control.ErrStaleObservation) {
+		return "stale_observation"
+	}
+	return "execution_failed"
 }
 
 func (s *Server) StreamableHTTPHandler() http.Handler {

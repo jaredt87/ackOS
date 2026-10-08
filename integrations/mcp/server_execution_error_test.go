@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -310,5 +311,51 @@ func TestControlRecoveryFailureIsNotExecutionError(t *testing.T) {
 	}
 	if second.StructuredContent != nil {
 		t.Fatalf("second structured content = %#v, want nil recovery error", second.StructuredContent)
+	}
+}
+
+func TestExecutionFailureCode(t *testing.T) {
+	cases := []struct {
+		name     string
+		err      error
+		timedOut bool
+		wantCode string
+	}{
+		{name: "stale observation", err: control.ErrStaleObservation, wantCode: "stale_observation"},
+		{name: "provider failure", err: errors.New("provider rejected transition"), wantCode: "execution_failed"},
+		{name: "timeout ignores late stale error", err: control.ErrStaleObservation, timedOut: true, wantCode: "execution_failed"},
+		{name: "nil execution error", wantCode: "execution_failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := executionFailureCode(tc.err, tc.timedOut); got != tc.wantCode {
+				t.Fatalf("executionFailureCode(%v, %t) = %q, want %q", tc.err, tc.timedOut, got, tc.wantCode)
+			}
+		})
+	}
+}
+
+func TestExecutionErrorValueSkipsHolderReadBeforeCompletion(t *testing.T) {
+	var executionError error
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		<-start
+		executionError = errors.New("late execution error")
+	}()
+
+	got := make(chan error, 1)
+	go func() {
+		defer wg.Done()
+		close(start)
+		got <- executionErrorValue(&executionError, false)
+	}()
+
+	wg.Wait()
+	if got := <-got; got != nil {
+		t.Fatalf("executionErrorValue = %v, want nil before completion", got)
 	}
 }
