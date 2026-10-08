@@ -36,6 +36,20 @@ Recovery is deliberately fail-closed when provider evidence disagrees with the k
 
 The adapter serializes complete control lifecycles because the V0 runtime is a single mutable state machine. This prevents concurrent MCP calls from invalidating each other's reserved authority.
 
+The provider-backed constructor, `NewServerWithProvider(runtime, provider)`, builds the shared provider adapters for each control lifecycle. It is the integration path intended for a real resource provider; as of this PR it has no production caller. The shipped `cmd/ackos-mcp` binary still wires the synthetic Kernel executor, and the Git provider PR will be the first production wiring of this path.
+
+### Execution errors
+
+A provider-backed execution failure is returned as an MCP tool result with `isError: true`. The human-readable failure remains in the text `content` so clients that ignore metadata still receive the reason. Machine-readable classification is carried in the namespaced `_meta["io.github.jaredt87/ackos/error"]` object:
+
+- `code: "stale_observation"` — the authorized pre-execution observation was stale.
+- `code: "execution_failed"` — execution failed for another reason, including provider failure, mismatched execution ID, timeout, or cancellation.
+
+The metadata also carries the same human-readable `message` supplied in the text content. Error results do not use `structuredContent`; successful `ackos_control` calls continue to advertise and return the existing `ControlResponse` output schema.
+
+Recovery failures remain lifecycle errors rather than execution classifications. If a later recovery request fails, its recovery error is returned directly and is not relabeled as `stale_observation`.
+
+
 ### Standalone synthetic demo identity
 
 The standalone `cmd/ackos-mcp` binary uses one synthetic resource whose stable subject identity is `demo-resource`. Calls to the standalone demo must use `subject: "demo-resource"`; this identity is intentionally fixed so the provider can exercise resource-substitution and identity enforcement. Real deployments must configure the MCP adapter with the subject identities accepted by their resource provider rather than relying on the synthetic demo identity.

@@ -11,6 +11,7 @@ import (
 	"github.com/jaredt87/ackOS/control"
 	"github.com/jaredt87/ackOS/integrations/synthetic"
 	"github.com/jaredt87/ackOS/kernel"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 type testExecutor struct {
@@ -514,5 +515,57 @@ func TestControlRejectsMutationAfterProviderObservation(t *testing.T) {
 	}
 	if out.Execution.Success || out.Committed || out.Phase != kernel.PhaseRecovery {
 		t.Fatalf("unexpected stale result: %+v", out)
+	}
+}
+
+func TestControlExecutionFailureCharacterization(t *testing.T) {
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	executor := &testExecutor{}
+	verifier := &testVerifier{}
+	server, err := NewServer(runtime, executor, verifier, verifier, verifier)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mcpServer := server.MCPServer()
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "ackos-test-client", Version: "test"}, nil)
+	clientTransport, serverTransport := mcpsdk.NewInMemoryTransports()
+	serverSession, err := mcpServer.Connect(context.Background(), serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	clientSession, err := client.Connect(context.Background(), clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	result, err := clientSession.CallTool(context.Background(), &mcpsdk.CallToolParams{
+		Name: ToolControl,
+		Arguments: map[string]any{
+			"subject":        "svc",
+			"observed_state": "initial",
+			"desired_state":  "ready",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError {
+		t.Fatalf("result = %+v, want tool error", result)
+	}
+	if len(result.Content) != 1 {
+		t.Fatalf("content = %+v, want one item", result.Content)
+	}
+	textContent, ok := result.Content[0].(*mcpsdk.TextContent)
+	if !ok {
+		t.Fatalf("content[0] = %T, want *mcp.TextContent", result.Content[0])
+	}
+	if textContent.Text != "execution failed: executor rejected transition" {
+		t.Fatalf("text = %q, want current execution failure", textContent.Text)
+	}
+	if result.StructuredContent != nil {
+		t.Fatalf("structured content = %#v, want nil in current failure path", result.StructuredContent)
 	}
 }

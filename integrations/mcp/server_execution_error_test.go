@@ -1,0 +1,422 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/jaredt87/ackOS/control"
+	"github.com/jaredt87/ackOS/kernel"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+func TestControlExecutionFailureResponseAcrossRecoveryOutcomes(t *testing.T) {
+	cases := []struct {
+		name                string
+		recoveryErr         error
+		recoveryState       string
+		expectedRecoveryErr string
+	}{
+		{name: "recovery succeeds"},
+		{name: "recovery error surfaces", recoveryErr: errors.New("recovery unavailable"), expectedRecoveryErr: "recovery unavailable"},
+		{name: "recovery conflict surfaces", recoveryState: "different", expectedRecoveryErr: "compare-and-swap conflict"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+			executor := &testExecutor{}
+			normalObserver := &testVerifier{}
+			recoveryObserver := &testVerifier{observeErr: tc.recoveryErr, observeState: tc.recoveryState}
+			server, err := NewServer(runtime, executor, normalObserver, normalObserver, recoveryObserver)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, first, err := server.control(context.Background(), nil, ControlRequest{
+				Subject: "svc", ObservedState: "initial", DesiredState: "ready",
+			})
+			if err == nil {
+				t.Fatal("expected execution failure")
+			}
+			if executor.calls != 1 {
+				t.Fatalf("executor calls = %d, want 1 before recovery", executor.calls)
+			}
+			if err.Error() != "execution failed: executor rejected transition" {
+				t.Fatalf("first err = %q, want original execution failure", err)
+			}
+			if first.Execution.Message != "executor rejected transition" {
+				t.Fatalf("first execution = %+v, want original execution failure", first.Execution)
+			}
+
+			executor.success = true
+			_, second, recoveryErr := server.control(context.Background(), nil, ControlRequest{
+				Subject: "svc", ObservedState: "initial", DesiredState: "ready",
+			})
+			if recoveryObserver.observeCalls.Load() != 1 {
+				t.Fatalf("recovery observe calls = %d, want 1 after recovery attempt", recoveryObserver.observeCalls.Load())
+			}
+			if tc.recoveryErr != nil || tc.recoveryState != "" {
+				if recoveryErr == nil {
+					t.Fatal("expected recovery error")
+				}
+				if !strings.Contains(recoveryErr.Error(), tc.expectedRecoveryErr) {
+					t.Fatalf("recovery err = %q, want substring %q", recoveryErr, tc.expectedRecoveryErr)
+				}
+				if executor.calls != 1 {
+					t.Fatalf("executor calls = %d, want 1 after recovery failure", executor.calls)
+				}
+				return
+			}
+			if recoveryErr != nil {
+				t.Fatal(recoveryErr)
+			}
+			if !second.Committed {
+				t.Fatalf("second response = %+v, want recovery success", second)
+			}
+
+		})
+	}
+}
+
+type typedExecutionProvider struct {
+	execute func(context.Context, control.ExecuteRequest) (control.Execution, error)
+}
+
+func (p typedExecutionProvider) Observe(context.Context, control.ObserveRequest) (control.Observation, error) {
+	return control.Observation{
+		Resource:   control.ResourceRef{ID: "svc", Fingerprint: "initial"},
+		Version:    1,
+		ObservedAt: time.Now().UTC(),
+	}, nil
+}
+
+func (p typedExecutionProvider) Execute(ctx context.Context, req control.ExecuteRequest) (control.Execution, error) {
+	return p.execute(ctx, req)
+}
+
+func (p typedExecutionProvider) Verify(context.Context, control.VerifyRequest) (control.Verification, error) {
+	return control.Verification{
+		Resource:   control.ResourceRef{ID: "svc", Fingerprint: "ready"},
+		Version:    1,
+		VerifiedAt: time.Now().UTC(),
+	}, nil
+}
+
+func callProviderControl(t *testing.T, server *Server) *mcpsdk.CallToolResult {
+	t.Helper()
+	mcpServer := server.MCPServer()
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "ackos-test-client", Version: "test"}, nil)
+	clientTransport, serverTransport := mcpsdk.NewInMemoryTransports()
+	serverSession, err := mcpServer.Connect(context.Background(), serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	clientSession, err := client.Connect(context.Background(), clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	result, err := clientSession.CallTool(context.Background(), &mcpsdk.CallToolParams{
+		Name: ToolControl,
+		Arguments: map[string]any{
+			"subject":        "svc",
+			"observed_state": "ignored",
+			"desired_state":  "ready",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func assertStructuredExecutionError(t *testing.T, result *mcpsdk.CallToolResult, code string) {
+	t.Helper()
+	if !result.IsError {
+		t.Fatalf("result = %+v, want tool error", result)
+	}
+	if len(result.Content) != 1 {
+		t.Fatalf("content = %+v, want one item", result.Content)
+	}
+	textContent, ok := result.Content[0].(*mcpsdk.TextContent)
+	if !ok {
+		t.Fatalf("content[0] = %T, want *mcp.TextContent", result.Content[0])
+	}
+	if result.StructuredContent != nil {
+		t.Fatalf("structured content = %#v, want nil", result.StructuredContent)
+	}
+	meta := result.GetMeta()
+	metaValue, ok := meta[executionErrorMetaKey].(map[string]any)
+	if !ok {
+		t.Fatalf("error metadata = %#v, want object", meta[executionErrorMetaKey])
+	}
+	gotCode, ok := metaValue["code"].(string)
+	if !ok || gotCode != code {
+		t.Fatalf("error metadata code = %#v, want %q", metaValue["code"], code)
+	}
+	message, ok := metaValue["message"].(string)
+	if !ok || message != textContent.Text {
+		t.Fatalf("error metadata message = %#v, want text %q", metaValue["message"], textContent.Text)
+	}
+}
+
+func TestControlExecutionFailureStructuredError(t *testing.T) {
+	cases := []struct {
+		name        string
+		provider    typedExecutionProvider
+		wantCode    string
+		wantMessage string
+	}{
+		{
+			name: "stale observation",
+			provider: typedExecutionProvider{
+				execute: func(context.Context, control.ExecuteRequest) (control.Execution, error) {
+					return control.Execution{}, control.ErrStaleObservation
+				},
+			},
+			wantCode:    "stale_observation",
+			wantMessage: "execution failed: stale pre-execution observation",
+		},
+		{
+			name: "provider failure",
+			provider: typedExecutionProvider{
+				execute: func(context.Context, control.ExecuteRequest) (control.Execution, error) {
+					return control.Execution{}, errors.New("provider rejected transition")
+				},
+			},
+			wantCode:    "execution_failed",
+			wantMessage: "execution failed: provider rejected transition",
+		},
+		{
+			name: "mismatched execution ID",
+			provider: typedExecutionProvider{
+				execute: func(context.Context, control.ExecuteRequest) (control.Execution, error) {
+					return control.Execution{ExecutionID: "wrong"}, nil
+				},
+			},
+			wantCode:    "execution_failed",
+			wantMessage: "execution failed: provider returned mismatched execution ID",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+			server, err := NewServerWithProvider(runtime, tc.provider)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := callProviderControl(t, server)
+			assertStructuredExecutionError(t, result, tc.wantCode)
+			meta := result.GetMeta()
+			metaValue := meta[executionErrorMetaKey].(map[string]any)
+			if got := metaValue["message"]; got != tc.wantMessage {
+				t.Fatalf("error metadata message = %q, want %q", got, tc.wantMessage)
+			}
+		})
+	}
+}
+
+func TestControlExecutionTimeoutStructuredError(t *testing.T) {
+	release := make(chan struct{})
+	server, err := NewServerWithProvider(kernel.NewRuntime("initial", kernel.AllowPolicy{}), typedExecutionProvider{
+		execute: func(context.Context, control.ExecuteRequest) (control.Execution, error) {
+			<-release
+			return control.Execution{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.verifyTimeout = 10 * time.Millisecond
+
+	result := callProviderControl(t, server)
+	close(release)
+	assertStructuredExecutionError(t, result, "execution_failed")
+	meta := result.GetMeta()
+	metaValue := meta[executionErrorMetaKey].(map[string]any)
+	if message := metaValue["message"].(string); !strings.Contains(message, "executor timed out after") {
+		t.Fatalf("error metadata message = %q, want executor timeout", message)
+	}
+}
+
+func TestControlRecoveryFailureIsNotExecutionError(t *testing.T) {
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	executor := &testExecutor{}
+	normalObserver := &testVerifier{}
+	recoveryObserver := &testVerifier{observeErr: errors.New("recovery unavailable")}
+	server, err := NewServer(runtime, executor, normalObserver, normalObserver, recoveryObserver)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mcpServer := server.MCPServer()
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "ackos-test-client", Version: "test"}, nil)
+	clientTransport, serverTransport := mcpsdk.NewInMemoryTransports()
+	serverSession, err := mcpServer.Connect(context.Background(), serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	clientSession, err := client.Connect(context.Background(), clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	call := func() *mcpsdk.CallToolResult {
+		t.Helper()
+		result, err := clientSession.CallTool(context.Background(), &mcpsdk.CallToolParams{
+			Name: ToolControl,
+			Arguments: map[string]any{
+				"subject":        "svc",
+				"observed_state": "initial",
+				"desired_state":  "ready",
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+
+	first := call()
+	if !first.IsError {
+		t.Fatalf("first result = %+v, want execution failure", first)
+	}
+	if first.StructuredContent != nil {
+		t.Fatalf("first structured content = %#v, want nil for existing execution failure path", first.StructuredContent)
+	}
+
+	executor.success = true
+	second := call()
+	if !second.IsError {
+		t.Fatalf("second result = %+v, want recovery error", second)
+	}
+	if len(second.Content) != 1 {
+		t.Fatalf("second content = %+v, want one item", second.Content)
+	}
+	textContent, ok := second.Content[0].(*mcpsdk.TextContent)
+	if !ok {
+		t.Fatalf("second content[0] = %T, want *mcp.TextContent", second.Content[0])
+	}
+	if textContent.Text != "recovery unavailable" {
+		t.Fatalf("second text = %q, want recovery error", textContent.Text)
+	}
+	if second.StructuredContent != nil {
+		t.Fatalf("second structured content = %#v, want nil recovery error", second.StructuredContent)
+	}
+}
+
+func TestExecutionFailureCode(t *testing.T) {
+	cases := []struct {
+		name     string
+		err      error
+		timedOut bool
+		wantCode string
+	}{
+		{name: "stale observation", err: control.ErrStaleObservation, wantCode: "stale_observation"},
+		{name: "provider failure", err: errors.New("provider rejected transition"), wantCode: "execution_failed"},
+		{name: "timeout ignores late stale error", err: control.ErrStaleObservation, timedOut: true, wantCode: "execution_failed"},
+		{name: "nil execution error", wantCode: "execution_failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := executionFailureCode(tc.err, tc.timedOut); got != tc.wantCode {
+				t.Fatalf("executionFailureCode(%v, %t) = %q, want %q", tc.err, tc.timedOut, got, tc.wantCode)
+			}
+		})
+	}
+}
+
+func TestExecutionErrorValueSkipsHolderReadBeforeCompletion(t *testing.T) {
+	var executionError error
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		<-start
+		executionError = errors.New("late execution error")
+	}()
+
+	got := make(chan error, 1)
+	go func() {
+		defer wg.Done()
+		close(start)
+		got <- executionErrorValue(&executionError, false)
+	}()
+
+	wg.Wait()
+	if got := <-got; got != nil {
+		t.Fatalf("executionErrorValue = %v, want nil before completion", got)
+	}
+}
+
+func TestControlAdvertisesControlResponseSchema(t *testing.T) {
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	server, err := NewServer(runtime, &testExecutor{success: true}, &testVerifier{}, &testVerifier{}, &testVerifier{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcpServer := server.MCPServer()
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "ackos-test-client", Version: "test"}, nil)
+	clientTransport, serverTransport := mcpsdk.NewInMemoryTransports()
+	serverSession, err := mcpServer.Connect(context.Background(), serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	clientSession, err := client.Connect(context.Background(), clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	result, err := clientSession.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tool *mcpsdk.Tool
+	for _, candidate := range result.Tools {
+		if candidate.Name == ToolControl {
+			tool = candidate
+			break
+		}
+	}
+	if tool == nil {
+		t.Fatal("ackos_control missing from tools/list")
+	}
+	want, err := jsonschema.For[ControlResponse](nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantJSON, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotJSON, err := json.Marshal(tool.OutputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wantValue, gotValue any
+	if err := json.Unmarshal(wantJSON, &wantValue); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(gotJSON, &gotValue); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotValue, wantValue) {
+		t.Fatalf("ackos_control output schema changed:\n got: %s\nwant: %s", gotJSON, wantJSON)
+	}
+}
