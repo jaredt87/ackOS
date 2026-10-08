@@ -40,6 +40,7 @@ type testVerifier struct {
 	block                   chan struct{}
 	ignoreBlockCancellation bool
 	observeErr              error
+	observeCalls            atomic.Int64
 	observeDone             chan struct{}
 	observeState            string
 }
@@ -68,6 +69,7 @@ func (v *testVerifier) Verify(ctx context.Context, _ kernel.Transition, _ kernel
 }
 
 func (v *testVerifier) Observe(ctx context.Context, subject string) (kernel.Observation, error) {
+	v.observeCalls.Add(1)
 	if v.observeDone != nil {
 		select {
 		case <-v.observeDone:
@@ -336,8 +338,8 @@ func TestControlRejectsMismatchedRecoverySubject(t *testing.T) {
 
 func TestControlUsesIndependentRecoveryObserver(t *testing.T) {
 	executor := &testExecutor{}
-	normalObserver := &testVerifier{observeState: "normal"}
-	recoveryObserver := &testVerifier{observeState: "recovered"}
+	normalObserver := &testVerifier{}
+	recoveryObserver := &testVerifier{}
 	runtime := kernel.NewRuntime("normal", kernel.AllowPolicy{})
 	server, err := NewServer(runtime, executor, normalObserver, normalObserver, recoveryObserver)
 	if err != nil {
@@ -361,8 +363,8 @@ func TestControlUsesIndependentRecoveryObserver(t *testing.T) {
 	if !out.Committed || runtime.Phase() != kernel.PhaseCommitted {
 		t.Fatalf("unexpected recovered result: %+v", out)
 	}
-	if out.Observation.State != "recovered" {
-		t.Fatalf("recovery used normal observer state %q, want recovered", out.Observation.State)
+	if normalObserver.observeCalls.Load() != 1 || recoveryObserver.observeCalls.Load() != 1 {
+		t.Fatalf("unexpected observer calls: normal=%d recovery=%d", normalObserver.observeCalls.Load(), recoveryObserver.observeCalls.Load())
 	}
 }
 func TestControlRecoversAfterExecutionFailure(t *testing.T) {
