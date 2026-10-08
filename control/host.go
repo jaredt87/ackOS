@@ -109,11 +109,7 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 
 	observeCtx, cancel := context.WithTimeout(ctx, h.timeout)
 	var observed Observation
-	err = inv.invokeProvider(h, observeCtx, providerName, "observe", func() error {
-		var callErr error
-		observed, callErr = p.Observe(observeCtx, ObserveRequest{Target: req.Target})
-		return callErr
-	})
+	observed, err = h.providerAdapter(p, inv, providerName).Observe(observeCtx, ObserveRequest{Target: req.Target})
 	cancel()
 	if err != nil {
 		return ControlResult{}, fmt.Errorf("observe: %w", err)
@@ -238,60 +234,6 @@ func (p invocationProvider) Verify(ctx context.Context, req VerifyRequest) (Veri
 	return result, err
 }
 
-type providerExecutor struct {
-	host         *Host
-	invocation   *invocation
-	providerName string
-	provider     Provider
-	execution    *Execution
-	request      ExecuteRequest
-}
-
-func (e providerExecutor) Execute(ctx context.Context, _ kernel.Transition, _ kernel.Authority, before kernel.Observation) kernel.ExecutionResult {
-	request := e.request
-	request.Before = beforeObservation(before)
-	result, err := e.host.execute(ctx, e.providerName, e.provider, request, e.invocation)
-	if err != nil {
-		return kernel.ExecutionResult{Message: err.Error()}
-	}
-	*e.execution = result
-	return kernel.ExecutionResult{
-		ExecutionID: e.execution.ExecutionID,
-		Success:     true,
-		Message:     "provider execution completed",
-		Evidence:    append([]byte(nil), e.execution.Evidence...),
-	}
-}
-
-type providerVerifier struct {
-	host         *Host
-	invocation   *invocation
-	providerName string
-	provider     Provider
-	verification *Verification
-	request      VerifyRequest
-}
-
-func (v providerVerifier) Verify(ctx context.Context, _ kernel.Transition, authority kernel.Authority, before kernel.Observation, execution kernel.ExecutionResult) (kernel.Observation, error) {
-	request := v.request
-	request.ExecutionID = authority.ExecutionID
-	request.Before = beforeObservation(before)
-	request.Execution = Execution{
-		ExecutionID: execution.ExecutionID,
-		Evidence:    append([]byte(nil), execution.Evidence...),
-	}
-	result, err := v.host.verify(ctx, v.providerName, v.provider, request, v.invocation)
-	if err != nil {
-		return kernel.Observation{}, err
-	}
-	*v.verification = result
-	return kernel.NewObservation(
-		result.Resource.ID,
-		result.Resource.Fingerprint,
-		result.Version,
-		result.VerifiedAt,
-	)
-}
 func beforeObservation(before kernel.Observation) Observation {
 	return Observation{
 		Resource:   ResourceRef{ID: before.Subject, Fingerprint: before.State},
