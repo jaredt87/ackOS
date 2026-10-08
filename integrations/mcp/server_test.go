@@ -334,6 +334,37 @@ func TestControlRejectsMismatchedRecoverySubject(t *testing.T) {
 	}
 }
 
+func TestControlUsesIndependentRecoveryObserver(t *testing.T) {
+	executor := &testExecutor{}
+	normalObserver := &testVerifier{observeState: "normal"}
+	recoveryObserver := &testVerifier{observeState: "recovered"}
+	runtime := kernel.NewRuntime("normal", kernel.AllowPolicy{})
+	server, err := NewServer(runtime, executor, normalObserver, normalObserver, recoveryObserver)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err = server.control(context.Background(), nil, ControlRequest{
+		Subject: "svc", ObservedState: "normal", DesiredState: "ready",
+	})
+	if err == nil || runtime.Phase() != kernel.PhaseRecovery {
+		t.Fatalf("expected execution failure and recovery, err=%v phase=%s", err, runtime.Phase())
+	}
+
+	executor.success = true
+	_, out, err := server.control(context.Background(), nil, ControlRequest{
+		Subject: "svc", ObservedState: "normal", DesiredState: "ready",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !out.Committed || runtime.Phase() != kernel.PhaseCommitted {
+		t.Fatalf("unexpected recovered result: %+v", out)
+	}
+	if out.Observation.State != "recovered" {
+		t.Fatalf("recovery used normal observer state %q, want recovered", out.Observation.State)
+	}
+}
 func TestControlRecoversAfterExecutionFailure(t *testing.T) {
 	executor := &testExecutor{}
 	verifier := &testVerifier{}
