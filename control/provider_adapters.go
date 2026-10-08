@@ -9,28 +9,53 @@ import (
 
 // NewProviderExecutor returns a Kernel executor backed by a control provider.
 // The adapter carries the request and execution result for one lifecycle.
-func NewProviderExecutor(provider Provider, request ExecuteRequest, execution *Execution) kernel.Executor {
-	return providerExecutor{provider: provider, request: request, execution: execution}
+// If an executionError pointer is supplied, execution-phase errors are captured
+// there without changing the existing Kernel result contract.
+func NewProviderExecutor(provider Provider, request ExecuteRequest, execution *Execution, executionError ...*error) kernel.Executor {
+	return providerExecutor{
+		provider:      provider,
+		request:       request,
+		execution:     execution,
+		executionError: optionalExecutionError(executionError),
+	}
 }
 
 type providerExecutor struct {
-	provider  Provider
-	execution *Execution
-	request   ExecuteRequest
+	provider       Provider
+	execution      *Execution
+	executionError *error
+	request        ExecuteRequest
+}
+
+func optionalExecutionError(errors []*error) *error {
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors[0]
+}
+
+func (e providerExecutor) captureExecutionError(err error) {
+	if e.executionError != nil {
+		*e.executionError = err
+	}
 }
 
 func (e providerExecutor) Execute(ctx context.Context, _ kernel.Transition, _ kernel.Authority, before kernel.Observation) kernel.ExecutionResult {
 	if err := ctx.Err(); err != nil {
+		e.captureExecutionError(err)
 		return kernel.ExecutionResult{Message: err.Error()}
 	}
 	request := e.request
 	request.Before = beforeObservation(before)
 	result, err := e.provider.Execute(ctx, request)
 	if err != nil {
+		e.captureExecutionError(err)
 		return kernel.ExecutionResult{Message: err.Error()}
 	}
 	if result.ExecutionID != request.ExecutionID {
-		return kernel.ExecutionResult{Message: "provider returned mismatched execution ID"}
+		err := fmt.Errorf("provider returned mismatched execution ID")
+		e.captureExecutionError(err)
+		return kernel.ExecutionResult{Message: err.Error()}
 	}
 	if e.execution != nil {
 		*e.execution = result
