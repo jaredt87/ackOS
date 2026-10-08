@@ -211,7 +211,10 @@ func (p invocationProvider) Observe(ctx context.Context, req ObserveRequest) (Ob
 		result, err = p.provider.Observe(ctx, req)
 		return err
 	})
-	return result, err
+	if err != nil {
+		return Observation{}, err
+	}
+	return result, nil
 }
 
 func (p invocationProvider) Execute(ctx context.Context, req ExecuteRequest) (Execution, error) {
@@ -221,7 +224,10 @@ func (p invocationProvider) Execute(ctx context.Context, req ExecuteRequest) (Ex
 		result, err = p.provider.Execute(ctx, req)
 		return err
 	})
-	return result, err
+	if err != nil {
+		return Execution{}, err
+	}
+	return result, nil
 }
 
 func (p invocationProvider) Verify(ctx context.Context, req VerifyRequest) (Verification, error) {
@@ -231,5 +237,8 @@ func (p invocationProvider) Verify(ctx context.Context, req VerifyRequest) (Veri
 		result, err = p.provider.Verify(ctx, req)
 		return err
 	})
-	return result, err
+	if err != nil {
+		return Verification{}, err
+	}
+	return result, nil
 }
