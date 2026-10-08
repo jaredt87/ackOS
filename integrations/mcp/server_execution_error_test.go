@@ -247,7 +247,6 @@ func TestControlExecutionTimeoutStructuredError(t *testing.T) {
 	}
 }
 
-
 func TestControlRecoveryFailureIsNotExecutionError(t *testing.T) {
 	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
 	executor := &testExecutor{}
