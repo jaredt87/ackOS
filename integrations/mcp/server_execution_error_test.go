@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,8 +29,7 @@ func TestControlExecutionFailureResponseAcrossRecoveryOutcomes(t *testing.T) {
 			runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
 			executor := &testExecutor{}
 			normalObserver := &testVerifier{}
-			var recoveryObserveCalls atomic.Int64
-			recoveryObserver := &testVerifier{observeErr: tc.recoveryErr, observeState: tc.recoveryState, observeCounter: &recoveryObserveCalls}
+			recoveryObserver := &testVerifier{observeErr: tc.recoveryErr, observeState: tc.recoveryState}
 			server, err := NewServer(runtime, executor, normalObserver, normalObserver, recoveryObserver)
 			if err != nil {
 				t.Fatal(err)
@@ -57,8 +55,8 @@ func TestControlExecutionFailureResponseAcrossRecoveryOutcomes(t *testing.T) {
 			_, second, recoveryErr := server.control(context.Background(), nil, ControlRequest{
 				Subject: "svc", ObservedState: "initial", DesiredState: "ready",
 			})
-			if recoveryObserveCalls.Load() != 1 {
-				t.Fatalf("recovery observe calls = %d, want 1 after recovery attempt", recoveryObserveCalls.Load())
+			if recoveryObserver.observeCalls.Load() != 1 {
+				t.Fatalf("recovery observe calls = %d, want 1 after recovery attempt", recoveryObserver.observeCalls.Load())
 			}
 			if tc.recoveryErr != nil || tc.recoveryState != "" {
 				if recoveryErr == nil {
