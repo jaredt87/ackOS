@@ -80,7 +80,7 @@ func TestProviderExecutorCapturesExecutionErrors(t *testing.T) {
 				}
 				return
 			}
-			if !errors.Is(executionError, tc.wantErr) {
+			if executionError == nil || executionError.Error() != tc.wantErr.Error() {
 				t.Fatalf("executionError = %v, want %v", executionError, tc.wantErr)
 			}
 			if result.Success {
