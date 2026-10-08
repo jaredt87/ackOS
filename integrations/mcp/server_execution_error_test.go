@@ -246,3 +246,72 @@ func TestControlExecutionTimeoutStructuredError(t *testing.T) {
 		t.Fatalf("structured error message = %q, want executor timeout", message)
 	}
 }
+
+
+func TestControlRecoveryFailureIsNotExecutionError(t *testing.T) {
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	executor := &testExecutor{}
+	normalObserver := &testVerifier{}
+	recoveryObserver := &testVerifier{observeErr: errors.New("recovery unavailable")}
+	server, err := NewServer(runtime, executor, normalObserver, normalObserver, recoveryObserver)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mcpServer := server.MCPServer()
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "ackos-test-client", Version: "test"}, nil)
+	clientTransport, serverTransport := mcpsdk.NewInMemoryTransports()
+	serverSession, err := mcpServer.Connect(context.Background(), serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	clientSession, err := client.Connect(context.Background(), clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	call := func() *mcpsdk.CallToolResult {
+		t.Helper()
+		result, err := clientSession.CallTool(context.Background(), &mcpsdk.CallToolParams{
+			Name: ToolControl,
+			Arguments: map[string]any{
+				"subject":        "svc",
+				"observed_state": "initial",
+				"desired_state":  "ready",
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+
+	first := call()
+	if !first.IsError {
+		t.Fatalf("first result = %+v, want execution failure", first)
+	}
+	if first.StructuredContent != nil {
+		t.Fatalf("first structured content = %#v, want nil for existing execution failure path", first.StructuredContent)
+	}
+
+	executor.success = true
+	second := call()
+	if !second.IsError {
+		t.Fatalf("second result = %+v, want recovery error", second)
+	}
+	if len(second.Content) != 1 {
+		t.Fatalf("second content = %+v, want one item", second.Content)
+	}
+	textContent, ok := second.Content[0].(*mcpsdk.TextContent)
+	if !ok {
+		t.Fatalf("second content[0] = %T, want *mcp.TextContent", second.Content[0])
+	}
+	if textContent.Text != "recovery unavailable" {
+		t.Fatalf("second text = %q, want recovery error", textContent.Text)
+	}
+	if second.StructuredContent != nil {
+		t.Fatalf("second structured content = %#v, want nil recovery error", second.StructuredContent)
+	}
+}
