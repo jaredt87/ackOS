@@ -518,7 +518,6 @@ func TestControlRejectsMutationAfterProviderObservation(t *testing.T) {
 	}
 }
 
-
 func TestControlExecutionFailureCharacterization(t *testing.T) {
 	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
 	executor := &testExecutor{}
