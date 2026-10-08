@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jaredt87/ackOS/control"
 	"github.com/jaredt87/ackOS/kernel"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
