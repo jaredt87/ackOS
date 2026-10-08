@@ -13,9 +13,9 @@ import (
 // there without changing the existing Kernel result contract.
 func NewProviderExecutor(provider Provider, request ExecuteRequest, execution *Execution, executionError ...*error) kernel.Executor {
 	return providerExecutor{
-		provider:      provider,
-		request:       request,
-		execution:     execution,
+		provider:       provider,
+		request:        request,
+		execution:      execution,
 		executionError: optionalExecutionError(executionError),
 	}
 }
