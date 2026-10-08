@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -103,7 +104,7 @@ func TestProviderExecutorHolderStaysNilWhenKernelDoesNotCallExecutor(t *testing.
 	}
 }
 
-func TestProviderExecutorCapturesPreProviderAdmissionFailure(t *testing.T) {
+func TestProviderExecutorCapturesCanceledContextBeforeAdmission(t *testing.T) {
 	var executionError error
 	executor := NewProviderExecutor(
 		adapterTestProvider{},
@@ -120,6 +121,70 @@ func TestProviderExecutorCapturesPreProviderAdmissionFailure(t *testing.T) {
 	}
 	if result.Success {
 		t.Fatalf("result = %+v, want failure", result)
+	}
+}
+
+func TestProviderExecutorCapturesGateAdmissionFailure(t *testing.T) {
+	firstEntered := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var executeCalls atomic.Int32
+
+	provider := adapterTestProvider{execute: func(_ context.Context, req ExecuteRequest) (Execution, error) {
+		if executeCalls.Add(1) == 1 {
+			close(firstEntered)
+		}
+		<-releaseFirst
+		return Execution{ExecutionID: req.ExecutionID}, nil
+	}}
+	host, err := NewHost(kernel.NewRuntime("initial", kernel.AllowPolicy{}), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invocation := &invocation{}
+	adapter := host.providerAdapter(provider, invocation, "test")
+
+	var firstError error
+	firstExecutor := NewProviderExecutor(
+		adapter,
+		ExecuteRequest{ExecutionID: "exec-1"},
+		&Execution{},
+		&firstError,
+	)
+	firstDone := make(chan kernel.ExecutionResult, 1)
+	go func() {
+		firstDone <- firstExecutor.Execute(context.Background(), kernel.Transition{}, kernel.Authority{}, kernel.Observation{})
+	}()
+
+	<-firstEntered
+
+	var secondError error
+	secondExecutor := NewProviderExecutor(
+		adapter,
+		ExecuteRequest{ExecutionID: "exec-2"},
+		&Execution{},
+		&secondError,
+	)
+	secondCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	secondResult := secondExecutor.Execute(secondCtx, kernel.Transition{}, kernel.Authority{}, kernel.Observation{})
+
+	if !errors.Is(secondError, ErrCallbackInFlight) {
+		t.Fatalf("second executionError = %v, want ErrCallbackInFlight", secondError)
+	}
+	if secondResult.Success {
+		t.Fatalf("second result = %+v, want failure", secondResult)
+	}
+	if got := executeCalls.Load(); got != 1 {
+		t.Fatalf("provider Execute calls = %d, want 1", got)
+	}
+
+	close(releaseFirst)
+	firstResult := <-firstDone
+	if firstError != nil {
+		t.Fatalf("first executionError = %v, want nil", firstError)
+	}
+	if !firstResult.Success {
+		t.Fatalf("first result = %+v, want success", firstResult)
 	}
 }
 
