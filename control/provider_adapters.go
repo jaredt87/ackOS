@@ -20,6 +20,9 @@ type providerExecutor struct {
 }
 
 func (e providerExecutor) Execute(ctx context.Context, _ kernel.Transition, _ kernel.Authority, before kernel.Observation) kernel.ExecutionResult {
+	if err := ctx.Err(); err != nil {
+		return kernel.ExecutionResult{Message: err.Error()}
+	}
 	request := e.request
 	request.Before = beforeObservation(before)
 	result, err := e.provider.Execute(ctx, request)
@@ -53,6 +56,9 @@ type providerVerifier struct {
 }
 
 func (v providerVerifier) Verify(ctx context.Context, _ kernel.Transition, authority kernel.Authority, before kernel.Observation, execution kernel.ExecutionResult) (kernel.Observation, error) {
+	if err := ctx.Err(); err != nil {
+		return kernel.Observation{}, err
+	}
 	request := v.request
 	request.ExecutionID = authority.ExecutionID
 	request.Before = beforeObservation(before)
