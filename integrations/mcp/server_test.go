@@ -338,8 +338,8 @@ func TestControlRejectsMismatchedRecoverySubject(t *testing.T) {
 
 func TestControlUsesIndependentRecoveryObserver(t *testing.T) {
 	executor := &testExecutor{}
-	normalObserver := &testVerifier{}
-	recoveryObserver := &testVerifier{}
+	normalObserver := &testVerifier{observeState: "normal"}
+	recoveryObserver := &testVerifier{observeState: "normal"}
 	runtime := kernel.NewRuntime("normal", kernel.AllowPolicy{})
 	server, err := NewServer(runtime, executor, normalObserver, normalObserver, recoveryObserver)
 	if err != nil {
