@@ -234,10 +234,3 @@ func (p invocationProvider) Verify(ctx context.Context, req VerifyRequest) (Veri
 	return result, err
 }
 
-func beforeObservation(before kernel.Observation) Observation {
-	return Observation{
-		Resource:   ResourceRef{ID: before.Subject, Fingerprint: before.State},
-		Version:    before.Version,
-		ObservedAt: before.ObservedAt,
-	}
-}
