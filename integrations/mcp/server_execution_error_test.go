@@ -312,3 +312,24 @@ func TestControlRecoveryFailureIsNotExecutionError(t *testing.T) {
 		t.Fatalf("second structured content = %#v, want nil recovery error", second.StructuredContent)
 	}
 }
+
+func TestExecutionFailureCode(t *testing.T) {
+	cases := []struct {
+		name     string
+		err      error
+		timedOut bool
+		wantCode string
+	}{
+		{name: "stale observation", err: control.ErrStaleObservation, wantCode: "stale_observation"},
+		{name: "provider failure", err: errors.New("provider rejected transition"), wantCode: "execution_failed"},
+		{name: "timeout ignores late stale error", err: control.ErrStaleObservation, timedOut: true, wantCode: "execution_failed"},
+		{name: "nil execution error", wantCode: "execution_failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := executionFailureCode(tc.err, tc.timedOut); got != tc.wantCode {
+				t.Fatalf("executionFailureCode(%v, %t) = %q, want %q", tc.err, tc.timedOut, got, tc.wantCode)
+			}
+		})
+	}
+}
