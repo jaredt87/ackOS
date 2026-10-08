@@ -194,9 +194,9 @@ func TestProviderExecutorCapturesProviderTimeoutAfterReturn(t *testing.T) {
 	executor := NewProviderExecutor(
 		adapterTestProvider{
 			execute: func(ctx context.Context, _ ExecuteRequest) (Execution, error) {
-			<-release
-			return Execution{}, ctx.Err()
-		},
+				<-release
+				return Execution{}, ctx.Err()
+			},
 		},
 		ExecuteRequest{ExecutionID: "exec-1"},
 		&Execution{},
