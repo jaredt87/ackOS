@@ -26,15 +26,28 @@ func TestControlExecutionFailureResponseAcrossRecoveryOutcomes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
 			executor := &testExecutor{}
+			normalObserver := &testVerifier{}
 			var recoveryObserveCalls atomic.Int64
-			verifier := &testVerifier{observeErr: tc.recoveryErr, observeState: tc.recoveryState, observeCounter: &recoveryObserveCalls}
-			server := newTestServer(t, runtime, executor, verifier)
+			recoveryObserver := &testVerifier{observeErr: tc.recoveryErr, observeState: tc.recoveryState, observeCounter: &recoveryObserveCalls}
+			server, err := NewServer(runtime, executor, normalObserver, normalObserver, recoveryObserver)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			_, first, err := server.control(context.Background(), nil, ControlRequest{
 				Subject: "svc", ObservedState: "initial", DesiredState: "ready",
 			})
 			if err == nil {
 				t.Fatal("expected execution failure")
+			}
+			if executor.calls != 1 {
+				t.Fatalf("executor calls = %d, want 1 before recovery outcome checks", executor.calls)
+			}
+			if recoveryObserveCalls.Load() != 1 {
+				t.Fatalf("recovery observe calls = %d, want 1 before recovery outcome checks", recoveryObserveCalls.Load())
+			}
+			if tc.recoveryErr != nil || tc.recoveryState != "" {
+				t.Fatalf("observed recovery outcome: %v", err)
 			}
 			if tc.recoveryErr == nil && tc.recoveryState == "" {
 				if got := err.Error(); got != "execution failed: executor rejected transition" {
@@ -46,12 +59,6 @@ func TestControlExecutionFailureResponseAcrossRecoveryOutcomes(t *testing.T) {
 			} else {
 				if !strings.Contains(err.Error(), tc.expectedRecoveryErr) {
 					t.Fatalf("err = %q, want recovery error containing %q", err, tc.expectedRecoveryErr)
-				}
-				if recoveryObserveCalls.Load() != 1 {
-					t.Fatalf("recovery observe calls = %d, want 1", recoveryObserveCalls.Load())
-				}
-				if executor.calls != 1 {
-					t.Fatalf("executor calls = %d, want 1", executor.calls)
 				}
 			}
 
