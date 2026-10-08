@@ -11,7 +11,6 @@ import (
 	"github.com/jaredt87/ackOS/control"
 	"github.com/jaredt87/ackOS/kernel"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
-
 )
 
 func TestControlExecutionFailureResponseAcrossRecoveryOutcomes(t *testing.T) {
@@ -84,15 +83,14 @@ func TestControlExecutionFailureResponseAcrossRecoveryOutcomes(t *testing.T) {
 	}
 }
 
-
 type typedExecutionProvider struct {
 	execute func(context.Context, control.ExecuteRequest) (control.Execution, error)
 }
 
 func (p typedExecutionProvider) Observe(context.Context, control.ObserveRequest) (control.Observation, error) {
 	return control.Observation{
-		Resource: control.ResourceRef{ID: "svc", Fingerprint: "initial"},
-		Version:  1,
+		Resource:   control.ResourceRef{ID: "svc", Fingerprint: "initial"},
+		Version:    1,
 		ObservedAt: time.Now().UTC(),
 	}, nil
 }
