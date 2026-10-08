@@ -33,11 +33,11 @@ jobs:
 
           p = Path('integrations/mcp/server_execution_error_test.go')
           s = p.read_text()
-          old = 'return control.Execution{}, nil\\n\\t\\t},\\n\\t})'
-          new = 'return control.Execution{}, control.ErrStaleObservation\\n\\t\\t},\\n\\t})'
-          if old not in s:
+          old = 'return control.Execution{}, nil'
+          pos = s.rfind(old)
+          if pos < 0:
               raise SystemExit('timeout test mutation target not found')
-          p.write_text(s.replace(old, new, 1))
+          p.write_text(s[:pos] + s[pos:].replace(old, 'return control.Execution{}, control.ErrStaleObservation', 1))
           PY
           set -o pipefail
           go test -race ./integrations/mcp -run '^TestControlExecutionTimeoutStructuredError$' -count=1 2>&1 | tee /tmp/mutation.log
