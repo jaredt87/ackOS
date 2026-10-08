@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"sync/atomic"
 
 	"github.com/jaredt87/ackOS/kernel"
 )
@@ -25,7 +26,8 @@ func TestControlExecutionFailureResponseAcrossRecoveryOutcomes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
 			executor := &testExecutor{}
-			verifier := &testVerifier{observeErr: tc.recoveryErr, observeState: tc.recoveryState}
+			var recoveryObserveCalls atomic.Int64
+			verifier := &testVerifier{observeErr: tc.recoveryErr, observeState: tc.recoveryState, observeCounter: &recoveryObserveCalls}
 			server := newTestServer(t, runtime, executor, verifier)
 
 			_, first, err := server.control(context.Background(), nil, ControlRequest{
@@ -34,11 +36,23 @@ func TestControlExecutionFailureResponseAcrossRecoveryOutcomes(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected execution failure")
 			}
-			if got := err.Error(); got != "execution failed: executor rejected transition" {
-				t.Fatalf("err = %q, want original execution failure", got)
-			}
-			if first.Execution.Message != "executor rejected transition" {
-				t.Fatalf("execution = %+v, want original execution failure", first.Execution)
+			if tc.recoveryErr == nil && tc.recoveryState == "" {
+				if got := err.Error(); got != "execution failed: executor rejected transition" {
+					t.Fatalf("err = %q, want original execution failure", got)
+				}
+				if first.Execution.Message != "executor rejected transition" {
+					t.Fatalf("execution = %+v, want original execution failure", first.Execution)
+				}
+			} else {
+				if !strings.Contains(err.Error(), tc.expectedRecoveryErr) {
+					t.Fatalf("err = %q, want recovery error containing %q", err, tc.expectedRecoveryErr)
+				}
+				if recoveryObserveCalls.Load() != 1 {
+					t.Fatalf("recovery observe calls = %d, want 1", recoveryObserveCalls.Load())
+				}
+				if executor.calls != 1 {
+					t.Fatalf("executor calls = %d, want 1", executor.calls)
+				}
 			}
 
 			executor.success = true
