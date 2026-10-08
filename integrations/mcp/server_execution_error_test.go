@@ -66,8 +66,8 @@ func TestControlExecutionFailureResponseAcrossRecoveryOutcomes(t *testing.T) {
 				if !strings.Contains(recoveryErr.Error(), tc.expectedRecoveryErr) {
 					t.Fatalf("recovery err = %q, want substring %q", recoveryErr, tc.expectedRecoveryErr)
 				}
-				if second.Execution.Message != "" {
-					t.Fatalf("second execution = %+v, want no execution result from recovery attempt", second.Execution)
+				if executor.calls != 1 {
+					t.Fatalf("executor calls = %d, want 1 after recovery failure", executor.calls)
 				}
 				return
 			}
