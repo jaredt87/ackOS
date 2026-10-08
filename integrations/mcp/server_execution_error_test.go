@@ -10,8 +10,8 @@ import (
 
 func TestControlExecutionFailureResponseRemainsOriginalAcrossRecoveryOutcomes(t *testing.T) {
 	cases := []struct {
-		name         string
-		recoveryErr  error
+		name          string
+		recoveryErr   error
 		recoveryState string
 	}{
 		{name: "recovery succeeds"},
