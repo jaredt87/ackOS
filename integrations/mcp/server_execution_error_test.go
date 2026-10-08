@@ -2,12 +2,15 @@ package mcp
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/jaredt87/ackOS/control"
 	"github.com/jaredt87/ackOS/kernel"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -148,21 +151,21 @@ func assertStructuredExecutionError(t *testing.T, result *mcpsdk.CallToolResult,
 	if !ok {
 		t.Fatalf("content[0] = %T, want *mcp.TextContent", result.Content[0])
 	}
-	structured, ok := result.StructuredContent.(map[string]any)
-	if !ok {
-		t.Fatalf("structured content = %#v, want object", result.StructuredContent)
+	if result.StructuredContent != nil {
+		t.Fatalf("structured content = %#v, want nil", result.StructuredContent)
 	}
-	errorValue, ok := structured["error"].(map[string]any)
+	meta := result.GetMeta()
+	metaValue, ok := meta[executionErrorMetaKey].(map[string]any)
 	if !ok {
-		t.Fatalf("structured error = %#v, want object", structured["error"])
+		t.Fatalf("error metadata = %#v, want object", meta[executionErrorMetaKey])
 	}
-	gotCode, ok := errorValue["code"].(string)
+	gotCode, ok := metaValue["code"].(string)
 	if !ok || gotCode != code {
-		t.Fatalf("structured error code = %#v, want %q", errorValue["code"], code)
+		t.Fatalf("error metadata code = %#v, want %q", metaValue["code"], code)
 	}
-	message, ok := errorValue["message"].(string)
+	message, ok := metaValue["message"].(string)
 	if !ok || message != textContent.Text {
-		t.Fatalf("structured error message = %#v, want text %q", errorValue["message"], textContent.Text)
+		t.Fatalf("error metadata message = %#v, want text %q", metaValue["message"], textContent.Text)
 	}
 }
 
@@ -214,10 +217,10 @@ func TestControlExecutionFailureStructuredError(t *testing.T) {
 			}
 			result := callProviderControl(t, server)
 			assertStructuredExecutionError(t, result, tc.wantCode)
-			structured := result.StructuredContent.(map[string]any)
-			errorValue := structured["error"].(map[string]any)
-			if got := errorValue["message"]; got != tc.wantMessage {
-				t.Fatalf("structured error message = %q, want %q", got, tc.wantMessage)
+			meta := result.GetMeta()
+			metaValue := meta[executionErrorMetaKey].(map[string]any)
+			if got := metaValue["message"]; got != tc.wantMessage {
+				t.Fatalf("error metadata message = %q, want %q", got, tc.wantMessage)
 			}
 		})
 	}
@@ -239,10 +242,10 @@ func TestControlExecutionTimeoutStructuredError(t *testing.T) {
 	result := callProviderControl(t, server)
 	close(release)
 	assertStructuredExecutionError(t, result, "execution_failed")
-	structured := result.StructuredContent.(map[string]any)
-	errorValue := structured["error"].(map[string]any)
-	if message := errorValue["message"].(string); !strings.Contains(message, "executor timed out after") {
-		t.Fatalf("structured error message = %q, want executor timeout", message)
+	meta := result.GetMeta()
+	metaValue := meta[executionErrorMetaKey].(map[string]any)
+	if message := metaValue["message"].(string); !strings.Contains(message, "executor timed out after") {
+		t.Fatalf("error metadata message = %q, want executor timeout", message)
 	}
 }
 
@@ -357,5 +360,63 @@ func TestExecutionErrorValueSkipsHolderReadBeforeCompletion(t *testing.T) {
 	wg.Wait()
 	if got := <-got; got != nil {
 		t.Fatalf("executionErrorValue = %v, want nil before completion", got)
+	}
+}
+
+func TestControlAdvertisesControlResponseSchema(t *testing.T) {
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	server, err := NewServer(runtime, &testExecutor{success: true}, &testVerifier{}, &testVerifier{}, &testVerifier{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mcpServer := server.MCPServer()
+	client := mcpsdk.NewClient(&mcpsdk.Implementation{Name: "ackos-test-client", Version: "test"}, nil)
+	clientTransport, serverTransport := mcpsdk.NewInMemoryTransports()
+	serverSession, err := mcpServer.Connect(context.Background(), serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer serverSession.Close()
+	clientSession, err := client.Connect(context.Background(), clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientSession.Close()
+
+	result, err := clientSession.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tool *mcpsdk.Tool
+	for _, candidate := range result.Tools {
+		if candidate.Name == ToolControl {
+			tool = candidate
+			break
+		}
+	}
+	if tool == nil {
+		t.Fatal("ackos_control missing from tools/list")
+	}
+	want, err := jsonschema.For[ControlResponse](nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantJSON, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotJSON, err := json.Marshal(tool.OutputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wantValue, gotValue any
+	if err := json.Unmarshal(wantJSON, &wantValue); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(gotJSON, &gotValue); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotValue, wantValue) {
+		t.Fatalf("ackos_control output schema changed:\n got: %s\nwant: %s", gotJSON, wantJSON)
 	}
 }

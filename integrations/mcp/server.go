@@ -8,15 +8,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/jaredt87/ackOS/control"
 	"github.com/jaredt87/ackOS/kernel"
+
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const (
-	ToolControl          = "ackos_control"
-	maxAuthorityTTLMS    = int64((1<<63 - 1) / int64(time.Millisecond))
-	defaultVerifyTimeout = 30 * time.Second
+	ToolControl           = "ackos_control"
+	maxAuthorityTTLMS     = int64((1<<63 - 1) / int64(time.Millisecond))
+	defaultVerifyTimeout  = 30 * time.Second
+	executionErrorMetaKey = "io.github.jaredt87/ackos/error"
 )
 
 type ControlRequest struct {
@@ -272,9 +275,14 @@ func (e boundedExecutor) reportExecutionOutcome(timedOut bool) {
 
 func (s *Server) MCPServer() *mcpsdk.Server {
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "ackOS", Version: "0.2.0"}, nil)
-	mcpsdk.AddTool(server, &mcpsdk.Tool{
-		Name:        ToolControl,
-		Description: "Run one exact state transition through ackOS. The integration owns execution and independent verification; commit occurs only after verification.",
+	outputSchema, err := jsonschema.For[ControlResponse](nil)
+	if err != nil {
+		panic(fmt.Sprintf("control output schema: %v", err))
+	}
+	mcpsdk.AddTool[ControlRequest, any](server, &mcpsdk.Tool{
+		Name:         ToolControl,
+		Description:  "Run one exact state transition through ackOS. The integration owns execution and independent verification; commit occurs only after verification.",
+		OutputSchema: outputSchema,
 	}, s.controlTool)
 	return server
 }
@@ -307,8 +315,8 @@ func (s *Server) controlTool(ctx context.Context, req *mcpsdk.CallToolRequest, i
 		Content: []mcpsdk.Content{
 			&mcpsdk.TextContent{Text: err.Error()},
 		},
-		StructuredContent: map[string]any{
-			"error": map[string]string{
+		Meta: mcpsdk.Meta{
+			executionErrorMetaKey: map[string]string{
 				"code":    code,
 				"message": err.Error(),
 			},
