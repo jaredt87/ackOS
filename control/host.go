@@ -157,18 +157,15 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 	execution := Execution{}
 	execCtx, cancel := context.WithTimeout(ctx, h.timeout)
 	defer cancel()
-	executionResult, err := h.runtime.Start(execCtx, providerExecutor{
-		host:         h,
-		invocation:   inv,
-		providerName: providerName,
-		provider:     p,
-		execution:    &execution,
-		request: ExecuteRequest{
+	executionResult, err := h.runtime.Start(execCtx, NewProviderExecutor(
+		h.providerAdapter(p, inv, providerName),
+		ExecuteRequest{
 			ExecutionID: authority.ExecutionID,
 			Target:      req.Target,
 			Payload:     []byte(req.Desired.Fingerprint),
 		},
-	})
+		&execution,
+	))
 	if err != nil {
 		return ControlResult{Observation: observed, Transition: transition, Authority: authority}, err
 	}
@@ -181,17 +178,11 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 	verifyBase := context.WithoutCancel(ctx)
 	verifyCtx, cancel := context.WithTimeout(verifyBase, h.timeout)
 	defer cancel()
-	if err := h.runtime.Verify(verifyCtx, providerVerifier{
-		host:         h,
-		invocation:   inv,
-		providerName: providerName,
-		provider:     p,
-		verification: &verification,
-		request: VerifyRequest{
-			ExecutionID: authority.ExecutionID,
-			Expected:    req.Desired,
-		},
-	}); err != nil {
+	if err := h.runtime.Verify(verifyCtx, NewProviderVerifier(
+		h.providerAdapter(p, inv, providerName),
+		VerifyRequest{Expected: req.Desired},
+		&verification,
+	)); err != nil {
 		return ControlResult{Observation: observed, Transition: transition, Authority: authority, Execution: execution, Verification: verification}, err
 	}
 	if err := h.runtime.Commit(); err != nil {
@@ -206,53 +197,45 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 	}, nil
 }
 
-func (h *Host) execute(ctx context.Context, providerName string, p Provider, req ExecuteRequest, inv *invocation) (Execution, error) {
-	if err := ctx.Err(); err != nil {
-		return Execution{}, err
-	}
+func (h *Host) providerAdapter(p Provider, inv *invocation, providerName string) Provider {
+	return invocationProvider{host: h, invocation: inv, providerName: providerName, provider: p}
+}
+
+type invocationProvider struct {
+	host         *Host
+	invocation   *invocation
+	providerName string
+	provider     Provider
+}
+
+func (p invocationProvider) Observe(ctx context.Context, req ObserveRequest) (Observation, error) {
+	var result Observation
+	err := p.invocation.invokeProvider(p.host, ctx, p.providerName, "observe", func() error {
+		var err error
+		result, err = p.provider.Observe(ctx, req)
+		return err
+	})
+	return result, err
+}
+
+func (p invocationProvider) Execute(ctx context.Context, req ExecuteRequest) (Execution, error) {
 	var result Execution
-	err := inv.invokeProvider(h, ctx, providerName, req.ExecutionID, func() error {
-		var callErr error
-		result, callErr = p.Execute(ctx, req)
-		return callErr
+	err := p.invocation.invokeProvider(p.host, ctx, p.providerName, req.ExecutionID, func() error {
+		var err error
+		result, err = p.provider.Execute(ctx, req)
+		return err
 	})
-	if err != nil {
-		return Execution{}, err
-	}
-	if result.ExecutionID != req.ExecutionID {
-		return Execution{}, fmt.Errorf("provider returned mismatched execution ID")
-	}
-	return result, nil
+	return result, err
 }
 
-func (h *Host) verify(ctx context.Context, providerName string, p Provider, req VerifyRequest, inv *invocation) (Verification, error) {
-	if err := ctx.Err(); err != nil {
-		return Verification{}, err
-	}
+func (p invocationProvider) Verify(ctx context.Context, req VerifyRequest) (Verification, error) {
 	var result Verification
-	err := inv.invokeProvider(h, ctx, providerName, req.ExecutionID, func() error {
-		var callErr error
-		result, callErr = p.Verify(ctx, req)
-		return callErr
+	err := p.invocation.invokeProvider(p.host, ctx, p.providerName, req.ExecutionID, func() error {
+		var err error
+		result, err = p.provider.Verify(ctx, req)
+		return err
 	})
-	if err != nil {
-		return Verification{}, err
-	}
-	if result.Resource.ID != req.Expected.ID || result.Resource.Fingerprint != req.Expected.Fingerprint {
-		return Verification{}, fmt.Errorf("provider verification does not match expected resource")
-	}
-	if result.VerifiedAt.IsZero() {
-		return Verification{}, fmt.Errorf("provider verification timestamp is required")
-	}
-	return result, nil
-}
-
-func beforeObservation(before kernel.Observation) Observation {
-	return Observation{
-		Resource:   ResourceRef{ID: before.Subject, Fingerprint: before.State},
-		Version:    before.Version,
-		ObservedAt: before.ObservedAt,
-	}
+	return result, err
 }
 
 type providerExecutor struct {
@@ -308,4 +291,11 @@ func (v providerVerifier) Verify(ctx context.Context, _ kernel.Transition, autho
 		result.Version,
 		result.VerifiedAt,
 	)
+}
+func beforeObservation(before kernel.Observation) Observation {
+	return Observation{
+		Resource:   ResourceRef{ID: before.Subject, Fingerprint: before.State},
+		Version:    before.Version,
+		ObservedAt: before.ObservedAt,
+	}
 }
