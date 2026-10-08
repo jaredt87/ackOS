@@ -39,7 +39,7 @@ jobs:
 
       - name: Mutation 1 — remove provider error capture
         run: |
-          sed -i '/result, err := e.provider.Execute(ctx, request)/{n;s/\t\te.captureExecutionError(err)//;}' control/provider_adapters.go
+          sed -i '/result, err := e.provider.Execute(ctx, request)/{n;n;d;}' control/provider_adapters.go
 
           set +e
           output="$(go test ./control -run 'TestProviderExecutorCapturesExecutionErrors|TestProviderExecutorCapturesProviderTimeoutAfterReturn' 2>&1)"
