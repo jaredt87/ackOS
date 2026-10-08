@@ -9,14 +9,14 @@ jobs:
       - name: Checkout final PR HEAD
         uses: actions/checkout@v4
         with:
-          ref: ca3ca51eec0af0012c0f33cfef52e4b21ad0cd5e
+          ref: 67983d89bd59eb9f2b1c99f1b70ca4e1b893256f9
       - name: Print SHAs
         run: |
           echo "GITHUB_SHA=$GITHUB_SHA"
           echo "PR_HEAD_SHA=${{ github.event.pull_request.head.sha }}"
           echo "CHECKED_OUT_SHA=$(git rev-parse HEAD)"
       - name: Run new race test
-        run: go test -race ./integrations/mcp -run '^TestControlExecutionTimeoutStructuredError$' -count=1
+        run: go test -race ./integrations/mcp -run '^TestExecutionErrorValueSkipsHolderReadBeforeCompletion$' -count=1
       - name: Mutation — unconditional holder read
         shell: bash
         run: |
@@ -25,24 +25,19 @@ jobs:
           from pathlib import Path
           p = Path('integrations/mcp/server.go')
           s = p.read_text()
-          old = 'executionErrorValue(executionError, completed && !timedOut)'
-          new = 'executionErrorValue(executionError, true)'
+          old = '''if !completed || executionError == nil {
+		return nil
+	}
+	return *executionError'''
+          new = 'return *executionError'
           if old not in s:
-              raise SystemExit('mutation target not found')
+              raise SystemExit('holder-read mutation target not found')
           p.write_text(s.replace(old, new, 1))
-
-          p = Path('integrations/mcp/server_execution_error_test.go')
-          s = p.read_text()
-          old = 'return control.Execution{}, nil'
-          pos = s.rfind(old)
-          if pos < 0:
-              raise SystemExit('timeout test mutation target not found')
-          p.write_text(s[:pos] + s[pos:].replace(old, 'return control.Execution{}, control.ErrStaleObservation', 1))
           PY
           set -o pipefail
-          go test -race ./integrations/mcp -run '^TestControlExecutionTimeoutStructuredError$' -count=1 2>&1 | tee /tmp/mutation.log
+          go test -race ./integrations/mcp -run '^TestExecutionErrorValueSkipsHolderReadBeforeCompletion$' -count=1 2>&1 | tee /tmp/mutation.log
           status=${PIPESTATUS[0]}
-          grep -F -- '--- FAIL: TestControlExecutionTimeoutStructuredError' /tmp/mutation.log
+          grep -F -- '--- FAIL: TestExecutionErrorValueSkipsHolderReadBeforeCompletion' /tmp/mutation.log
           grep -F -- 'DATA RACE' /tmp/mutation.log
           if [ "$status" -eq 0 ]; then
             echo 'mutation unexpectedly passed'
@@ -50,5 +45,5 @@ jobs:
           fi
       - name: Restore mutation and verify clean tree
         run: |
-          git restore -- integrations/mcp/server.go integrations/mcp/server_execution_error_test.go
+          git restore -- integrations/mcp/server.go
           git diff --exit-code
