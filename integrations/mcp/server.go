@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -48,6 +49,7 @@ type RecoveryObserver interface {
 type Server struct {
 	runtime          *kernel.Runtime
 	executor         kernel.Executor
+	provider         control.Provider
 	verifier         kernel.Verifier
 	observer         Observer
 	recoveryObserver RecoveryObserver
@@ -56,22 +58,41 @@ type Server struct {
 }
 
 type boundedVerifier struct {
-	server *Server
+	server   *Server
+	verifier kernel.Verifier
 }
 
 type boundedExecutor struct {
-	server *Server
+	server   *Server
+	executor kernel.Executor
 }
 
 func NewServer(runtime *kernel.Runtime, executor kernel.Executor, verifier kernel.Verifier, observer Observer, recoveryObserver RecoveryObserver) (*Server, error) {
+	return newServer(runtime, executor, verifier, observer, recoveryObserver, nil)
+}
+
+// NewServerWithProvider constructs the MCP server using a control provider.
+// Provider adapters are created per control call so execution errors remain
+// request-scoped until the MCP result is constructed.
+func NewServerWithProvider(runtime *kernel.Runtime, provider control.Provider) (*Server, error) {
+	if provider == nil {
+		return nil, fmt.Errorf("provider is required")
+	}
+	observer := providerObserver{provider: provider}
+	return newServer(runtime, nil, nil, observer, observer, provider)
+}
+
+func newServer(runtime *kernel.Runtime, executor kernel.Executor, verifier kernel.Verifier, observer Observer, recoveryObserver RecoveryObserver, provider control.Provider) (*Server, error) {
 	if runtime == nil {
 		return nil, fmt.Errorf("runtime is required")
 	}
-	if executor == nil {
-		return nil, fmt.Errorf("executor is required")
-	}
-	if verifier == nil {
-		return nil, fmt.Errorf("independent verifier is required")
+	if provider == nil {
+		if executor == nil {
+			return nil, fmt.Errorf("executor is required")
+		}
+		if verifier == nil {
+			return nil, fmt.Errorf("independent verifier is required")
+		}
 	}
 	if observer == nil {
 		return nil, fmt.Errorf("provider observer is required")
@@ -84,12 +105,35 @@ func NewServer(runtime *kernel.Runtime, executor kernel.Executor, verifier kerne
 	return &Server{
 		runtime:          runtime,
 		executor:         executor,
+		provider:         provider,
 		verifier:         verifier,
 		observer:         observer,
 		recoveryObserver: recoveryObserver,
 		providerGate:     providerGate,
 		verifyTimeout:    defaultVerifyTimeout,
 	}, nil
+}
+
+type providerObserver struct {
+	provider control.Provider
+}
+
+func (o providerObserver) Observe(ctx context.Context, subject string) (kernel.Observation, error) {
+	result, err := o.provider.Observe(ctx, control.ObserveRequest{
+		Target: control.ResourceRef{ID: subject},
+	})
+	if err != nil {
+		return kernel.Observation{}, err
+	}
+	if result.Resource.ID != subject || result.Resource.Fingerprint == "" {
+		return kernel.Observation{}, fmt.Errorf("provider returned invalid observation")
+	}
+	return kernel.NewObservation(
+		result.Resource.ID,
+		result.Resource.Fingerprint,
+		result.Version,
+		result.ObservedAt,
+	)
 }
 
 func (s *Server) acquireProvider(ctx context.Context) error {
@@ -170,7 +214,11 @@ func (v boundedVerifier) Verify(ctx context.Context, transition kernel.Transitio
 	results := make(chan result, 1)
 	go func() {
 		defer v.server.releaseProvider()
-		observation, err := v.server.verifier.Verify(verificationCtx, transition, authority, before, execution)
+		verifier := v.server.verifier
+		if v.verifier != nil {
+			verifier = v.verifier
+		}
+		observation, err := verifier.Verify(verificationCtx, transition, authority, before, execution)
 		results <- result{observation: observation, err: err}
 	}()
 
@@ -195,7 +243,11 @@ func (e boundedExecutor) Execute(ctx context.Context, transition kernel.Transiti
 		// The MCP wrapper only transports the authorized snapshot to the remote
 		// executor; the remote tool owns the mutating resource boundary and must
 		// enforce Before itself.
-		results <- e.server.executor.Execute(executionCtx, transition, authority, before)
+		executor := e.server.executor
+		if e.executor != nil {
+			executor = e.executor
+		}
+		results <- executor.Execute(executionCtx, transition, authority, before)
 	}()
 
 	select {
@@ -211,11 +263,42 @@ func (s *Server) MCPServer() *mcpsdk.Server {
 	mcpsdk.AddTool(server, &mcpsdk.Tool{
 		Name:        ToolControl,
 		Description: "Run one exact state transition through ackOS. The integration owns execution and independent verification; commit occurs only after verification.",
-	}, s.control)
+	}, s.controlTool)
 	return server
 }
 
 func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in ControlRequest) (*mcpsdk.CallToolResult, ControlResponse, error) {
+	return s.controlWithExecutionError(ctx, in, nil)
+}
+
+func (s *Server) controlTool(ctx context.Context, req *mcpsdk.CallToolRequest, in ControlRequest) (*mcpsdk.CallToolResult, any, error) {
+	var executionError error
+	result, response, err := s.controlWithExecutionError(ctx, in, &executionError)
+	if err == nil {
+		return result, response, nil
+	}
+	if executionError == nil {
+		return nil, response, err
+	}
+	code := "execution_failed"
+	if errors.Is(executionError, control.ErrStaleObservation) {
+		code = "stale_observation"
+	}
+	return &mcpsdk.CallToolResult{
+		Content: []mcpsdk.Content{
+			&mcpsdk.TextContent{Text: err.Error()},
+		},
+		StructuredContent: map[string]any{
+			"error": map[string]string{
+				"code":    code,
+				"message": err.Error(),
+			},
+		},
+		IsError: true,
+	}, nil, nil
+}
+
+func (s *Server) controlWithExecutionError(ctx context.Context, in ControlRequest, executionError *error) (*mcpsdk.CallToolResult, ControlResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, ControlResponse{}, err
 	}
@@ -282,7 +365,22 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 	if err != nil {
 		return nil, ControlResponse{}, err
 	}
-	execution, err := s.runtime.Start(ctx, boundedExecutor{server: s})
+	executor := s.executor
+	verifier := s.verifier
+	var providerExecution control.Execution
+	if s.provider != nil {
+		executor = control.NewProviderExecutor(
+			s.provider,
+			control.ExecuteRequest{
+				ExecutionID: authority.ExecutionID,
+				Target:      control.ResourceRef{ID: in.Subject},
+				Payload:     []byte(in.DesiredState),
+			},
+			&providerExecution,
+			executionError,
+		)
+	}
+	execution, err := s.runtime.Start(ctx, boundedExecutor{server: s, executor: executor})
 	if err != nil {
 		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority}, err
 	}
@@ -294,7 +392,16 @@ func (s *Server) control(ctx context.Context, _ *mcpsdk.CallToolRequest, in Cont
 	// Verification survives MCP transport cancellation, but remains bounded by
 	// an adapter-owned timeout. If it times out, Runtime.Verify receives an
 	// ordinary verifier error and transitions the attempt into RECOVERY.
-	if err := s.runtime.Verify(context.WithoutCancel(ctx), boundedVerifier{server: s}); err != nil {
+	if s.provider != nil {
+		verifier = control.NewProviderVerifier(
+			s.provider,
+			control.VerifyRequest{
+				Expected: control.ResourceRef{ID: in.Subject, Fingerprint: in.DesiredState},
+			},
+			&control.Verification{},
+		)
+	}
+	if err := s.runtime.Verify(context.WithoutCancel(ctx), boundedVerifier{server: s, verifier: verifier}); err != nil {
 		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority, Execution: execution}, err
 	}
 	if err := s.runtime.Commit(); err != nil {
