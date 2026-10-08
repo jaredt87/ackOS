@@ -11,7 +11,7 @@ import (
 func TestControlExecutionFailureResponseRemainsOriginalAcrossRecoveryOutcomes(t *testing.T) {
 	cases := []struct {
 		name         string
-		recoveryErr  error
+		recoveryErr   error
 		recoveryState string
 	}{
 		{name: "recovery succeeds"},
@@ -23,7 +23,7 @@ func TestControlExecutionFailureResponseRemainsOriginalAcrossRecoveryOutcomes(t 
 		t.Run(tc.name, func(t *testing.T) {
 			runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
 			executor := &testExecutor{}
-			verifier := &testVerifier{err: tc.recoveryErr, observeState: tc.recoveryState}
+			verifier := &testVerifier{observeErr: tc.recoveryErr, observeState: tc.recoveryState}
 			server := newTestServer(t, runtime, executor, verifier)
 
 			_, first, err := server.control(context.Background(), nil, ControlRequest{
