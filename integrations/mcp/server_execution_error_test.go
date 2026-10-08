@@ -41,32 +41,23 @@ func TestControlExecutionFailureResponseAcrossRecoveryOutcomes(t *testing.T) {
 				t.Fatal("expected execution failure")
 			}
 			if executor.calls != 1 {
-				t.Fatalf("executor calls = %d, want 1 before recovery outcome checks", executor.calls)
+				t.Fatalf("executor calls = %d, want 1 before recovery", executor.calls)
 			}
-			if recoveryObserveCalls.Load() != 1 {
-				t.Fatalf("recovery observe calls = %d, want 1 before recovery outcome checks", recoveryObserveCalls.Load())
+			if err.Error() != "execution failed: executor rejected transition" {
+				t.Fatalf("first err = %q, want original execution failure", err)
 			}
-			if tc.recoveryErr != nil || tc.recoveryState != "" {
-				t.Fatalf("observed recovery outcome: %v", err)
-			}
-			if tc.recoveryErr == nil && tc.recoveryState == "" {
-				if got := err.Error(); got != "execution failed: executor rejected transition" {
-					t.Fatalf("err = %q, want original execution failure", got)
-				}
-				if first.Execution.Message != "executor rejected transition" {
-					t.Fatalf("execution = %+v, want original execution failure", first.Execution)
-				}
-			} else {
-				if !strings.Contains(err.Error(), tc.expectedRecoveryErr) {
-					t.Fatalf("err = %q, want recovery error containing %q", err, tc.expectedRecoveryErr)
-				}
+			if first.Execution.Message != "executor rejected transition" {
+				t.Fatalf("first execution = %+v, want original execution failure", first.Execution)
 			}
 
 			executor.success = true
 			_, second, recoveryErr := server.control(context.Background(), nil, ControlRequest{
 				Subject: "svc", ObservedState: "initial", DesiredState: "ready",
 			})
-			if tc.recoveryErr != nil {
+			if recoveryObserveCalls.Load() != 1 {
+				t.Fatalf("recovery observe calls = %d, want 1 after recovery attempt", recoveryObserveCalls.Load())
+			}
+			if tc.recoveryErr != nil || tc.recoveryState != "" {
 				if recoveryErr == nil {
 					t.Fatal("expected recovery error")
 				}
@@ -84,6 +75,7 @@ func TestControlExecutionFailureResponseAcrossRecoveryOutcomes(t *testing.T) {
 			if !second.Committed {
 				t.Fatalf("second response = %+v, want recovery success", second)
 			}
+
 		})
 	}
 }
