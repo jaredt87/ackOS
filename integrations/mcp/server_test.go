@@ -42,7 +42,6 @@ type testVerifier struct {
 	ignoreBlockCancellation bool
 	observeErr              error
 	observeCalls            atomic.Int64
-	observeCounter          *atomic.Int64
 	observeDone             chan struct{}
 	observeState            string
 }
@@ -72,9 +71,6 @@ func (v *testVerifier) Verify(ctx context.Context, _ kernel.Transition, _ kernel
 
 func (v *testVerifier) Observe(ctx context.Context, subject string) (kernel.Observation, error) {
 	v.observeCalls.Add(1)
-	if v.observeCounter != nil {
-		v.observeCounter.Add(1)
-	}
 	if v.observeDone != nil {
 		select {
 		case <-v.observeDone:
@@ -112,7 +108,6 @@ func newTestServer(t *testing.T, runtime *kernel.Runtime, executor *testExecutor
 		observeErr:              verifier.observeErr,
 		observeDone:             verifier.observeDone,
 		observeState:            verifier.observeState,
-		observeCounter:          verifier.observeCounter,
 		ignoreBlockCancellation: verifier.ignoreBlockCancellation,
 	}
 	verifier.observeDone = nil
