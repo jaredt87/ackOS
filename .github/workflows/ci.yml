@@ -53,14 +53,7 @@ jobs:
           echo "CHECKOUT_SHA=$(git rev-parse HEAD)"
           echo "PR_BASE_SHA=${{ github.event.pull_request.base.sha }}"
       - name: Race-check in-call ABA injection
-        run: go test -race ./integrations/mcp -run '^TestGitProviderRejectsABAInjectedBetweenObserveAndExecute        run: test -z "$(gofmt -l .)"
-      - name: Vet
-        run: go vet ./...
-      - name: Test
-        run: go test ./...
-      - name: Race test
-        run: go test -race ./...
- -count=1
+        run: go test -race ./integrations/mcp -run '^TestGitProviderRejectsABAInjectedBetweenObserveAndExecute$' -count=1
       - name: Mutation check — Execute lineage prefix
         run: |
           set -euo pipefail
@@ -73,14 +66,7 @@ jobs:
           p.write_text(s.replace(old, "if entry.Object != beforeBlob {"))
           PY
           set +e
-          go test ./integrations/git -run '^TestProviderAtoBtoARejectsStaleOriginalObservation        run: test -z "$(gofmt -l .)"
-      - name: Vet
-        run: go vet ./...
-      - name: Test
-        run: go test ./...
-      - name: Race test
-        run: go test -race ./...
- -count=1 2>&1 | tee /tmp/lineage-mutation.log
+          go test ./integrations/git -run '^TestProviderAtoBtoARejectsStaleOriginalObservation$' -count=1 2>&1 | tee /tmp/lineage-mutation.log
           status=${PIPESTATUS[0]}
           set -e
           git checkout -- integrations/git/provider.go
@@ -99,14 +85,7 @@ jobs:
           p.write_text(s.replace(old, "if len(commit.Parents) != 1 {"))
           PY
           set +e
-          go test ./integrations/git -run '^TestProviderVerifyRejectsWrongParentDespiteMatchingTrailers        run: test -z "$(gofmt -l .)"
-      - name: Vet
-        run: go vet ./...
-      - name: Test
-        run: go test ./...
-      - name: Race test
-        run: go test -race ./...
- -count=1 2>&1 | tee /tmp/parent-mutation.log
+          go test ./integrations/git -run '^TestProviderVerifyRejectsWrongParentDespiteMatchingTrailers$' -count=1 2>&1 | tee /tmp/parent-mutation.log
           status=${PIPESTATUS[0]}
           set -e
           git checkout -- integrations/git/provider.go
@@ -125,14 +104,7 @@ jobs:
           p.write_text(s.replace(old, "if false {"))
           PY
           set +e
-          go test ./integrations/git -run '^TestProviderVerifyRejectsNonSinglePathAndModeChanges        run: test -z "$(gofmt -l .)"
-      - name: Vet
-        run: go vet ./...
-      - name: Test
-        run: go test ./...
-      - name: Race test
-        run: go test -race ./...
- -count=1 2>&1 | tee /tmp/tree-diff-mutation.log
+          go test ./integrations/git -run '^TestProviderVerifyRejectsNonSinglePathAndModeChanges$' -count=1 2>&1 | tee /tmp/tree-diff-mutation.log
           status=${PIPESTATUS[0]}
           set -e
           git checkout -- integrations/git/provider.go
@@ -151,14 +123,7 @@ jobs:
           p.write_text(s.replace(old, "if _, err := p.repo.ReadBlob(ctx, desired); false {"))
           PY
           set +e
-          go test ./integrations/git -run '^TestProviderRejectsCommitObjectAsDesiredBlob        run: test -z "$(gofmt -l .)"
-      - name: Vet
-        run: go vet ./...
-      - name: Test
-        run: go test ./...
-      - name: Race test
-        run: go test -race ./...
- -count=1 2>&1 | tee /tmp/blob-mutation.log
+          go test ./integrations/git -run '^TestProviderRejectsCommitObjectAsDesiredBlob$' -count=1 2>&1 | tee /tmp/blob-mutation.log
           status=${PIPESTATUS[0]}
           set -e
           git checkout -- integrations/git/provider.go
