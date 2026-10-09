@@ -139,6 +139,10 @@ func TestProviderRejectsNoopWithoutCreatingCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	beforeTip, err := provider.repo.ReadRef(ctx, provider.branch)
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = provider.Execute(ctx, control.ExecuteRequest{
 		ExecutionID: "noop",
 		Target: control.ResourceRef{ID: provider.Subject()},
@@ -152,8 +156,8 @@ func TestProviderRejectsNoopWithoutCreatingCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tip != ObjectID(strings.TrimSpace(string(tip))) {
-		t.Fatal("unexpected tip representation")
+	if tip != beforeTip {
+		t.Fatalf("no-op moved branch tip from %s to %s", beforeTip, tip)
 	}
 	if _, err := provider.repo.ReadBlob(ctx, blob); err != nil {
 		t.Fatal(err)
@@ -161,19 +165,14 @@ func TestProviderRejectsNoopWithoutCreatingCommit(t *testing.T) {
 }
 
 func TestProviderRejectsMissingTargetAtObservation(t *testing.T) {
-	root := testRepo(t)
-	runGitTest(t, root, "symbolic-ref", "HEAD", "refs/heads/main")
-	repo, err := Open(root)
+	repo, existing, _ := providerTestRepo(t, "existing.txt", []byte("present"))
+	provider, err := NewProvider(repo, RefName("refs/heads/target"), filepath.ToSlash("missing.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A missing ref is a startup/observation error before a path can be read.
-	provider, err := NewProvider(repo, RefName("refs/heads/main"), filepath.ToSlash("missing.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	_ = existing
 	_, err = provider.Observe(context.Background(), control.ObserveRequest{Target: control.ResourceRef{ID: provider.Subject()}})
-	if err == nil || !strings.Contains(err.Error(), "read configured branch") {
-		t.Fatalf("missing branch error = %v, want branch-read failure", err)
+	if err == nil || !strings.Contains(err.Error(), "target path") || !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("missing target error = %v, want explicit missing-path failure", err)
 	}
 }
