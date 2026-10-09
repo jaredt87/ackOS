@@ -130,7 +130,7 @@ jobs:
               "claimed commit must match branch tip",
               "integrations/git/provider.go",
               "if tip != evidence.Commit {",
-              "if false {",
+              "if tip != evidence.Commit && false {",
               ["./integrations/git", "-run", "^TestProviderVerifyRejectsClaimedCommitMismatch$", "-count=1"],
               "want claimed-commit mismatch",
           )
