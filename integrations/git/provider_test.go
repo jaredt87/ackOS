@@ -192,3 +192,25 @@ func TestProviderRejectsMissingTargetAtObservation(t *testing.T) {
 		t.Fatalf("missing target error = %v, want explicit missing-path failure", err)
 	}
 }
+
+func TestProviderRejectsCommitObjectAsDesiredBlob(t *testing.T) {
+	ctx := context.Background()
+	_, provider, _ := providerTestRepo(t, "target.txt", []byte("A"))
+	before, err := provider.Observe(ctx, control.ObserveRequest{Target: control.ResourceRef{ID: provider.Subject()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commitID, err := provider.repo.ReadRef(ctx, provider.branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = provider.Execute(ctx, control.ExecuteRequest{
+		ExecutionID: "wrong-object-type",
+		Target:      control.ResourceRef{ID: provider.Subject()},
+		Before:      before,
+		Payload:     []byte(State(commitID)),
+	})
+	if err == nil || !strings.Contains(err.Error(), "desired object is not an existing blob") {
+		t.Fatalf("commit object desired state error = %v, want blob-type rejection", err)
+	}
+}
