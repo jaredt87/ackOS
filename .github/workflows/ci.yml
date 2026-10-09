@@ -101,7 +101,7 @@ jobs:
           s = p.read_text()
           old = "if len(changed) != 1 || changed[0] != p.path {"
           assert s.count(old) == 1
-          p.write_text(s.replace(old, "if false {"))
+          p.write_text(s.replace(old, "if len(changed) > 1000 {"))
           PY
           set +e
           go test ./integrations/git -run '^TestProviderVerifyRejectsNonSinglePathAndModeChanges$' -count=1 2>&1 | tee /tmp/tree-diff-mutation.log
