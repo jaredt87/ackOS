@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -37,6 +38,7 @@ func providerTestRepo(t *testing.T, targetPath string, initial []byte) (*Reposit
 	zero := strings.Repeat("0", len(commit))
 	runGitTest(t, root, "update-ref", "refs/heads/target", string(commit), zero)
 	runGitTest(t, root, "update-ref", "refs/heads/other", string(commit), zero)
+	runGitTest(t, root, "checkout", "-f", "other")
 	provider, err := NewProvider(repo, RefName("refs/heads/target"), targetPath)
 	if err != nil {
 		t.Fatal(err)
@@ -105,6 +107,20 @@ func TestProviderAtoBtoARejectsStaleOriginalObservation(t *testing.T) {
 		t.Fatal(err)
 	}
 	performProviderTransition(t, provider, beforeA, blobB, "exec-A-B")
+	head, err := exec.Command("git", "-C", repo.root, "symbolic-ref", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(head)) != "refs/heads/other" {
+		t.Fatalf("checked-out branch changed: %q", head)
+	}
+	worktree, err := os.ReadFile(filepath.Join(repo.root, "nested", "target.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(worktree) != "A" {
+		t.Fatalf("provider mutated working tree: got %q, want original content A", worktree)
+	}
 	beforeB, err := provider.Observe(ctx, control.ObserveRequest{Target: control.ResourceRef{ID: provider.Subject()}})
 	if err != nil {
 		t.Fatal(err)
