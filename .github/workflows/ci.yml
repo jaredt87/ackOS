@@ -63,7 +63,7 @@ jobs:
           s = p.read_text()
           old = "if entry.Object != beforeBlob || version != req.Before.Version {"
           assert s.count(old) == 1
-          p.write_text(s.replace(old, "if entry.Object != beforeBlob {"))
+          p.write_text(s.replace(old, "if entry.Object != beforeBlob || (version != req.Before.Version && false) {"))
           PY
           set +e
           go test ./integrations/git -run '^TestProviderAtoBtoARejectsStaleOriginalObservation$' -count=1 2>&1 | tee /tmp/lineage-mutation.log
