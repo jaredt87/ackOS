@@ -34,3 +34,48 @@ The root-drift error must explain that the repository changed outside ackOS sinc
 ## Scope limits
 
 Use a normal non-bare repository with another branch checked out. Update only the configured target ref; do not mutate the working tree or index. Bare-repository support and any SDK expansion are out of scope. If the SDK cannot reliably identify the checked-out branch, document the limitation rather than adding raw Git commands. Keep the old raw-Git provider implementation out of this change.
+
+## Operator runbook
+
+### Start
+
+1. Confirm the configured target branch is not the branch checked out in the worktree. V0's typed SDK does not expose a reliable symbolic-HEAD query; this is an operator precondition.
+2. Confirm the configured target path already exists as a regular file in the target branch.
+3. Start the server with all three Git flags:
+
+   ```bash
+   go run ./cmd/ackos-mcp --repo /absolute/path/to/repo --branch refs/heads/target --path path/to/file
+   ```
+
+4. The MCP `subject` must be exactly `path/to/file`. The server seeds its single kernel root from the target blob observed at startup.
+
+### Make a desired state
+
+Create the desired blob in the repository object database without editing the worktree:
+
+```bash
+printf 'desired contents\n' | git -C /absolute/path/to/repo hash-object -w --stdin
+```
+
+Use `git-blob:v1:<printed-object-id>` as `desired_state`. The object must already exist and be a blob. MCP V0 obtains its own observation; caller-supplied `observed_state` is ignored.
+
+### If the target file changes outside ackOS
+
+The first control call after an out-of-band target-content change fails with a readable kernel root compare-and-swap conflict. That failure is expected: the observation sees the new blob, but the in-memory root still holds the startup blob. Repeating the call in the same process will not re-baseline it.
+
+Recovery is intentionally an explicit operator action:
+
+1. Inspect the repository and decide whether its current target content should be trusted.
+2. Stop the server.
+3. Restart it with the same repository, branch, and path.
+4. Understand that **restart means “trust the repository as it is now.”** Startup adopts the current target blob as the new in-memory root without an authorization step.
+5. Retry the desired transition.
+
+A branch commit that changes only another path does not change the root's blob state and should not wedge the runtime, even though the tip lineage changes. If a Git ref update succeeds but verification fails, the repository may be ahead of the root; use the same explicit restart/re-baseline procedure after inspecting the repository.
+
+### What the tests mean
+
+- **Kernel root-drift test:** make an out-of-band commit that changes the target before the next call. The call must fail at the kernel root CAS; restarting must seed the new blob and allow a later call.
+- **Provider stale/ABA race test:** inject an external ref movement after Observe but before Execute in the same control call. The kernel root check has already passed, so the provider's blob-plus-lineage check must reject it. A→B→A must be rejected even though the content returns to A.
+- **Tip-only commit test:** move the branch tip with a commit that leaves the target blob unchanged; a subsequent normal transition must succeed.
+- **No-op test:** an equal desired blob must not create a commit.
