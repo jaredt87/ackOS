@@ -23,10 +23,10 @@ This is a manual operator drill for the first real-repository session after the 
 1. Create a desired blob without touching the worktree:
 
    ```bash
-   printf 'desired contents\n' | git -C /absolute/path/to/disposable-repo hash-object -w --stdin
+   printf 'desired file contents\n' | git -C /absolute/path/to/disposable-repo hash-object -w --stdin
    ```
 
-2. Copy the exact object ID printed by Git. The `desired_state` value is `git-blob:v1:<printed-object-id>`; do not type or invent a different object ID. For the sample bytes `desired contents\n`, a separate literal hash is repository-specific; use the exact ID printed by this repository's command.
+2. Copy the exact object ID printed by Git. The `desired_state` value is `git-blob:v1:<printed-object-id>`; do not type or invent a different object ID. For these exact sample bytes, a recorded `git hash-object --stdin` run printed `837cb4a8a4b9184863f237ce9e3ee318ce357fb3`, so the literal state is `git-blob:v1:837cb4a8a4b9184863f237ce9e3ee318ce357fb3`.
 3. Call `ackos_control` with:
    - `subject`: `nested/target.txt`
    - `desired_state`: the versioned value above
