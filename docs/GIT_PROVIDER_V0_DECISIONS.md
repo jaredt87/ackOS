@@ -33,7 +33,7 @@ The root-drift error must explain that the repository changed outside ackOS sinc
 
 ## Scope limits
 
-Use a normal non-bare repository with another branch checked out. Update only the configured target ref; do not mutate the working tree or index. Bare-repository support and any SDK expansion are out of scope. If the SDK cannot reliably identify the checked-out branch, document the limitation rather than adding raw Git commands. Keep the old raw-Git provider implementation out of this change.
+Use a normal non-bare repository with another branch checked out. Update only the configured target ref; do not mutate the working tree or index. Bare-repository support and SDK expansion for symbolic-HEAD detection are out of scope. The only SDK addition here is a narrow typed `ReadBlob` operation, required to prove that a requested object exists and is a blob. If the SDK cannot reliably identify the checked-out branch, document the limitation rather than adding raw Git commands. Keep the old raw-Git provider implementation out of this change.
 
 ## Operator runbook
 
