@@ -265,8 +265,9 @@ func (p *Provider) Verify(ctx context.Context, req control.VerifyRequest) (contr
 	if err != nil {
 		return control.Verification{}, err
 	}
-	if afterEntry.Object != desired || (afterEntry.Mode != "100644" && afterEntry.Mode != "100755") {
-		return control.Verification{}, fmt.Errorf("git provider: committed target does not match expected blob")
+	if afterEntry.Object != desired || afterEntry.Mode != beforeEntry.Mode ||
+		(afterEntry.Mode != "100644" && afterEntry.Mode != "100755") {
+		return control.Verification{}, fmt.Errorf("git provider: committed target does not match expected blob and mode")
 	}
 	observed, err := p.Observe(ctx, control.ObserveRequest{Target: control.ResourceRef{ID: p.path}})
 	if err != nil {
