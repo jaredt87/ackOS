@@ -52,6 +52,8 @@ jobs:
           echo "PR_HEAD_SHA=${{ github.event.pull_request.head.sha }}"
           echo "CHECKOUT_SHA=$(git rev-parse HEAD)"
           echo "PR_BASE_SHA=${{ github.event.pull_request.base.sha }}"
+      - name: Print desired-state example
+        run: printf 'desired file contents\n' | git hash-object --stdin
       - name: Race-check in-call ABA injection
         run: go test -race ./integrations/mcp -run '^TestGitProviderRejectsABAInjectedBetweenObserveAndExecute$' -count=1
       - name: Mutation check — Execute lineage prefix
@@ -119,8 +121,8 @@ jobs:
           p = Path("integrations/git/provider.go")
           s = p.read_text()
           old = "if _, err := p.repo.ReadBlob(ctx, desired); err != nil {"
-          assert s.count(old) == 1
-          p.write_text(s.replace(old, "if _, err := p.repo.ReadBlob(ctx, desired); false {"))
+          assert s.count(old) >= 1
+          p.write_text(s.replace(old, "if _, err := p.repo.ReadBlob(ctx, desired); err != nil && false {", 1))
           PY
           set +e
           go test ./integrations/git -run '^TestProviderRejectsCommitObjectAsDesiredBlob$' -count=1 2>&1 | tee /tmp/blob-mutation.log
