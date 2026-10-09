@@ -74,18 +74,18 @@ func performProviderTransition(t *testing.T, provider *Provider, before control.
 	ctx := context.Background()
 	execution, err := provider.Execute(ctx, control.ExecuteRequest{
 		ExecutionID: executionID,
-		Target: control.ResourceRef{ID: provider.Subject()},
-		Before: before,
-		Payload: []byte(State(desired)),
+		Target:      control.ResourceRef{ID: provider.Subject()},
+		Before:      before,
+		Payload:     []byte(State(desired)),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	verification, err := provider.Verify(ctx, control.VerifyRequest{
 		ExecutionID: executionID,
-		Expected: control.ResourceRef{ID: provider.Subject(), Fingerprint: State(desired)},
-		Before: before,
-		Execution: execution,
+		Expected:    control.ResourceRef{ID: provider.Subject(), Fingerprint: State(desired)},
+		Before:      before,
+		Execution:   execution,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -123,9 +123,9 @@ func TestProviderAtoBtoARejectsStaleOriginalObservation(t *testing.T) {
 	}
 	_, err = provider.Execute(ctx, control.ExecuteRequest{
 		ExecutionID: "stale-A",
-		Target: control.ResourceRef{ID: provider.Subject()},
-		Before: beforeA,
-		Payload: []byte(State(blobB)),
+		Target:      control.ResourceRef{ID: provider.Subject()},
+		Before:      beforeA,
+		Payload:     []byte(State(blobB)),
 	})
 	if !errors.Is(err, ErrStaleLineage) {
 		t.Fatalf("stale A/C1 execution error = %v, want ErrStaleLineage", err)
@@ -145,9 +145,9 @@ func TestProviderRejectsNoopWithoutCreatingCommit(t *testing.T) {
 	}
 	_, err = provider.Execute(ctx, control.ExecuteRequest{
 		ExecutionID: "noop",
-		Target: control.ResourceRef{ID: provider.Subject()},
-		Before: before,
-		Payload: []byte(State(blob)),
+		Target:      control.ResourceRef{ID: provider.Subject()},
+		Before:      before,
+		Payload:     []byte(State(blob)),
 	})
 	if !errors.Is(err, ErrNoop) {
 		t.Fatalf("no-op error = %v, want ErrNoop", err)
