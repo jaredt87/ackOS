@@ -347,3 +347,32 @@ func TestUpdateRefRejectsStaleExpectedOld(t *testing.T) {
 		t.Fatalf("failed CAS moved ref from %s to %s", current, after)
 	}
 }
+
+func TestProviderRejectsNonBlobDesiredObjectBeforeRefWrite(t *testing.T) {
+	ctx := context.Background()
+	_, provider, _ := providerTestRepo(t, "target.txt", []byte("A"))
+	before, err := provider.Observe(ctx, control.ObserveRequest{Target: control.ResourceRef{ID: provider.Subject()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tipBefore, err := provider.repo.ReadRef(ctx, provider.branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = provider.Execute(ctx, control.ExecuteRequest{
+		ExecutionID: "non-blob",
+		Target: control.ResourceRef{ID: provider.Subject()},
+		Before: before,
+		Payload: []byte(State(tipBefore)),
+	})
+	if err == nil || !strings.Contains(err.Error(), "desired object is not an existing blob") {
+		t.Fatalf("Execute error = %v, want non-blob rejection", err)
+	}
+	tipAfter, err := provider.repo.ReadRef(ctx, provider.branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tipAfter != tipBefore {
+		t.Fatalf("non-blob rejection moved ref from %s to %s", tipBefore, tipAfter)
+	}
+}
