@@ -116,7 +116,7 @@ func (p *Provider) Observe(ctx context.Context, req control.ObserveRequest) (con
 	}
 	return control.Observation{
 		Resource: control.ResourceRef{ID: p.path, Fingerprint: State(entry.Object)},
-		Version: version, ObservedAt: time.Now().UTC(),
+		Version:  version, ObservedAt: time.Now().UTC(),
 	}, nil
 }
 
@@ -268,7 +268,15 @@ func (p *Provider) Verify(ctx context.Context, req control.VerifyRequest) (contr
 	if afterEntry.Object != desired || (afterEntry.Mode != "100644" && afterEntry.Mode != "100755") {
 		return control.Verification{}, fmt.Errorf("git provider: committed target does not match expected blob")
 	}
-	return p.Observe(ctx, control.ObserveRequest{Target: control.ResourceRef{ID: p.path}})
+	observed, err := p.Observe(ctx, control.ObserveRequest{Target: control.ResourceRef{ID: p.path}})
+	if err != nil {
+		return control.Verification{}, err
+	}
+	return control.Verification{
+		Resource:   observed.Resource,
+		Version:    observed.Version,
+		VerifiedAt: observed.ObservedAt,
+	}, nil
 }
 
 func hasExactlyOneTrailer(message, key, value string) bool {
