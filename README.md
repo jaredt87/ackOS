@@ -114,11 +114,11 @@ The executable ackOS kernel remains the authority for authorization, verificatio
 
 ackOS V0 is the implementation phase following the completed ACK research program (E11–E17).
 
-The initial V0 goal is to turn the researched control model into a small, coherent, usable Go kernel without prematurely adding schedulers, provider-specific machinery, distributed coordination, or other mechanisms that are not required by the kernel boundary.
+V0 now includes the typed Git SDK and a first Git resource provider behind the existing provider boundary. The standalone MCP binary retains its synthetic demo by default and can be configured to control one existing file on one branch in a normal, non-bare Git repository. The Git mode is intentionally single-path and ref-only: it does not update the working tree or index.
 
 ## Repository
 
-The project is intentionally starting small. Architecture, formal models, implementation, tests, and documentation will be added incrementally as the V0 kernel is built.
+The project is intentionally starting small. The Git provider's V0 operating contract, including root-drift and restart/re-baseline behavior, is documented in [docs/GIT_PROVIDER_V0_DECISIONS.md](docs/GIT_PROVIDER_V0_DECISIONS.md).
 
 ## License
 

@@ -2,9 +2,12 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 )
+
+var ErrRefCASConflict = errors.New("git: ref compare-and-swap conflict")
 
 func (r *Repository) UpdateRef(ctx context.Context, ref RefName, newValue, expectedOld ObjectID) error {
 	if err := validateRef(ref); err != nil {
@@ -17,6 +20,10 @@ func (r *Repository) UpdateRef(ctx context.Context, ref RefName, newValue, expec
 		return err
 	}
 	_, err := r.exec(ctx, []string{"update-ref", "--no-deref", string(ref), string(newValue), string(expectedOld)}, nil)
+	if err != nil && ((strings.Contains(err.Error(), "is at ") && strings.Contains(err.Error(), " but expected ")) ||
+		strings.Contains(err.Error(), "unable to resolve reference")) {
+		return fmt.Errorf("%w: %w", ErrRefCASConflict, err)
+	}
 	return err
 }
 

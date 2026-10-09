@@ -409,7 +409,7 @@ func (s *Server) controlWithExecutionError(ctx context.Context, in ControlReques
 	}
 	execution, err := s.runtime.Start(ctx, boundedExecutor{server: s, executor: executor, executionOutcome: executionOutcomes})
 	if err != nil {
-		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority}, err
+		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority}, explainRootDrift(err)
 	}
 	authority.Consumed = true
 	if !execution.Success {
@@ -432,7 +432,7 @@ func (s *Server) controlWithExecutionError(ctx context.Context, in ControlReques
 		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority, Execution: execution}, err
 	}
 	if err := s.runtime.Commit(); err != nil {
-		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority, Execution: execution, Verified: true, Root: s.runtime.Root()}, err
+		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority, Execution: execution, Verified: true, Root: s.runtime.Root()}, explainRootDrift(err)
 	}
 
 	return nil, ControlResponse{
@@ -469,4 +469,13 @@ func (s *Server) StreamableHTTPHandler() http.Handler {
 	return mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server {
 		return s.MCPServer()
 	}, &mcpsdk.StreamableHTTPOptions{JSONResponse: true})
+}
+
+// explainRootDrift keeps the kernel's root-conflict explanation provider-neutral.
+// Provider-specific trust and re-baselining semantics belong in provider docs.
+func explainRootDrift(err error) error {
+	if errors.Is(err, kernel.ErrCASConflict) {
+		return fmt.Errorf("committed state no longer matches what was observed; the resource may have changed outside ackOS (or verification failed after execution); restarting re-baselines from the current observation: %w", err)
+	}
+	return err
 }
