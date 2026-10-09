@@ -146,7 +146,7 @@ jobs:
               "tree diff must reject added files",
               "integrations/git/provider.go",
               "if len(changed) != 1 || changed[0] != p.path {",
-              "if false {",
+              "if len(changed) != 1 && false {",
               ["./integrations/git", "-run", "^TestProviderVerifyRejectsNonSinglePathAndModeChanges/extra_file$", "-count=1"],
               "Verify accepted a forged tree change",
           )
@@ -154,7 +154,7 @@ jobs:
               "tree diff must reject sibling changes",
               "integrations/git/provider.go",
               "if len(changed) != 1 || changed[0] != p.path {",
-              "if false {",
+              "if len(changed) != 1 && false {",
               ["./integrations/git", "-run", "^TestProviderVerifyRejectsNonSinglePathAndModeChanges/sibling_modified$", "-count=1"],
               "Verify accepted a forged tree change",
           )
