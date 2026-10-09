@@ -274,3 +274,76 @@ func TestProviderRejectsMissingDesiredBlobBeforeRefWrite(t *testing.T) {
 	if err != nil { t.Fatal(err) }
 	if tipAfter != tipBefore { t.Fatalf("rejected missing blob moved ref from %s to %s", tipBefore, tipAfter) }
 }
+
+func TestProviderVerifyRejectsBranchMovementAfterExecute(t *testing.T) {
+	ctx := context.Background()
+	repo, provider, _ := providerTestRepo(t, "target.txt", []byte("A"))
+	before, err := provider.Observe(ctx, control.ObserveRequest{Target: control.ResourceRef{ID: provider.Subject()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired, err := repo.WriteBlob(ctx, []byte("B"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executionID := "move-after-execute"
+	execution, err := provider.Execute(ctx, control.ExecuteRequest{
+		ExecutionID: executionID,
+		Target: control.ResourceRef{ID: provider.Subject()},
+		Before: before,
+		Payload: []byte(State(desired)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tip, err := repo.ReadRef(ctx, provider.branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commit, err := repo.ReadCommit(ctx, tip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := providerTestCommit(t, repo, commit.Tree, []ObjectID{tip}, "external tip movement")
+	if err := repo.UpdateRef(ctx, provider.branch, moved, tip); err != nil {
+		t.Fatal(err)
+	}
+	_, err = provider.Verify(ctx, control.VerifyRequest{
+		ExecutionID: executionID,
+		Expected: control.ResourceRef{ID: provider.Subject(), Fingerprint: State(desired)},
+		Before: before,
+		Execution: execution,
+	})
+	if err == nil || !strings.Contains(err.Error(), "branch no longer points at claimed commit") {
+		t.Fatalf("Verify error = %v, want post-execute branch movement rejection", err)
+	}
+}
+
+func TestUpdateRefRejectsStaleExpectedOld(t *testing.T) {
+	ctx := context.Background()
+	repo, provider, _ := providerTestRepo(t, "target.txt", []byte("A"))
+	current, err := repo.ReadRef(ctx, provider.branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := repo.WriteBlob(ctx, []byte("B"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tree, err := repo.WriteTree(ctx, []TreeEntry{{Mode: "100644", Path: "target.txt", Object: blob}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := providerTestCommit(t, repo, tree, []ObjectID{current}, "candidate")
+	staleExpected := ObjectID(strings.Repeat("0", len(current)))
+	if err := repo.UpdateRef(ctx, provider.branch, candidate, staleExpected); err == nil {
+		t.Fatal("UpdateRef accepted a stale expected-old object ID")
+	}
+	after, err := repo.ReadRef(ctx, provider.branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != current {
+		t.Fatalf("failed CAS moved ref from %s to %s", current, after)
+	}
+}
