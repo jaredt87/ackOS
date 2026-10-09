@@ -57,7 +57,7 @@ Create the desired blob in the repository object database without editing the wo
 printf 'desired contents\n' | git -C /absolute/path/to/repo hash-object -w --stdin
 ```
 
-Use `git-blob:v1:<printed-object-id>` as `desired_state`. The object must already exist and be a blob. MCP V0 obtains its own observation; caller-supplied `observed_state` is ignored.
+Use `git-blob:v1:<printed-object-id>` as `desired_state`. For the sample bytes `desired file contents\n`, the recorded `git hash-object --stdin` output was `837cb4a8a4b9184863f237ce9e3ee318ce357fb3`, so the literal desired state is `git-blob:v1:837cb4a8a4b9184863f237ce9e3ee318ce357fb3`. The object must already exist and be a blob. MCP V0 obtains its own observation; caller-supplied `observed_state` is ignored.
 
 ### If the target file changes outside ackOS
 
