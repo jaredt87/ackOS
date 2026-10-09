@@ -46,6 +46,15 @@ func TestReadBlobReturnsBytesAndRejectsInvalidOrNonBlobObjects(t *testing.T) {
 	if _, err := repo.ReadBlob(ctx, commit); err == nil {
 		t.Fatal("ReadBlob accepted a commit object")
 	}
+	runGitTest(t, repo.root, "tag", "-a", "blob-tag", string(blob), "-m", "annotated blob")
+	tagOut, err := repo.exec(ctx, []string{"show-ref", "--verify", "--hash", "refs/tags/blob-tag"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tagID := ObjectID(strings.TrimSpace(string(tagOut)))
+	if _, err := repo.ReadBlob(ctx, tagID); err == nil {
+		t.Fatal("ReadBlob accepted an annotated tag object pointing to a blob")
+	}
 	if _, err := repo.ReadBlob(ctx, ObjectID(strings.Repeat("f", len(blob)))); err == nil {
 		t.Fatal("ReadBlob accepted a well-formed but missing object ID")
 	}

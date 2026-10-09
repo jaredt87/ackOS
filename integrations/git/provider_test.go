@@ -200,6 +200,41 @@ func TestProviderRejectsMissingTargetAtObservation(t *testing.T) {
 	}
 }
 
+func TestProviderRejectsAnnotatedTagDesiredObjectBeforeRefWrite(t *testing.T) {
+	ctx := context.Background()
+	repo, provider, initialBlob := providerTestRepo(t, "target.txt", []byte("A"))
+	before, err := provider.Observe(ctx, control.ObserveRequest{Target: control.ResourceRef{ID: provider.Subject()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tipBefore, err := repo.ReadRef(ctx, provider.branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repo.root, "tag", "-a", "blob-tag", string(initialBlob), "-m", "annotated blob")
+	tagOut, err := repo.exec(ctx, []string{"show-ref", "--verify", "--hash", "refs/tags/blob-tag"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tagID := ObjectID(strings.TrimSpace(string(tagOut)))
+	_, err = provider.Execute(ctx, control.ExecuteRequest{
+		ExecutionID: "annotated-tag",
+		Target:      control.ResourceRef{ID: provider.Subject()},
+		Before:      before,
+		Payload:     []byte(State(tagID)),
+	})
+	if err == nil || !strings.Contains(err.Error(), "desired object is not an existing blob") {
+		t.Fatalf("annotated tag desired state error = %v, want exact blob-type rejection", err)
+	}
+	tipAfter, err := repo.ReadRef(ctx, provider.branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tipAfter != tipBefore {
+		t.Fatalf("annotated-tag rejection moved ref from %s to %s", tipBefore, tipAfter)
+	}
+}
+
 func TestProviderRejectsCommitObjectAsDesiredBlob(t *testing.T) {
 	ctx := context.Background()
 	_, provider, _ := providerTestRepo(t, "target.txt", []byte("A"))

@@ -51,11 +51,11 @@ Only one verification callback may be active for an execution attempt. This prev
 
 ## Git Execution Boundary
 
-The Git integration is a small host-side adapter exposing typed plumbing operations rather than a general command runner. It is not part of the kernel and does not define a provider or plugin abstraction.
+The Git integration is a host-side adapter that exposes typed plumbing operations through the existing Plugin Host/provider architecture; it is not part of the kernel and does not introduce a parallel plugin abstraction.
 
-The public SDK exposes repository-bound operations for reading refs, commits, and trees, plus writing blobs and trees, creating commits with explicit identities, and atomically updating refs with caller-supplied expected-old values. Git invocation is private to the adapter: fixed repository/configuration controls are supplied internally, caller content and commit messages use stdin, and there is no public subprocess or arbitrary-argument API.
+The public SDK exposes repository-bound operations for reading refs, commits, trees, and exact blob objects, plus writing blobs and trees, creating commits with explicit identities, and atomically updating refs with caller-supplied expected-old values. Git invocation is private to the adapter: fixed repository/configuration controls are supplied internally, caller content and commit messages use stdin, and there is no public subprocess or arbitrary-argument API.
 
-The adapter resolves Git once, validates that its configured directory is the repository root, uses a minimal environment, disables hooks, fsmonitor, and replacement objects, and validates object IDs, ref names, tree entries, and commit identities at the boundary. Working-tree mutation, provider migration, independent verification, process-group confinement, and lifetime filesystem confinement remain outside this PR.
+The adapter resolves Git once, validates that its configured directory is the repository root, uses a minimal environment, disables hooks, fsmonitor, and replacement objects, and validates object IDs, ref names, tree entries, and commit identities at the boundary. The Git provider operates on one configured branch and target path, writes a commit, moves only that ref with expected-old compare-and-swap, and independently verifies the resulting commit, trailers, parent lineage, target blob/mode, and single-path tree diff. It does not update the working tree or index. Process-group confinement and lifetime filesystem confinement remain outside this PR.
 
 ## V0 guarantees and boundaries
 

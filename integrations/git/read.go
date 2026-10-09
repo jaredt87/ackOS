@@ -13,6 +13,13 @@ func (r *Repository) ReadBlob(ctx context.Context, id ObjectID) ([]byte, error) 
 	if err := r.validateObject(id); err != nil {
 		return nil, err
 	}
+	typeOut, err := r.exec(ctx, []string{"cat-file", "-t", string(id)}, nil)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(string(typeOut)) != "blob" {
+		return nil, fmt.Errorf("git: object %q is not a blob", id)
+	}
 	out, err := r.exec(ctx, []string{"cat-file", "blob", string(id)}, nil)
 	if err != nil {
 		return nil, err

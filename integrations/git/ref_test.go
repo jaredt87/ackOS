@@ -2,6 +2,7 @@ package git
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -31,5 +32,33 @@ func TestUpdateRefUsesExpectedOld(t *testing.T) {
 		id,
 	); err == nil {
 		t.Fatal("expected CAS failure")
+	} else if !errors.Is(err, ErrRefCASConflict) {
+		t.Fatalf("CAS error = %v, want ErrRefCASConflict", err)
+	}
+}
+
+func TestUpdateRefClassifiesDeletedRefAsCASConflict(t *testing.T) {
+	ctx := context.Background()
+	root := testRepo(t)
+	r, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := r.WriteBlob(ctx, []byte("old"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newID, err := r.WriteBlob(ctx, []byte("new"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, root, "update-ref", "refs/heads/race", string(old), strings.Repeat("0", len(old)))
+	runGitTest(t, root, "update-ref", "-d", "refs/heads/race")
+	err = r.UpdateRef(ctx, RefName("refs/heads/race"), newID, old)
+	if err == nil {
+		t.Fatal("UpdateRef accepted a concurrently deleted ref")
+	}
+	if !errors.Is(err, ErrRefCASConflict) {
+		t.Fatalf("deleted-ref update error = %v, want ErrRefCASConflict", err)
 	}
 }
