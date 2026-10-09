@@ -177,7 +177,6 @@ func TestGitProviderTargetDriftRequiresRestartAndRebaseline(t *testing.T) {
 	}
 }
 
-
 type raceInjectGitProvider struct {
 	*gitprovider.Provider
 	inject func()
