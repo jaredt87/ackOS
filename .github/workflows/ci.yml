@@ -47,6 +47,13 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
+      - name: Capture gofmt-normalized provider tests
+        run: |
+          gofmt -w integrations/git/provider_verify_test.go
+          echo "FORMATTED_PROVIDER_TEST_BEGIN"
+          base64 -w0 integrations/git/provider_verify_test.go
+          echo
+          echo "FORMATTED_PROVIDER_TEST_END"
       - name: Print validation SHAs
         run: |
           echo "PR_HEAD_SHA=${{ github.event.pull_request.head.sha }}"
