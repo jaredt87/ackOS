@@ -7,6 +7,19 @@ import (
 	"strings"
 )
 
+// ReadBlob returns the bytes of an existing blob object. Requiring the blob
+// type prevents callers from treating arbitrary Git objects as file content.
+func (r *Repository) ReadBlob(ctx context.Context, id ObjectID) ([]byte, error) {
+	if err := r.validateObject(id); err != nil {
+		return nil, err
+	}
+	out, err := r.exec(ctx, []string{"cat-file", "blob", string(id)}, nil)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (r *Repository) ReadRef(ctx context.Context, ref RefName) (ObjectID, error) {
 	if err := validateRef(ref); err != nil {
 		return "", err
