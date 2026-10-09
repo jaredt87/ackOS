@@ -7,11 +7,12 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/jaredt87/ackOS/control"
 	"github.com/jaredt87/ackOS/integrations/git"
 	"github.com/jaredt87/ackOS/integrations/mcp"
 	"github.com/jaredt87/ackOS/integrations/synthetic"
 	"github.com/jaredt87/ackOS/kernel"
-	"github.com/jaredt87/ackOS/control"
+
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
