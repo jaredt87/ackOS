@@ -161,11 +161,14 @@ func TestGitProviderTargetDriftRequiresRestartAndRebaseline(t *testing.T) {
 	_, _, err = server.control(context.Background(), nil, ControlRequest{
 		Subject: provider.Subject(), DesiredState: gitprovider.State(blobC),
 	})
-	if err == nil || !strings.Contains(err.Error(), "restart to re-baseline from current repository state") {
-		t.Fatalf("target drift error = %v, want actionable restart/re-baseline message", err)
+	if err == nil || !strings.Contains(err.Error(), "restarting re-baselines from the current observation") {
+		t.Fatalf("target drift error = %v, want provider-neutral restart/re-baseline message", err)
 	}
 	if !strings.Contains(err.Error(), "compare-and-swap conflict") {
 		t.Fatalf("target drift error = %v, want underlying kernel CAS conflict", err)
+	}
+	if strings.Contains(err.Error(), "target blob") || strings.Contains(err.Error(), "repository state changed") {
+		t.Fatalf("target drift error = %v, want provider-neutral MCP wording", err)
 	}
 
 	// Restart deliberately trusts the repository as it now stands. Seed a new

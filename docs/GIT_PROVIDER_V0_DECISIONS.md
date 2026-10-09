@@ -22,7 +22,7 @@ The kernel does not adopt observations into its committed root. If target conten
 
 **Restart means “trust the repository as it is now.”** Startup seeds the new in-memory root from the current target blob without an authorization step. This intentionally adopts any out-of-band state present at restart; it is not a neutral recovery action. Do not silently re-seed the root during a running process.
 
-The root-drift error must explain that the repository changed outside ackOS since startup and that restart re-baselines from current repository state.
+The MCP root-drift error must remain provider-neutral: committed state no longer matches what was observed, the resource may have changed outside ackOS, and restarting re-baselines from the current observation. Git-specific operator documentation and the runbook explain that Git startup trusts the current target blob without authorization.
 
 ## Test plan distinctions
 

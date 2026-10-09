@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -185,6 +186,16 @@ func TestControlExecutionFailureStructuredError(t *testing.T) {
 			},
 			wantCode:    "stale_observation",
 			wantMessage: "execution failed: stale pre-execution observation",
+		},
+		{
+			name: "wrapped Git stale lineage",
+			provider: typedExecutionProvider{
+				execute: func(context.Context, control.ExecuteRequest) (control.Execution, error) {
+					return control.Execution{}, fmt.Errorf("%w: git provider: stale observation; branch lineage or target blob changed", control.ErrStaleObservation)
+				},
+			},
+			wantCode:    "stale_observation",
+			wantMessage: "execution failed: stale pre-execution observation: git provider: stale observation; branch lineage or target blob changed",
 		},
 		{
 			name: "provider failure",
@@ -418,5 +429,18 @@ func TestControlAdvertisesControlResponseSchema(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotValue, wantValue) {
 		t.Fatalf("ackos_control output schema changed:\n got: %s\nwant: %s", gotJSON, wantJSON)
+	}
+}
+
+func TestExplainRootDriftMessageIsProviderNeutral(t *testing.T) {
+	got := explainRootDrift(kernel.ErrCASConflict).Error()
+	want := "committed state no longer matches what was observed; the resource may have changed outside ackOS (or verification failed after execution); restarting re-baselines from the current observation: " + kernel.ErrCASConflict.Error()
+	if got != want {
+		t.Fatalf("root-drift message = %q, want %q", got, want)
+	}
+	for _, gitSpecific := range []string{"repository", "target blob", "branch"} {
+		if strings.Contains(got, gitSpecific) {
+			t.Fatalf("provider-neutral root-drift message %q contains Git-specific term %q", got, gitSpecific)
+		}
 	}
 }

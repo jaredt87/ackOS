@@ -3,6 +3,7 @@ package git
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -378,6 +379,8 @@ func TestUpdateRefRejectsStaleExpectedOld(t *testing.T) {
 	staleExpected := ObjectID(strings.Repeat("0", len(current)))
 	if err := repo.UpdateRef(ctx, provider.branch, candidate, staleExpected); err == nil {
 		t.Fatal("UpdateRef accepted a stale expected-old object ID")
+	} else if !errors.Is(err, ErrRefCASConflict) {
+		t.Fatalf("UpdateRef error = %v, want ErrRefCASConflict", err)
 	}
 	after, err := repo.ReadRef(ctx, provider.branch)
 	if err != nil {
@@ -414,5 +417,58 @@ func TestProviderRejectsNonBlobDesiredObjectBeforeRefWrite(t *testing.T) {
 	}
 	if tipAfter != tipBefore {
 		t.Fatalf("non-blob rejection moved ref from %s to %s", tipBefore, tipAfter)
+	}
+}
+
+func TestProviderVerifyRejectsForgedTrailer(t *testing.T) {
+	ctx := context.Background()
+	repo, provider, _ := providerWithSibling(t)
+	before, err := provider.Observe(ctx, control.ObserveRequest{Target: control.ResourceRef{ID: provider.Subject()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired, err := repo.WriteBlob(ctx, []byte("B"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tip, err := repo.ReadRef(ctx, provider.branch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := repo.ReadCommit(ctx, tip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := repo.ReadTree(ctx, parent.Tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range entries {
+		if entries[i].Path == provider.Subject() {
+			entries[i].Object = desired
+		}
+	}
+	tree, err := repo.WriteTree(ctx, entries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executionID := "forged-trailer"
+	commit := providerTestCommit(t, repo, tree, []ObjectID{tip},
+		"ackOS: update target.txt\n\nAckOS-Execution: different-execution\nAckOS-Target: target.txt\n")
+	if err := repo.UpdateRef(ctx, provider.branch, commit, tip); err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := json.Marshal(executionEvidence{Commit: commit, Parent: tip, Path: provider.Subject(), Blob: desired})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = provider.Verify(ctx, control.VerifyRequest{
+		ExecutionID: executionID,
+		Expected:    control.ResourceRef{ID: provider.Subject(), Fingerprint: State(desired)},
+		Before:      before,
+		Execution:   control.Execution{ExecutionID: executionID, Evidence: evidence},
+	})
+	if err == nil || !strings.Contains(err.Error(), "commit trailer mismatch") {
+		t.Fatalf("Verify error = %v, want forged-trailer rejection", err)
 	}
 }

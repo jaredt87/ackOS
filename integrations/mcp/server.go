@@ -471,12 +471,11 @@ func (s *Server) StreamableHTTPHandler() http.Handler {
 	}, &mcpsdk.StreamableHTTPOptions{JSONResponse: true})
 }
 
-// explainRootDrift makes the kernel's fail-closed root conflict actionable for
-// operators. Restarting re-baselines from current repository state without an
-// authorization step; it is an explicit trust decision, not neutral recovery.
+// explainRootDrift keeps the kernel's root-conflict explanation provider-neutral.
+// Provider-specific trust and re-baselining semantics belong in provider docs.
 func explainRootDrift(err error) error {
 	if errors.Is(err, kernel.ErrCASConflict) {
-		return fmt.Errorf("kernel root no longer matches observed state: repository state changed outside ackOS since startup (or verification failed after a ref update); restart to re-baseline from current repository state, which trusts the current target blob without authorization: %w", err)
+		return fmt.Errorf("committed state no longer matches what was observed; the resource may have changed outside ackOS (or verification failed after execution); restarting re-baselines from the current observation: %w", err)
 	}
 	return err
 }

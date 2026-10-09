@@ -146,6 +146,9 @@ func TestProviderAtoBtoARejectsStaleOriginalObservation(t *testing.T) {
 	if !errors.Is(err, ErrStaleLineage) {
 		t.Fatalf("stale A/C1 execution error = %v, want ErrStaleLineage", err)
 	}
+	if !errors.Is(err, control.ErrStaleObservation) {
+		t.Fatalf("stale A/C1 execution error = %v, want control.ErrStaleObservation", err)
+	}
 }
 
 func TestProviderRejectsNoopWithoutCreatingCommit(t *testing.T) {
@@ -167,6 +170,9 @@ func TestProviderRejectsNoopWithoutCreatingCommit(t *testing.T) {
 	})
 	if !errors.Is(err, ErrNoop) {
 		t.Fatalf("no-op error = %v, want ErrNoop", err)
+	}
+	if errors.Is(err, control.ErrStaleObservation) {
+		t.Fatalf("non-stale no-op error %v unexpectedly matches stale-observation sentinel", err)
 	}
 	tip, err := provider.repo.ReadRef(ctx, provider.branch)
 	if err != nil {
@@ -212,5 +218,22 @@ func TestProviderRejectsCommitObjectAsDesiredBlob(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "desired object is not an existing blob") {
 		t.Fatalf("commit object desired state error = %v, want blob-type rejection", err)
+	}
+}
+
+func TestProviderClassifiesOnlyRefCASAsStaleObservation(t *testing.T) {
+	casErr := fmt.Errorf("%w: git update-ref: cannot lock ref: is at current but expected stale", ErrRefCASConflict)
+	got := refUpdateError(casErr)
+	if !errors.Is(got, control.ErrStaleObservation) || !errors.Is(got, ErrRefCASConflict) {
+		t.Fatalf("CAS update error = %v, want stale-observation and ref-CAS sentinels", got)
+	}
+
+	ioErr := errors.New("git update-ref: permission denied")
+	got = refUpdateError(ioErr)
+	if errors.Is(got, control.ErrStaleObservation) {
+		t.Fatalf("non-CAS update error %v unexpectedly matches stale-observation sentinel", got)
+	}
+	if !strings.Contains(got.Error(), ioErr.Error()) {
+		t.Fatalf("non-CAS update error = %v, want original I/O detail", got)
 	}
 }

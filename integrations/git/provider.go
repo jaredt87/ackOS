@@ -155,7 +155,7 @@ func (p *Provider) Execute(ctx context.Context, req control.ExecuteRequest) (con
 		return control.Execution{}, err
 	}
 	if entry.Object != beforeBlob || version != req.Before.Version {
-		return control.Execution{}, ErrStaleLineage
+		return control.Execution{}, fmt.Errorf("%w: %w", control.ErrStaleObservation, ErrStaleLineage)
 	}
 	if desired == entry.Object {
 		return control.Execution{}, ErrNoop
@@ -176,13 +176,20 @@ func (p *Provider) Execute(ctx context.Context, req control.ExecuteRequest) (con
 	// Use the full tip read above as expected-old. This CAS protects the
 	// read-to-write interval; the authorized lineage comparison is 64-bit.
 	if err := p.repo.UpdateRef(ctx, p.branch, newCommit, tip); err != nil {
-		return control.Execution{}, fmt.Errorf("git provider: branch update rejected: %w", err)
+		return control.Execution{}, refUpdateError(err)
 	}
 	evidence, err := json.Marshal(executionEvidence{Commit: newCommit, Parent: tip, Path: p.path, Blob: desired})
 	if err != nil {
 		return control.Execution{}, err
 	}
 	return control.Execution{ExecutionID: req.ExecutionID, Evidence: evidence}, nil
+}
+
+func refUpdateError(err error) error {
+	if errors.Is(err, ErrRefCASConflict) {
+		return fmt.Errorf("%w: git provider: branch moved between tip read and ref update: %w", control.ErrStaleObservation, err)
+	}
+	return fmt.Errorf("git provider: branch update rejected: %w", err)
 }
 
 func (p *Provider) Verify(ctx context.Context, req control.VerifyRequest) (control.Verification, error) {
