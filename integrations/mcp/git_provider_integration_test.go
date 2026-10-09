@@ -176,3 +176,51 @@ func TestGitProviderTargetDriftRequiresRestartAndRebaseline(t *testing.T) {
 		t.Fatalf("call after explicit restart/re-baseline failed: %v", err)
 	}
 }
+
+
+type raceInjectGitProvider struct {
+	*gitprovider.Provider
+	inject func()
+}
+
+func (p *raceInjectGitProvider) Execute(ctx context.Context, req control.ExecuteRequest) (control.Execution, error) {
+	if p.inject != nil {
+		inject := p.inject
+		p.inject = nil
+		inject()
+	}
+	return p.Provider.Execute(ctx, req)
+}
+
+func TestGitProviderRejectsABAInjectedBetweenObserveAndExecute(t *testing.T) {
+	root, repo, provider, _, blobA := setupGitProviderServer(t, []byte("A"))
+	blobB, err := repo.WriteBlob(context.Background(), []byte("B"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	racing := &raceInjectGitProvider{
+		Provider: provider,
+		inject: func() {
+			makeExternalGitCommit(t, repo, root, "target.txt", blobB, true)
+			makeExternalGitCommit(t, repo, root, "target.txt", blobA, true)
+		},
+	}
+	initial, err := provider.Observe(context.Background(), control.ObserveRequest{Target: control.ResourceRef{ID: provider.Subject()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := NewServerWithProvider(kernel.NewRuntime(initial.Resource.Fingerprint, kernel.AllowPolicy{}), racing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blobC, err := repo.WriteBlob(context.Background(), []byte("C"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = server.control(context.Background(), nil, ControlRequest{
+		Subject: provider.Subject(), DesiredState: gitprovider.State(blobC),
+	})
+	if err == nil || !strings.Contains(err.Error(), "stale observation; branch lineage or target blob changed") {
+		t.Fatalf("in-call A→B→A race error = %v, want provider stale-lineage rejection", err)
+	}
+}
