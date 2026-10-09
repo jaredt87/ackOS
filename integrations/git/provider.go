@@ -121,6 +121,9 @@ func (p *Provider) Observe(ctx context.Context, req control.ObserveRequest) (con
 }
 
 func (p *Provider) Execute(ctx context.Context, req control.ExecuteRequest) (control.Execution, error) {
+	if req.ExecutionID == "" {
+		return control.Execution{}, fmt.Errorf("git provider: execution ID is required")
+	}
 	if req.Target.ID != p.path || req.Before.Resource.ID != p.path {
 		return control.Execution{}, ErrWrongSubject
 	}
@@ -183,6 +186,9 @@ func (p *Provider) Execute(ctx context.Context, req control.ExecuteRequest) (con
 }
 
 func (p *Provider) Verify(ctx context.Context, req control.VerifyRequest) (control.Verification, error) {
+	if req.ExecutionID == "" || req.Execution.ExecutionID != req.ExecutionID {
+		return control.Verification{}, fmt.Errorf("git provider: execution ID mismatch")
+	}
 	if req.Expected.ID != p.path || req.Before.Resource.ID != p.path {
 		return control.Verification{}, ErrWrongSubject
 	}
