@@ -409,7 +409,7 @@ func (s *Server) controlWithExecutionError(ctx context.Context, in ControlReques
 	}
 	execution, err := s.runtime.Start(ctx, boundedExecutor{server: s, executor: executor, executionOutcome: executionOutcomes})
 	if err != nil {
-		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority}, err
+		return nil, ControlResponse{Phase: s.runtime.Phase(), Observation: observation, Transition: transition, Governance: governance, Authority: authority}, explainRootDrift(err)
 	}
 	authority.Consumed = true
 	if !execution.Success {
@@ -469,4 +469,15 @@ func (s *Server) StreamableHTTPHandler() http.Handler {
 	return mcpsdk.NewStreamableHTTPHandler(func(*http.Request) *mcpsdk.Server {
 		return s.MCPServer()
 	}, &mcpsdk.StreamableHTTPOptions{JSONResponse: true})
+}
+
+
+// explainRootDrift makes the kernel's fail-closed root conflict actionable for
+// operators. Restarting re-baselines from current repository state without an
+// authorization step; it is an explicit trust decision, not neutral recovery.
+func explainRootDrift(err error) error {
+	if errors.Is(err, kernel.ErrCASConflict) {
+		return fmt.Errorf("kernel root no longer matches observed state: repository state changed outside ackOS since startup (or verification failed after a ref update); restart to re-baseline from current repository state, which trusts the current target blob without authorization: %w", err)
+	}
+	return err
 }
