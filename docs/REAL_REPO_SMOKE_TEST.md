@@ -26,7 +26,7 @@ This is a manual operator drill for the first real-repository session after the 
    printf 'desired contents\n' | git -C /absolute/path/to/disposable-repo hash-object -w --stdin
    ```
 
-2. Copy the exact object ID printed by Git. The `desired_state` value is `git-blob:v1:<printed-object-id>`; do not type or invent a different object ID.
+2. Copy the exact object ID printed by Git. The `desired_state` value is `git-blob:v1:<printed-object-id>`; do not type or invent a different object ID. For the sample bytes `desired contents\n`, a separate literal hash is repository-specific; use the exact ID printed by this repository's command.
 3. Call `ackos_control` with:
    - `subject`: `nested/target.txt`
    - `desired_state`: the versioned value above
