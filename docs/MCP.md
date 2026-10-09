@@ -73,7 +73,7 @@ Git desired and observed states use the same encoding: `git-blob:v1:<blob-object
 printf 'desired file contents\n' | git -C /absolute/path/to/repository hash-object -w --stdin
 ```
 
-Use the resulting object ID after `git-blob:v1:` as `desired_state`. The object must exist and be a blob. In V0 the server obtains its own fresh observation; caller-supplied `observed_state` is ignored, and caller-held observations are not checked.
+Use the resulting object ID after `git-blob:v1:` as `desired_state`. For the exact sample bytes above, a real `git hash-object --stdin` run printed `837cb4a8a4b9184863f237ce9e3ee318ce357fb3`, so the full desired state is `git-blob:v1:837cb4a8a4b9184863f237ce9e3ee318ce357fb3`. The object must exist and be a blob. In V0 the server obtains its own fresh observation; caller-supplied `observed_state` is ignored, and caller-held observations are not checked.
 
 The kernel root is a single content-state string seeded from the configured file's actual blob at startup. An out-of-band target-content edit makes the observed state differ from that root. The next call fails at the kernel compare-and-swap before provider-level lineage checks, and the running process stays wedged until restart. The error explains that the repository changed outside ackOS and that restart is required to re-baseline.
 
