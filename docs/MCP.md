@@ -70,7 +70,7 @@ The MCP `subject` must exactly equal the configured repository-relative `--path`
 Git desired and observed states use the same encoding: `git-blob:v1:<blob-object-id>`. To create a desired blob without changing the working tree, write it into the repository's object database:
 
 ```bash
-printf 'desired file contents\\n' | git -C /absolute/path/to/repository hash-object -w --stdin
+printf 'desired file contents\n' | git -C /absolute/path/to/repository hash-object -w --stdin
 ```
 
 Use the resulting object ID after `git-blob:v1:` as `desired_state`. The object must exist and be a blob. In V0 the server obtains its own fresh observation; caller-supplied `observed_state` is ignored, and caller-held observations are not checked.
