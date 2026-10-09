@@ -96,9 +96,9 @@ func TestProviderVerifyRejectsClaimedCommitMismatch(t *testing.T) {
 	}
 	_, err = provider.Verify(ctx, control.VerifyRequest{
 		ExecutionID: "forged",
-		Expected: control.ResourceRef{ID: provider.Subject(), Fingerprint: State(desired)},
-		Before: before,
-		Execution: control.Execution{ExecutionID: "forged", Evidence: evidence},
+		Expected:    control.ResourceRef{ID: provider.Subject(), Fingerprint: State(desired)},
+		Before:      before,
+		Execution:   control.Execution{ExecutionID: "forged", Evidence: evidence},
 	})
 	if err == nil || !strings.Contains(err.Error(), "branch no longer points at claimed commit") {
 		t.Fatalf("Verify error = %v, want claimed-commit mismatch", err)
@@ -149,9 +149,9 @@ func TestProviderVerifyRejectsWrongParentDespiteMatchingTrailers(t *testing.T) {
 	}
 	_, err = provider.Verify(ctx, control.VerifyRequest{
 		ExecutionID: "forged-parent",
-		Expected: control.ResourceRef{ID: provider.Subject(), Fingerprint: State(desired)},
-		Before: before,
-		Execution: control.Execution{ExecutionID: "forged-parent", Evidence: evidence},
+		Expected:    control.ResourceRef{ID: provider.Subject(), Fingerprint: State(desired)},
+		Before:      before,
+		Execution:   control.Execution{ExecutionID: "forged-parent", Evidence: evidence},
 	})
 	if err == nil || !strings.Contains(err.Error(), "claimed commit parent mismatch") {
 		t.Fatalf("Verify error = %v, want wrong-parent rejection", err)
@@ -160,7 +160,7 @@ func TestProviderVerifyRejectsWrongParentDespiteMatchingTrailers(t *testing.T) {
 
 func TestProviderVerifyRejectsNonSinglePathAndModeChanges(t *testing.T) {
 	cases := []struct {
-		name string
+		name   string
 		mutate func(t *testing.T, repo *Repository, entries []TreeEntry, desired ObjectID) []TreeEntry
 	}{
 		{
@@ -168,7 +168,9 @@ func TestProviderVerifyRejectsNonSinglePathAndModeChanges(t *testing.T) {
 			mutate: func(t *testing.T, repo *Repository, entries []TreeEntry, desired ObjectID) []TreeEntry {
 				t.Helper()
 				extra, err := repo.WriteBlob(context.Background(), []byte("extra"))
-				if err != nil { t.Fatal(err) }
+				if err != nil {
+					t.Fatal(err)
+				}
 				entries = append(entries, TreeEntry{Mode: "100644", Path: "extra.txt", Object: extra})
 				return entries
 			},
@@ -178,9 +180,13 @@ func TestProviderVerifyRejectsNonSinglePathAndModeChanges(t *testing.T) {
 			mutate: func(t *testing.T, repo *Repository, entries []TreeEntry, desired ObjectID) []TreeEntry {
 				t.Helper()
 				sibling, err := repo.WriteBlob(context.Background(), []byte("sibling modified"))
-				if err != nil { t.Fatal(err) }
+				if err != nil {
+					t.Fatal(err)
+				}
 				for i := range entries {
-					if entries[i].Path == "sibling.txt" { entries[i].Object = sibling }
+					if entries[i].Path == "sibling.txt" {
+						entries[i].Object = sibling
+					}
 				}
 				return entries
 			},
@@ -190,7 +196,9 @@ func TestProviderVerifyRejectsNonSinglePathAndModeChanges(t *testing.T) {
 			mutate: func(t *testing.T, _ *Repository, entries []TreeEntry, _ ObjectID) []TreeEntry {
 				t.Helper()
 				for i := range entries {
-					if entries[i].Path == "target.txt" { entries[i].Mode = "100755" }
+					if entries[i].Path == "target.txt" {
+						entries[i].Mode = "100755"
+					}
 				}
 				return entries
 			},
@@ -201,34 +209,54 @@ func TestProviderVerifyRejectsNonSinglePathAndModeChanges(t *testing.T) {
 			ctx := context.Background()
 			repo, provider, _ := providerWithSibling(t)
 			before, err := provider.Observe(ctx, control.ObserveRequest{Target: control.ResourceRef{ID: provider.Subject()}})
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			desired, err := repo.WriteBlob(ctx, []byte("B"))
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			tip, err := repo.ReadRef(ctx, provider.branch)
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			parent, err := repo.ReadCommit(ctx, tip)
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			entries, err := repo.ReadTree(ctx, parent.Tree)
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			for i := range entries {
-				if entries[i].Path == "target.txt" { entries[i].Object = desired }
+				if entries[i].Path == "target.txt" {
+					entries[i].Object = desired
+				}
 			}
 			entries = tc.mutate(t, repo, entries, desired)
 			tree, err := repo.WriteTree(ctx, entries)
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			executionID := "forged-diff"
 			commit := providerTestCommit(t, repo, tree, []ObjectID{tip},
 				"ackOS: update target.txt\n\nAckOS-Execution: "+executionID+"\nAckOS-Target: target.txt\n")
-			if err := repo.UpdateRef(ctx, provider.branch, commit, tip); err != nil { t.Fatal(err) }
+			if err := repo.UpdateRef(ctx, provider.branch, commit, tip); err != nil {
+				t.Fatal(err)
+			}
 			evidence, err := json.Marshal(executionEvidence{Commit: commit, Parent: tip, Path: provider.Subject(), Blob: desired})
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			_, err = provider.Verify(ctx, control.VerifyRequest{
 				ExecutionID: executionID,
-				Expected: control.ResourceRef{ID: provider.Subject(), Fingerprint: State(desired)},
-				Before: before,
-				Execution: control.Execution{ExecutionID: executionID, Evidence: evidence},
+				Expected:    control.ResourceRef{ID: provider.Subject(), Fingerprint: State(desired)},
+				Before:      before,
+				Execution:   control.Execution{ExecutionID: executionID, Evidence: evidence},
 			})
-			if err == nil { t.Fatal("Verify accepted a forged tree change") }
+			if err == nil {
+				t.Fatal("Verify accepted a forged tree change")
+			}
 			if tc.name == "target mode changed" && !strings.Contains(err.Error(), "mode") {
 				t.Fatalf("Verify error = %v, want explicit mode mismatch", err)
 			}
@@ -242,9 +270,13 @@ func TestProviderVerifyRejectsNonSinglePathAndModeChanges(t *testing.T) {
 func TestProviderRejectsMissingBranchAndPathTraversal(t *testing.T) {
 	repo, provider, _ := providerTestRepo(t, "target.txt", []byte("A"))
 	missingBranch, err := NewProvider(repo, RefName("refs/heads/missing"), "target.txt")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	_, err = missingBranch.Observe(context.Background(), control.ObserveRequest{Target: control.ResourceRef{ID: missingBranch.Subject()}})
-	if err == nil { t.Fatal("Observe accepted missing branch") }
+	if err == nil {
+		t.Fatal("Observe accepted missing branch")
+	}
 
 	for _, target := range []string{"../outside", "nested/../../outside", "/absolute/path"} {
 		if _, err := NewProvider(repo, provider.branch, target); err == nil {
@@ -257,22 +289,30 @@ func TestProviderRejectsMissingDesiredBlobBeforeRefWrite(t *testing.T) {
 	ctx := context.Background()
 	_, provider, _ := providerTestRepo(t, "target.txt", []byte("A"))
 	before, err := provider.Observe(ctx, control.ObserveRequest{Target: control.ResourceRef{ID: provider.Subject()}})
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	tipBefore, err := provider.repo.ReadRef(ctx, provider.branch)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	missing := ObjectID(strings.Repeat("f", len(tipBefore)))
 	_, err = provider.Execute(ctx, control.ExecuteRequest{
 		ExecutionID: "missing-blob",
-		Target: control.ResourceRef{ID: provider.Subject()},
-		Before: before,
-		Payload: []byte(State(missing)),
+		Target:      control.ResourceRef{ID: provider.Subject()},
+		Before:      before,
+		Payload:     []byte(State(missing)),
 	})
 	if err == nil || !strings.Contains(err.Error(), "desired object is not an existing blob") {
 		t.Fatalf("Execute error = %v, want missing blob rejection", err)
 	}
 	tipAfter, err := provider.repo.ReadRef(ctx, provider.branch)
-	if err != nil { t.Fatal(err) }
-	if tipAfter != tipBefore { t.Fatalf("rejected missing blob moved ref from %s to %s", tipBefore, tipAfter) }
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tipAfter != tipBefore {
+		t.Fatalf("rejected missing blob moved ref from %s to %s", tipBefore, tipAfter)
+	}
 }
 
 func TestProviderVerifyRejectsBranchMovementAfterExecute(t *testing.T) {
@@ -289,9 +329,9 @@ func TestProviderVerifyRejectsBranchMovementAfterExecute(t *testing.T) {
 	executionID := "move-after-execute"
 	execution, err := provider.Execute(ctx, control.ExecuteRequest{
 		ExecutionID: executionID,
-		Target: control.ResourceRef{ID: provider.Subject()},
-		Before: before,
-		Payload: []byte(State(desired)),
+		Target:      control.ResourceRef{ID: provider.Subject()},
+		Before:      before,
+		Payload:     []byte(State(desired)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -310,9 +350,9 @@ func TestProviderVerifyRejectsBranchMovementAfterExecute(t *testing.T) {
 	}
 	_, err = provider.Verify(ctx, control.VerifyRequest{
 		ExecutionID: executionID,
-		Expected: control.ResourceRef{ID: provider.Subject(), Fingerprint: State(desired)},
-		Before: before,
-		Execution: execution,
+		Expected:    control.ResourceRef{ID: provider.Subject(), Fingerprint: State(desired)},
+		Before:      before,
+		Execution:   execution,
 	})
 	if err == nil || !strings.Contains(err.Error(), "branch no longer points at claimed commit") {
 		t.Fatalf("Verify error = %v, want post-execute branch movement rejection", err)
@@ -361,9 +401,9 @@ func TestProviderRejectsNonBlobDesiredObjectBeforeRefWrite(t *testing.T) {
 	}
 	_, err = provider.Execute(ctx, control.ExecuteRequest{
 		ExecutionID: "non-blob",
-		Target: control.ResourceRef{ID: provider.Subject()},
-		Before: before,
-		Payload: []byte(State(tipBefore)),
+		Target:      control.ResourceRef{ID: provider.Subject()},
+		Before:      before,
+		Payload:     []byte(State(tipBefore)),
 	})
 	if err == nil || !strings.Contains(err.Error(), "desired object is not an existing blob") {
 		t.Fatalf("Execute error = %v, want non-blob rejection", err)
