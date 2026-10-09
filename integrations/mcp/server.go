@@ -471,7 +471,6 @@ func (s *Server) StreamableHTTPHandler() http.Handler {
 	}, &mcpsdk.StreamableHTTPOptions{JSONResponse: true})
 }
 
-
 // explainRootDrift makes the kernel's fail-closed root conflict actionable for
 // operators. Restarting re-baselines from current repository state without an
 // authorization step; it is an explicit trust decision, not neutral recovery.
