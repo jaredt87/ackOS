@@ -367,6 +367,10 @@ func TestUpdateRefRejectsStaleExpectedOld(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	currentCommit, err := repo.ReadCommit(ctx, current)
+	if err != nil {
+		t.Fatal(err)
+	}
 	blob, err := repo.WriteBlob(ctx, []byte("B"))
 	if err != nil {
 		t.Fatal(err)
@@ -376,7 +380,7 @@ func TestUpdateRefRejectsStaleExpectedOld(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidate := providerTestCommit(t, repo, tree, []ObjectID{current}, "candidate")
-	staleExpected := ObjectID(strings.Repeat("0", len(current)))
+	staleExpected := providerTestCommit(t, repo, currentCommit.Tree, nil, "stale expected")
 	if err := repo.UpdateRef(ctx, provider.branch, candidate, staleExpected); err == nil {
 		t.Fatal("UpdateRef accepted a stale expected-old object ID")
 	} else if !errors.Is(err, ErrRefCASConflict) {
