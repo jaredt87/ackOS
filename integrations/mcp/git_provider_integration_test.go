@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -45,6 +46,7 @@ func setupGitProviderServer(t *testing.T, initial []byte) (string, *gitprovider.
 	zero := strings.Repeat("0", len(commit))
 	runGitIntegrationTest(t, root, "update-ref", "refs/heads/target", string(commit), zero)
 	runGitIntegrationTest(t, root, "update-ref", "refs/heads/other", string(commit), zero)
+	runGitIntegrationTest(t, root, "checkout", "-f", "other")
 	provider, err := gitprovider.NewProvider(repo, gitprovider.RefName("refs/heads/target"), "target.txt")
 	if err != nil {
 		t.Fatal(err)
@@ -134,6 +136,13 @@ func TestGitProviderTipOnlyCommitDoesNotWedgeRuntime(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("tip-only commit wedged runtime: %v", err)
+	}
+	worktree, err := os.ReadFile(root + "/target.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(worktree) != "A" {
+		t.Fatalf("Git provider changed checked-out worktree: got %q, want A", worktree)
 	}
 }
 
