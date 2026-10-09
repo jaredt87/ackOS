@@ -132,6 +132,8 @@ jobs:
           if [ "$status" -eq 0 ]; then echo "blob-type mutation survived"; exit 1; fi
           grep -F -- '--- FAIL: TestProviderRejectsCommitObjectAsDesiredBlob' /tmp/blob-mutation.log
           echo "MUTATION_CAUGHT: TestProviderRejectsCommitObjectAsDesiredBlob"
+      - name: List Go formatting differences
+        run: gofmt -l .
       - name: Check formatting
         run: test -z "$(gofmt -l .)"
       - name: Vet
