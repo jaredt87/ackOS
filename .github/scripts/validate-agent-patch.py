@@ -92,7 +92,7 @@ def validate_numstat_paths(patch_path):
     if result.returncode != 0 or not result.stdout:
         fail("Patch cannot be classified by git apply --numstat -z")
 
-    fields = result.stdout.split(b"\\x00")
+    fields = result.stdout.split(b"\x00")
     seen = {}
     index = 0
     while index < len(fields):
@@ -104,7 +104,7 @@ def validate_numstat_paths(patch_path):
         # Git's -z numstat format emits an empty path field followed by old
         # and new NUL-separated names for rename/copy records. Validate both
         # names before rejecting the operation.
-        if field == b"-\\t-\\t":
+        if field == b"-\t-\t":
             if index + 1 >= len(fields):
                 fail("Unclassifiable rename/copy record in numstat output")
             old_path = validate_numstat_path(fields[index], seen)
@@ -112,7 +112,7 @@ def validate_numstat_paths(patch_path):
             index += 2
             fail(f"Renames and copies are not allowed: {old_path} -> {new_path}")
 
-        columns = field.split(b"\\t", 2)
+        columns = field.split(b"\t", 2)
         if len(columns) != 3:
             fail("Unclassifiable record in git apply --numstat -z output")
         added, deleted, path_bytes = columns
