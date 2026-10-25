@@ -84,10 +84,24 @@ class PatchPolicyTests(unittest.TestCase):
     def test_policy_script_is_protected(self):
         self.assert_rejected(patch_for(".github/scripts/validate-agent-patch.py"), message="Protected path")
 
+    def test_case_insensitive_protected_paths_are_rejected(self):
+        self.assert_rejected(
+            patch_for(".GitHub/workflows/ci.yml"),
+            message="Protected path",
+        )
+        self.assert_rejected(
+            patch_for(".GITHUB/scripts/test_validate_agent_patch.py"),
+            message="Protected path",
+        )
+
+    def test_case_insensitive_path_collisions_are_rejected(self):
+        patch = patch_for("internal/Widget.go") + patch_for("internal/widget.go")
+        self.assert_rejected(patch, message="Case-insensitive path collision")
+
     def test_rename_rejected(self):
         self.assert_rejected(
             patch_for("internal/new.go", old_path="internal/old.go"),
-            message="Renames are not allowed",
+            message="Renames and copies are not allowed",
         )
 
     def test_symlink_executable_and_submodule_changes_rejected(self):
