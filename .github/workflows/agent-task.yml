@@ -32,6 +32,22 @@ jobs:
       contents: read
       actions: read
     steps:
+      - name: Check required secrets
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ACKOS_AGENT_APP_ID: ${{ secrets.ACKOS_AGENT_APP_ID }}
+          ACKOS_AGENT_APP_PRIVATE_KEY: ${{ secrets.ACKOS_AGENT_APP_PRIVATE_KEY }}
+        run: |
+          missing=0
+          for name in ANTHROPIC_API_KEY ACKOS_AGENT_APP_ID ACKOS_AGENT_APP_PRIVATE_KEY; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Required repository secret $name is not configured."
+              missing=1
+            fi
+          done
+          exit "$missing"
+
       - name: Install pinned Claude Code CLI without API credentials
         shell: bash
         working-directory: ${{ runner.temp }}
@@ -54,22 +70,6 @@ jobs:
           curl -fsSL https://claude.ai/install.sh | bash -s -- 2.1.310
           test -x "$HOME/.local/bin/claude"
           "$HOME/.local/bin/claude" --version
-
-      - name: Check required secrets
-        shell: bash
-        env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          ACKOS_AGENT_APP_ID: ${{ secrets.ACKOS_AGENT_APP_ID }}
-          ACKOS_AGENT_APP_PRIVATE_KEY: ${{ secrets.ACKOS_AGENT_APP_PRIVATE_KEY }}
-        run: |
-          missing=0
-          for name in ANTHROPIC_API_KEY ACKOS_AGENT_APP_ID ACKOS_AGENT_APP_PRIVATE_KEY; do
-            if [[ -z "${!name}" ]]; then
-              echo "::error::Required repository secret $name is not configured."
-              missing=1
-            fi
-          done
-          exit "$missing"
 
       - name: Check out trusted main
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
