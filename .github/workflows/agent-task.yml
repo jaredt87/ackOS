@@ -62,7 +62,10 @@ jobs:
         run: go mod download
 
       - name: Verify the runner baseline
-        run: go version && go test ./...
+        run: |
+          go version && go test ./...
+          # Fail before the agent starts if dependency setup changed tracked files.
+          test -z "$(git status --porcelain)"
 
       - name: Create least-privilege GitHub App token
         id: app-token
