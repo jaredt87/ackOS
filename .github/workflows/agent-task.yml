@@ -150,12 +150,12 @@ jobs:
             printf '%s\n' "$TASK_INPUT"
             echo
             echo "## Validation performed on the runner"
-            echo "- `go version`"
+            printf '%s\n' '- `go version`'
             echo "- `test -z \"$(gofmt -l .)\"`"
-            echo "- `go vet ./...`"
-            echo "- `go test ./...`"
-            echo "- `go test -race ./...`"
-            echo "- `git diff --check`"
+            printf '%s\n' '- `go vet ./...`'
+            printf '%s\n' '- `go test ./...`'
+            printf '%s\n' '- `go test -race ./...`'
+            printf '%s\n' '- `git diff --check`'
             echo
             echo "This PR was opened only after the runner's final validation passed. Independent PR CI must still pass, and a human must review and merge it."
           } > "$RUNNER_TEMP/pr-body.md"
