@@ -26,7 +26,12 @@ def patch_for(path, *, body=None, addition=False, deletion=False, mode=None, old
         header += f"--- a/{old_path}\n+++ /dev/null\n"
     else:
         header += f"--- a/{old_path}\n+++ b/{new_path}\n"
-    header += "@@ -1 +1 @@\n-old\n+new\n"
+    if addition:
+        header += "@@ -0,0 +1 @@\n+new\n"
+    elif deletion:
+        header += "@@ -1 +0,0 @@\n-old\n"
+    else:
+        header += "@@ -1 +1 @@\n-old\n+new\n"
     return header
 
 
