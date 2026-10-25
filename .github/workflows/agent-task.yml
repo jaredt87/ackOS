@@ -10,6 +10,7 @@ on:
 
 # The workflow's GITHUB_TOKEN is read-only. Repository writes use a separately
 # installed custom GitHub App token that deliberately lacks Workflows permission.
+# Static API-key auth is used; id-token: write is only needed for OIDC federation.
 permissions:
   contents: read
   actions: read
@@ -97,7 +98,7 @@ jobs:
             - Do not add dependencies without explicit authorization.
             - Before committing, run: test -z "$(gofmt -l .)", go vet ./..., go test ./..., and go test -race ./....
             - Fix failures caused by your changes and repeat the relevant checks. Do not claim a check passed unless it ran and passed.
-            - Commit only after the checks pass. Push only to the feature/agent-task branch created for this run; never force-push or merge.
+            - Commit only after the checks pass. Push only to feature/agent-task-${{ github.run_id }} using `git push origin HEAD:refs/heads/feature/agent-task-${{ github.run_id }}`; never force-push or merge.
             - Do not open a PR yourself. The workflow will validate the final worktree and open a PR only if all required checks pass.
             - If the task requires a contract or architecture decision not already approved, stop and report the decision needed instead of implementing it.
           claude_args: >-
