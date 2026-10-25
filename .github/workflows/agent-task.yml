@@ -32,6 +32,29 @@ jobs:
       contents: read
       actions: read
     steps:
+      - name: Install pinned Claude Code CLI without API credentials
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        env:
+          HOME: ${{ runner.temp }}/claude-cli-home
+          GITHUB_ENV: /dev/null
+          GITHUB_PATH: /dev/null
+          GITHUB_OUTPUT: /dev/null
+          ANTHROPIC_API_KEY: ""
+          INPUT_ANTHROPIC_API_KEY: ""
+          NODE_OPTIONS: ""
+          BASH_ENV: ""
+          ENV: ""
+          LD_PRELOAD: ""
+          GITHUB_WORKSPACE: /dev/null
+          GITHUB_REPOSITORY: ""
+          GITHUB_SERVER_URL: ""
+        run: |
+          mkdir -p "$HOME"
+          curl -fsSL https://claude.ai/install.sh | bash -s -- 2.1.310
+          test -x "$HOME/.local/bin/claude"
+          "$HOME/.local/bin/claude" --version
+
       - name: Check required secrets
         shell: bash
         env:
@@ -70,26 +93,6 @@ jobs:
       - name: Record trusted base commit
         id: base
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Install pinned Claude Code CLI without API credentials
-        shell: bash
-        working-directory: ${{ runner.temp }}
-        env:
-          HOME: ${{ runner.temp }}/claude-cli-home
-          GITHUB_ENV: /dev/null
-          GITHUB_PATH: /dev/null
-          GITHUB_OUTPUT: /dev/null
-          ANTHROPIC_API_KEY: ""
-          INPUT_ANTHROPIC_API_KEY: ""
-          NODE_OPTIONS: ""
-          BASH_ENV: ""
-          ENV: ""
-          LD_PRELOAD: ""
-        run: |
-          mkdir -p "$HOME"
-          curl -fsSL https://claude.ai/install.sh | bash -s -- 2.1.310
-          test -x "$HOME/.local/bin/claude"
-          "$HOME/.local/bin/claude" --version
 
       - name: Run bounded agent task
         uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
