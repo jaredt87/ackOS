@@ -176,7 +176,7 @@ def main():
             ):
                 fail(f"Protected path rejected (case-insensitive): {path}")
         if old_path != new_path:
-            fail(f"Renames are not allowed: {old_path} -> {new_path}")
+            fail(f"Renames and copies are not allowed: {old_path} -> {new_path}")
         if old_path in paths_seen:
             fail(f"Duplicate path in patch: {old_path}")
         paths_seen.add(old_path)
