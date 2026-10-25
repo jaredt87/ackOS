@@ -2,6 +2,7 @@
 """Validate an untrusted agent patch before a trusted publisher applies it."""
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -10,6 +11,8 @@ PATH_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 TEST_RE = re.compile(r"(^|/)[^/]*_test\.go$")
 PROTECTED_EXACT = {
     ".github/CODEOWNERS",
+    ".github/scripts/validate-agent-patch.py",
+    ".github/scripts/test_validate_agent_patch.py",
     ".gitmodules",
     ".gitignore",
     ".golangci.yml",
@@ -50,6 +53,77 @@ def parse_authorized(raw):
     return result
 
 
+def validate_numstat_path(path_bytes, seen):
+    try:
+        path = path_bytes.decode("ascii")
+    except UnicodeDecodeError:
+        fail("Patch path is not ASCII and cannot be classified safely")
+
+    if (
+        not path
+        or not PATH_RE.fullmatch(path)
+        or path.startswith("/")
+        or any(part in {".", "..", ".git"} for part in path.split("/"))
+    ):
+        fail(f"Unsafe or unclassifiable path rejected: {path!r}")
+
+    folded = path.casefold()
+    protected_exact = {item.casefold() for item in PROTECTED_EXACT}
+    protected_prefixes = tuple(item.casefold() for item in PROTECTED_PREFIXES)
+    if folded in protected_exact or any(folded.startswith(prefix) for prefix in protected_prefixes):
+        fail(f"Protected path rejected (case-insensitive): {path}")
+
+    previous = seen.get(folded)
+    if previous is not None:
+        if previous != path:
+            fail(f"Case-insensitive path collision rejected: {previous!r} and {path!r}")
+        fail(f"Duplicate path in patch: {path}")
+    seen[folded] = path
+    return path
+
+
+def validate_numstat_paths(patch_path):
+    result = subprocess.run(
+        ["git", "apply", "--numstat", "-z", str(patch_path)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode != 0 or not result.stdout:
+        fail("Patch cannot be classified by git apply --numstat -z")
+
+    fields = result.stdout.split(b"\\x00")
+    seen = {}
+    index = 0
+    while index < len(fields):
+        field = fields[index]
+        index += 1
+        if not field:
+            continue
+
+        # Git's -z numstat format emits an empty path field followed by old
+        # and new NUL-separated names for rename/copy records. Validate both
+        # names before rejecting the operation.
+        if field == b"-\\t-\\t":
+            if index + 1 >= len(fields):
+                fail("Unclassifiable rename/copy record in numstat output")
+            old_path = validate_numstat_path(fields[index], seen)
+            new_path = validate_numstat_path(fields[index + 1], seen)
+            index += 2
+            fail(f"Renames and copies are not allowed: {old_path} -> {new_path}")
+
+        columns = field.split(b"\\t", 2)
+        if len(columns) != 3:
+            fail("Unclassifiable record in git apply --numstat -z output")
+        added, deleted, path_bytes = columns
+        if not added.isdigit() or not deleted.isdigit():
+            fail("Unclassifiable numstat counts in patch")
+        validate_numstat_path(path_bytes, seen)
+
+    if not seen:
+        fail("Patch contains no classifiable file paths")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("patch")
@@ -72,6 +146,8 @@ def main():
     if "GIT binary patch" in patch or "Binary files " in patch:
         fail("Binary changes are not allowed")
 
+    validate_numstat_paths(args.patch)
+
     chunks = re.split(r"(?m)(?=^diff --git )", patch)
     if not chunks or chunks[0].strip():
         fail("Malformed patch preamble")
@@ -93,8 +169,12 @@ def main():
                 or any(part in {".", "..", ".git"} for part in path.split("/"))
             ):
                 fail(f"Unsafe or ambiguous path rejected: {path!r}")
-            if path in PROTECTED_EXACT or any(path.startswith(prefix) for prefix in PROTECTED_PREFIXES):
-                fail(f"Protected path rejected: {path}")
+            folded = path.casefold()
+            if (
+                folded in {item.casefold() for item in PROTECTED_EXACT}
+                or any(folded.startswith(prefix.casefold()) for prefix in PROTECTED_PREFIXES)
+            ):
+                fail(f"Protected path rejected (case-insensitive): {path}")
         if old_path != new_path:
             fail(f"Renames are not allowed: {old_path} -> {new_path}")
         if old_path in paths_seen:
