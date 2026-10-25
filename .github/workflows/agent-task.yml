@@ -7,10 +7,14 @@ on:
         description: "One bounded task for the ackOS agent"
         required: true
         type: string
+      authorized_test_paths:
+        description: "Optional comma/newline-separated exact *_test.go paths authorized for modification or deletion"
+        required: false
+        default: ""
+        type: string
 
-# The workflow's GITHUB_TOKEN is read-only. Repository writes use a separately
-# installed custom GitHub App token that deliberately lacks Workflows permission.
-# Static API-key auth is used; id-token: write is only needed for OIDC federation.
+# The agent and publisher are isolated in separate jobs. The App token is only
+# created in the publisher job after independent validation succeeds.
 permissions:
   contents: read
   actions: read
@@ -20,8 +24,7 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  run:
-    # Dispatch from main only; checkout is also pinned to main below.
+  agent:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -45,12 +48,11 @@ jobs:
           done
           exit "$missing"
 
-      - name: Check out ackOS
+      - name: Check out trusted main
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: main
           fetch-depth: 0
-          # Prevent the default GITHUB_TOKEN from being used for agent pushes.
           persist-credentials: false
 
       - name: Set up Go from go.mod
@@ -58,20 +60,18 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Download Go modules
-        run: go mod download
-
-      - name: Verify the runner baseline
+      - name: Verify baseline
         run: |
-          go version && go test ./...
-          # Fail before the agent starts if dependency setup changed tracked files.
+          go version
+          go mod download
+          go test ./...
           test -z "$(git status --porcelain)"
 
       - name: Run bounded agent task
-        id: claude
         uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
         with:
-          # Read-only token: Claude can inspect the repo and commit locally, but cannot push or open PRs.
+          # This job's action receives the API key, but no arbitrary shell or test
+          # execution is allowed while that key is present.
           github_token: ${{ github.token }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           base_branch: main
@@ -85,44 +85,135 @@ jobs:
             Required workflow:
             - Read AGENTS.md and PR_REVIEW_LOOP.md before changing files.
             - Keep changes limited to the requested task. Do not reopen settled architecture or add hypothetical safeguards.
-            - Do not modify .github/workflows/**, CI policy, or credentials. The GitHub App token intentionally lacks Workflows permission.
+            - Do not modify .github/**, AGENTS.md, PR_REVIEW_LOOP.md, go.mod, or go.sum.
+            - Do not modify or delete existing *_test.go files unless the dispatch input explicitly authorizes their exact paths.
+            - You may add new *_test.go files.
             - Do not add dependencies without explicit authorization.
-            - Before committing, run: test -z "$(gofmt -l .)", go vet ./..., go test ./..., and go test -race ./....
-            - Fix failures caused by your changes and repeat the relevant checks. Do not claim a check passed unless it ran and passed.
-            - Commit locally only after the checks pass. Do not push, force-push, or merge; the workflow will publish the validated commit using a separate token after this step ends.
-            - Do not open a PR yourself. The workflow will validate the final worktree, then push and open a PR only if all required checks pass.
+            - Do not run tests or other code from the edited workspace in this job. A separate secret-free job will validate the patch.
+            - Do not push, commit, or open a PR. The workflow exports only a text patch; a fresh runner validates and publishes it.
             - If the task requires a contract or architecture decision not already approved, stop and report the decision needed instead of implementing it.
           claude_args: >-
             --max-turns 20
-            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(go version),Bash(go mod download:*),Bash(gofmt:*),Bash(go vet:*),Bash(go test:*),Bash(go build:*),Bash(git status:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*)"
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(go version),Bash(git status:*),Bash(git diff:*)"
           additional_permissions: |
             actions: read
 
-      - name: Validate final worktree
+      - name: Export text patch only
+        shell: bash
+        run: |
+          # Intent-to-add makes new text files appear in git diff without executing hooks.
+          git add -N -- .
+          git diff --no-ext-diff --no-renames --unified=3 origin/main -- . > "$RUNNER_TEMP/agent.patch"
+          test -s "$RUNNER_TEMP/agent.patch"
+
+      - name: Upload untrusted patch artifact
+        uses: actions/upload-artifact@0b7f8abb1508181956e8e162db84b466c27e18c3 # v4.6.2
+        with:
+          name: agent-patch-${{ github.run_id }}
+          path: ${{ runner.temp }}/agent.patch
+          if-no-files-found: error
+          retention-days: 1
+
+  validate:
+    needs: agent
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out trusted main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Download untrusted patch
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v4.3.0
+        with:
+          name: agent-patch-${{ github.run_id }}
+          path: ${{ runner.temp }}/agent-patch
+
+      - name: Check patch applicability and policy
+        shell: bash
+        env:
+          AUTHORIZED_TEST_PATHS: ${{ inputs.authorized_test_paths }}
+        run: |
+          patch="$RUNNER_TEMP/agent-patch/agent.patch"
+          git apply --check --whitespace=error-all "$patch"
+          python3 .github/scripts/validate-agent-patch.py "$patch" --authorized-test-paths "$AUTHORIZED_TEST_PATHS"
+          git apply --whitespace=error-all "$patch"
+          git diff --check
+          if git diff --summary | grep -E 'mode change|create mode (100755|120000|160000)|rename'; then
+            echo "::error::Mode changes, symlinks, submodules, and renames are not allowed."
+            exit 1
+          fi
+
+      - name: Set up Go from go.mod
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+
+      - name: Validate patch without secrets
         shell: bash
         run: |
           go mod download
+          git diff --binary > "$RUNNER_TEMP/before-tests.diff"
+          go version
           test -z "$(gofmt -l .)"
           go vet ./...
           go test ./...
           go test -race ./...
           git diff --check
-          # Validation must not leave generated or uncommitted changes behind.
-          test -z "$(git status --porcelain)"
+          git diff --binary > "$RUNNER_TEMP/after-tests.diff"
+          cmp "$RUNNER_TEMP/before-tests.diff" "$RUNNER_TEMP/after-tests.diff"
 
-      - name: Detect task changes
-        id: changes
+  publish:
+    needs: validate
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out trusted main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Download untrusted patch
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v4.3.0
+        with:
+          name: agent-patch-${{ github.run_id }}
+          path: ${{ runner.temp }}/agent-patch
+
+      - name: Revalidate and apply patch on clean publisher
         shell: bash
+        env:
+          AUTHORIZED_TEST_PATHS: ${{ inputs.authorized_test_paths }}
         run: |
-          if git diff --quiet origin/main...HEAD; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+          patch="$RUNNER_TEMP/agent-patch/agent.patch"
+          # Publisher trusts only this checked-out main-branch policy script.
+          git apply --check --whitespace=error-all "$patch"
+          python3 .github/scripts/validate-agent-patch.py "$patch" --authorized-test-paths "$AUTHORIZED_TEST_PATHS"
+          git apply --whitespace=error-all "$patch"
+          git diff --check
+          if git diff --summary | grep -E 'mode change|create mode (100755|120000|160000)|rename'; then
+            echo "::error::Mode changes, symlinks, submodules, and renames are not allowed."
+            exit 1
           fi
+          test -n "$(git status --porcelain)"
+          git add --all
+          git diff --cached --check
+          git -c core.hooksPath=/dev/null \
+              -c user.name="ackOS Agent Publisher" \
+              -c user.email="ackos-agent-publisher@users.noreply.github.com" \
+              commit -m "agent: apply validated task patch"
 
       - name: Create least-privilege GitHub App token
         id: app-token
-        if: steps.changes.outputs.changed == 'true'
         uses: actions/create-github-app-token@67018539274d69449ef7c02e8e71183d1719ab42 # v2.1.4
         with:
           app-id: ${{ secrets.ACKOS_AGENT_APP_ID }}
@@ -132,42 +223,22 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
 
-      - name: Push validated branch and open PR
-        if: steps.changes.outputs.changed == 'true'
+      - name: Push validated commit and open PR
         shell: bash
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          BRANCH_NAME: ${{ steps.claude.outputs.branch_name }}
-          TASK_INPUT: ${{ inputs.task }}
+          RUN_ID: ${{ github.run_id }}
         run: |
-          case "$BRANCH_NAME" in
-            feature/agent-task-*) ;;
-            *)
-              echo "::error::Unexpected agent branch name: $BRANCH_NAME"
-              exit 1
-              ;;
+          branch="feature/agent-task-$RUN_ID"
+          case "$branch" in
+            feature/agent-task-[0-9]*) ;;
+            *) echo "::error::Invalid publisher branch name"; exit 1 ;;
           esac
-          # This is the first step that receives write credentials.
           gh auth setup-git
-          git push origin "HEAD:refs/heads/$BRANCH_NAME"
-          title="$(printf '%s' "$TASK_INPUT" | tr '\n' ' ' | cut -c1-70)"
-          {
-            echo "## Task"
-            printf '%s\n' "$TASK_INPUT"
-            echo
-            echo "## Validation performed on the runner"
-            printf '%s\n' '- `go version`'
-            printf '%s\n' '- `test -z "$(gofmt -l .)"`'
-            printf '%s\n' '- `go vet ./...`'
-            printf '%s\n' '- `go test ./...`'
-            printf '%s\n' '- `go test -race ./...`'
-            printf '%s\n' '- `git diff --check`'
-            echo
-            echo "This PR was opened only after the runner's final validation passed. Independent PR CI must still pass, and a human must review and merge it."
-          } > "$RUNNER_TEMP/pr-body.md"
+          git push origin "HEAD:refs/heads/$branch"
           gh pr create \
             --repo "$GITHUB_REPOSITORY" \
-            --head "$BRANCH_NAME" \
+            --head "$branch" \
             --base main \
-            --title "agent: $title" \
-            --body-file "$RUNNER_TEMP/pr-body.md"
+            --title "agent: bounded task" \
+            --body "Automated bounded task patch. The patch was structurally validated on a fresh runner, then independently tested without secrets. Review the diff and CI results before merging."
