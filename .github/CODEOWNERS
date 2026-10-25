@@ -11,6 +11,7 @@
 /PR_REVIEW_LOOP.md @jaredt87
 
 # Go module, test, and formatting configuration
+/.gitignore @jaredt87
 /go.mod @jaredt87
 /go.sum @jaredt87
 /go.work @jaredt87
