@@ -67,6 +67,10 @@ jobs:
           go test ./...
           test -z "$(git status --porcelain)"
 
+      - name: Record trusted base commit
+        id: base
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
       - name: Run bounded agent task
         uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
         with:
@@ -74,9 +78,6 @@ jobs:
           # execution is allowed while that key is present.
           github_token: ${{ github.token }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          base_branch: main
-          branch_prefix: feature/
-          branch_name_template: "{{prefix}}agent-task-${{ github.run_id }}"
           prompt: |
             Perform this one bounded task in the ackOS repository:
 
@@ -94,16 +95,25 @@ jobs:
             - If the task requires a contract or architecture decision not already approved, stop and report the decision needed instead of implementing it.
           claude_args: >-
             --max-turns 20
-            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(go version),Bash(git status:*),Bash(git diff:*)"
+            --allowedTools "Read,Edit,Write,Glob,Grep"
           additional_permissions: |
             actions: read
 
-      - name: Export text patch only
+      - name: Export text patch from a fresh trusted checkout
         shell: bash
+        env:
+          BASE_SHA: ${{ steps.base.outputs.sha }}
         run: |
-          # Intent-to-add makes new text files appear in git diff without executing hooks.
-          git add -N -- .
-          git diff --no-ext-diff --no-renames --unified=3 origin/main -- . > "$RUNNER_TEMP/agent.patch"
+          # Never trust the agent job's .git directory, config, refs, or hooks.
+          export GIT_CONFIG_NOSYSTEM=1
+          export GIT_CONFIG_GLOBAL=/dev/null
+          trusted="$RUNNER_TEMP/trusted-checkout"
+          git clone --quiet --no-checkout "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$trusted"
+          git -C "$trusted" checkout --quiet --detach "$BASE_SHA"
+          # Copy working-tree files only; rsync preserves symlinks without following them.
+          rsync -a --delete --exclude='.git' "$GITHUB_WORKSPACE/" "$trusted/"
+          git -C "$trusted" -c core.hooksPath=/dev/null add -N -f -- .
+          git -C "$trusted" --no-pager -c core.pager=cat diff --no-ext-diff --no-textconv --no-renames --unified=3 HEAD -- . > "$RUNNER_TEMP/agent.patch"
           test -s "$RUNNER_TEMP/agent.patch"
 
       - name: Upload untrusted patch artifact
