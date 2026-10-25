@@ -71,6 +71,26 @@ jobs:
         id: base
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      - name: Install pinned Claude Code CLI without API credentials
+        shell: bash
+        working-directory: ${{ runner.temp }}
+        env:
+          HOME: ${{ runner.temp }}/claude-cli-home
+          GITHUB_ENV: /dev/null
+          GITHUB_PATH: /dev/null
+          GITHUB_OUTPUT: /dev/null
+          ANTHROPIC_API_KEY: ""
+          INPUT_ANTHROPIC_API_KEY: ""
+          NODE_OPTIONS: ""
+          BASH_ENV: ""
+          ENV: ""
+          LD_PRELOAD: ""
+        run: |
+          mkdir -p "$HOME"
+          curl -fsSL https://claude.ai/install.sh | bash -s -- 2.1.310
+          test -x "$HOME/.local/bin/claude"
+          "$HOME/.local/bin/claude" --version
+
       - name: Run bounded agent task
         uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
         with:
@@ -78,6 +98,7 @@ jobs:
           # execution is allowed while that key is present.
           github_token: ${{ github.token }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          path_to_claude_code_executable: ${{ runner.temp }}/claude-cli-home/.local/bin/claude
           prompt: |
             Perform this one bounded task in the ackOS repository:
 
