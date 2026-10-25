@@ -62,7 +62,7 @@ def main():
     except OSError as exc:
         fail(f"Cannot read patch: {exc}")
     if not raw or len(raw) > MAX_PATCH_BYTES:
-        fail(f"Patch must be non-empty and no larger than {MAX_PATCH_BYTES} bytes")
+        fail(f"Patch byte limit exceeded: must be non-empty and no larger than {MAX_PATCH_BYTES} bytes")
     if b"\x00" in raw:
         fail("NUL byte / binary patch rejected")
     try:
