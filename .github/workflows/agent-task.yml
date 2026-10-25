@@ -94,7 +94,7 @@ jobs:
             - If the task requires a contract or architecture decision not already approved, stop and report the decision needed instead of implementing it.
           claude_args: >-
             --max-turns 20
-            --allowedTools "Bash(go version),Bash(go mod download:*),Bash(gofmt:*),Bash(go vet:*),Bash(go test:*),Bash(go build:*),Bash(git status:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*)"
+            --allowedTools "Read,Edit,Write,Glob,Grep,Bash(go version),Bash(go mod download:*),Bash(gofmt:*),Bash(go vet:*),Bash(go test:*),Bash(go build:*),Bash(git status:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*)"
           additional_permissions: |
             actions: read
 
