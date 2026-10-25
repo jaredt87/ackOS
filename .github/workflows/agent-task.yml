@@ -1,0 +1,167 @@
+name: Agent Task
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "One bounded task for the ackOS agent"
+        required: true
+        type: string
+
+# The workflow's GITHUB_TOKEN is read-only. Repository writes use a separately
+# installed custom GitHub App token that deliberately lacks Workflows permission.
+# Static API-key auth is used; id-token: write is only needed for OIDC federation.
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: ackos-agent-task
+  cancel-in-progress: false
+
+jobs:
+  run:
+    # Dispatch from main only; checkout is also pinned to main below.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check required secrets
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ACKOS_AGENT_APP_ID: ${{ secrets.ACKOS_AGENT_APP_ID }}
+          ACKOS_AGENT_APP_PRIVATE_KEY: ${{ secrets.ACKOS_AGENT_APP_PRIVATE_KEY }}
+        run: |
+          missing=0
+          for name in ANTHROPIC_API_KEY ACKOS_AGENT_APP_ID ACKOS_AGENT_APP_PRIVATE_KEY; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Required repository secret $name is not configured."
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - name: Check out ackOS
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          fetch-depth: 0
+          # Prevent the default GITHUB_TOKEN from being used for agent pushes.
+          persist-credentials: false
+
+      - name: Set up Go from go.mod
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version-file: go.mod
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Verify the runner baseline
+        run: go version && go test ./...
+
+      - name: Create least-privilege GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@67018539274d69449ef7c02e8e71183d1719ab42 # v2.1.4
+        with:
+          app-id: ${{ secrets.ACKOS_AGENT_APP_ID }}
+          private-key: ${{ secrets.ACKOS_AGENT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ackOS
+          permission-contents: write
+          permission-issues: write
+          permission-pull-requests: write
+          permission-actions: read
+
+      - name: Run bounded agent task
+        id: claude
+        uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
+        with:
+          github_token: ${{ steps.app-token.outputs.token }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          base_branch: main
+          branch_prefix: feature/
+          branch_name_template: "{{prefix}}agent-task-${{ github.run_id }}"
+          prompt: |
+            Perform this one bounded task in the ackOS repository:
+
+            ${{ inputs.task }}
+
+            Required workflow:
+            - Read AGENTS.md and PR_REVIEW_LOOP.md before changing files.
+            - Keep changes limited to the requested task. Do not reopen settled architecture or add hypothetical safeguards.
+            - Do not modify .github/workflows/**, CI policy, or credentials. The GitHub App token intentionally lacks Workflows permission.
+            - Do not add dependencies without explicit authorization.
+            - Before committing, run: test -z "$(gofmt -l .)", go vet ./..., go test ./..., and go test -race ./....
+            - Fix failures caused by your changes and repeat the relevant checks. Do not claim a check passed unless it ran and passed.
+            - Commit only after the checks pass. Push only to feature/agent-task-${{ github.run_id }} using `git push origin HEAD:refs/heads/feature/agent-task-${{ github.run_id }}`; never force-push or merge.
+            - Do not open a PR yourself. The workflow will validate the final worktree and open a PR only if all required checks pass.
+            - If the task requires a contract or architecture decision not already approved, stop and report the decision needed instead of implementing it.
+          claude_args: >-
+            --max-turns 20
+            --allowedTools "Bash(go version),Bash(go mod download:*),Bash(gofmt:*),Bash(go vet:*),Bash(go test:*),Bash(go build:*),Bash(git status:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*),Bash(git push origin HEAD:refs/heads/feature/agent-task-*)"
+          additional_permissions: |
+            actions: read
+
+      - name: Validate final worktree
+        shell: bash
+        run: |
+          go mod download
+          test -z "$(gofmt -l .)"
+          go vet ./...
+          go test ./...
+          go test -race ./...
+          git diff --check
+          # Validation must not leave generated or uncommitted changes behind.
+          test -z "$(git status --porcelain)"
+
+      - name: Detect task changes
+        id: changes
+        shell: bash
+        run: |
+          if git diff --quiet origin/main...HEAD; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Open PR after local validation passes
+        if: steps.changes.outputs.changed == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          BRANCH_NAME: ${{ steps.claude.outputs.branch_name }}
+          TASK_INPUT: ${{ inputs.task }}
+        run: |
+          case "$BRANCH_NAME" in
+            feature/agent-task-*) ;;
+            *)
+              echo "::error::Unexpected agent branch name: $BRANCH_NAME"
+              exit 1
+              ;;
+          esac
+          title="$(printf '%s' "$TASK_INPUT" | tr '\n' ' ' | cut -c1-70)"
+          {
+            echo "## Task"
+            printf '%s\n' "$TASK_INPUT"
+            echo
+            echo "## Validation performed on the runner"
+            printf '%s\n' '- `go version`'
+            printf '%s\n' '- `test -z "$(gofmt -l .)"`'
+            printf '%s\n' '- `go vet ./...`'
+            printf '%s\n' '- `go test ./...`'
+            printf '%s\n' '- `go test -race ./...`'
+            printf '%s\n' '- `git diff --check`'
+            echo
+            echo "This PR was opened only after the runner's final validation passed. Independent PR CI must still pass, and a human must review and merge it."
+          } > "$RUNNER_TEMP/pr-body.md"
+          gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --head "$BRANCH_NAME" \
+            --base main \
+            --title "agent: $title" \
+            --body-file "$RUNNER_TEMP/pr-body.md"
