@@ -1,22 +1,14 @@
 #!/usr/bin/env python3
-"""Validate an untrusted agent patch before the trusted publisher applies it."""
+"""Validate an untrusted agent patch before a trusted publisher applies it."""
 import argparse
-import os
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 MAX_PATCH_BYTES = 1024 * 1024
 PATH_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 TEST_RE = re.compile(r"(^|/)[^/]*_test\.go$")
-PROTECTED_EXACT = {
-    ".github/CODEOWNERS",
-    "AGENTS.md",
-    "PR_REVIEW_LOOP.md",
-    "go.mod",
-    "go.sum",
-}
+PROTECTED_EXACT = {".github/CODEOWNERS", "AGENTS.md", "PR_REVIEW_LOOP.md", "go.mod", "go.sum"}
 PROTECTED_PREFIXES = (".github/",)
 FORBIDDEN_MODES = {"100755", "120000", "160000"}
 
@@ -27,17 +19,17 @@ def fail(message):
 
 
 def parse_authorized(raw):
-    paths = set()
-    for entry in re.split(r"[,\n]", raw or ""):
-        path = entry.strip()
+    result = set()
+    for item in re.split(r"[,\n]", raw or ""):
+        path = item.strip()
         if not path:
             continue
         if not PATH_RE.fullmatch(path) or path.startswith("/") or ".." in path.split("/"):
             fail(f"Invalid authorized test path: {path!r}")
         if not TEST_RE.search(path):
             fail(f"Only Go *_test.go paths can be authorized: {path}")
-        paths.add(path)
-    return paths
+        result.add(path)
+    return result
 
 
 def main():
@@ -45,16 +37,14 @@ def main():
     parser.add_argument("patch")
     parser.add_argument("--authorized-test-paths", default="")
     args = parser.parse_args()
+    authorized = parse_authorized(args.authorized_test_paths)
 
-    patch_path = Path(args.patch)
     try:
-        raw = patch_path.read_bytes()
+        raw = Path(args.patch).read_bytes()
     except OSError as exc:
         fail(f"Cannot read patch: {exc}")
-    if not raw:
-        fail("Empty patch")
-    if len(raw) > MAX_PATCH_BYTES:
-        fail(f"Patch exceeds {MAX_PATCH_BYTES} byte limit")
+    if not raw or len(raw) > MAX_PATCH_BYTES:
+        fail(f"Patch must be non-empty and no larger than {MAX_PATCH_BYTES} bytes")
     if b"\x00" in raw:
         fail("NUL byte / binary patch rejected")
     try:
@@ -64,81 +54,70 @@ def main():
     if "GIT binary patch" in patch or "Binary files " in patch:
         fail("Binary changes are not allowed")
 
-    authorized = parse_authorized(args.authorized_test_paths)
-    files = []
-    current = None
-    old_path = new_path = None
-    modes = []
+    chunks = re.split(r"(?m)(?=^diff --git )", patch)
+    if not chunks or not chunks[0].strip() == "":
+        fail("Malformed patch preamble")
+    chunks = [chunk for chunk in chunks if chunk.strip()]
+    if not chunks:
+        fail("Empty patch")
+    paths_seen = set()
 
-    for line in patch.splitlines():
-        if line.startswith("diff --git "):
-            if current is not None:
-                files.append((current, old_path, new_path, modes))
-            match = re.fullmatch(r"diff --git a/([^ ]+) b/([^ ]+)", line)
-            if not match:
-                fail("Quoted or ambiguous diff paths are rejected")
-            old_path, new_path = match.group(1), match.group(2)
-            current = old_path
-            modes = []
-            if not PATH_RE.fullmatch(old_path) or not PATH_RE.fullmatch(new_path):
-                fail("Non-portable or ambiguous path rejected")
-            if old_path.startswith("/") or new_path.startswith("/") or ".." in old_path.split("/") or ".." in new_path.split("/"):
-                fail("Absolute or traversal path rejected")
-        elif current is not None:
-            if line.startswith(("rename from ", "rename to ", "copy from ", "copy to ")):
-                fail("Renames and copies are not allowed")
-            if line.startswith(("old mode ", "new mode ", "deleted file mode ")):
-                modes.append(line)
-                mode = line.rsplit(" ", 1)[-1]
-                if mode in FORBIDDEN_MODES:
-                    fail(f"Symlink, executable-bit, or submodule mode rejected: {line}")
-                if line.startswith("old mode ") or line.startswith("deleted file mode "):
-                    fail(f"Mode changes and deletions are not allowed: {line}")
-                if line.startswith("new mode ") and mode != "100644":
-                    fail(f"Only regular non-executable files may be added: {line}")
-            if line == "+++ /dev/null":
-                # Deletions are only permitted for explicitly authorized test files.
-                if not TEST_RE.search(old_path) or old_path not in authorized:
-                    fail(f"Deletion rejected: {old_path}")
-            if line.startswith("+++ b/"):
-                declared = line[6:]
-                if declared != new_path:
-                    fail("Patch file headers do not match diff metadata")
-            if line.startswith("--- a/"):
-                declared = line[6:]
-                if declared != old_path:
-                    fail("Patch file headers do not match diff metadata")
-
-    if current is not None:
-        files.append((current, old_path, new_path, modes))
-    if not files:
-        fail("No parseable file changes in patch")
-
-    seen = set()
-    for old, old_name, new_name, _ in files:
-        for path in {old_name, new_name}:
-            if path in seen:
-                fail(f"Duplicate path in patch: {path}")
-            seen.add(path)
+    for chunk in chunks:
+        first = chunk.splitlines()[0]
+        match = re.fullmatch(r"diff --git a/([^ ]+) b/([^ ]+)", first)
+        if not match:
+            fail("Quoted, ambiguous, or malformed diff paths are rejected")
+        old_path, new_path = match.group(1), match.group(2)
+        for path in (old_path, new_path):
+            if not PATH_RE.fullmatch(path) or path.startswith("/") or ".." in path.split("/"):
+                fail(f"Unsafe or ambiguous path rejected: {path!r}")
             if path in PROTECTED_EXACT or any(path.startswith(prefix) for prefix in PROTECTED_PREFIXES):
                 fail(f"Protected path rejected: {path}")
-            if TEST_RE.search(path):
-                # New test files are allowed. Existing/changed tests require explicit authorization.
-                is_new = old_name == new_name and not any(
-                    ln == f"new file mode 100644" for ln in []
-                )
-                if path not in authorized:
-                    # Determine addition by the patch's /dev/null old header.
-                    chunk_start = patch.find(f"diff --git a/{old_name} b/{new_name}")
-                    chunk_end = patch.find("\ndiff --git ", chunk_start + 1)
-                    chunk = patch[chunk_start:chunk_end if chunk_end >= 0 else None]
-                    is_added = "--- /dev/null" in chunk
-                    if not is_added:
-                        fail(f"Test modification requires explicit authorization: {path}")
+        if old_path != new_path:
+            fail(f"Renames are not allowed: {old_path} -> {new_path}")
+        if old_path in paths_seen:
+            fail(f"Duplicate path in patch: {old_path}")
+        paths_seen.add(old_path)
 
-    # A patch can only create regular files; verify the resulting worktree separately
-    # after application as defense in depth.
-    print(f"Patch policy accepted: {len(files)} file(s)")
+        lines = chunk.splitlines()
+        is_addition = "--- /dev/null" in lines
+        is_deletion = "+++ /dev/null" in lines
+        if is_addition and is_deletion:
+            fail(f"Malformed add/delete patch for {old_path}")
+        if any(line.startswith(("rename from ", "rename to ", "copy from ", "copy to ")) for line in lines):
+            fail("Renames and copies are not allowed")
+        if any(line.startswith(("old mode ", "new mode ")) for line in lines):
+            fail(f"Mode changes are not allowed: {old_path}")
+        for line in lines:
+            if line.startswith(("new file mode ", "deleted file mode ")):
+                mode = line.rsplit(" ", 1)[-1]
+                if mode in FORBIDDEN_MODES:
+                    fail(f"Symlink, executable, or submodule mode rejected: {old_path}")
+                if line.startswith("new file mode ") and mode != "100644":
+                    fail(f"Only regular non-executable files may be added: {old_path}")
+                if line.startswith("deleted file mode ") and not (TEST_RE.search(old_path) and old_path in authorized):
+                    fail(f"Deletion rejected: {old_path}")
+
+        if is_deletion and not (TEST_RE.search(old_path) and old_path in authorized):
+            fail(f"Deletion rejected: {old_path}")
+        if TEST_RE.search(old_path):
+            if not is_addition and old_path not in authorized:
+                fail(f"Test modification/deletion requires explicit authorization: {old_path}")
+        if TEST_RE.search(new_path) and not is_addition and new_path not in authorized:
+            fail(f"Test modification requires explicit authorization: {new_path}")
+
+        old_headers = [line[6:] for line in lines if line.startswith("--- a/")]
+        new_headers = [line[6:] for line in lines if line.startswith("+++ b/")]
+        if is_addition:
+            if old_headers:
+                fail(f"Malformed addition headers: {old_path}")
+        elif is_deletion:
+            if new_headers:
+                fail(f"Malformed deletion headers: {old_path}")
+        elif old_headers != [old_path] or new_headers != [new_path]:
+            fail(f"Patch file headers do not match metadata: {old_path}")
+
+    print(f"Patch policy accepted: {len(paths_seen)} file(s)")
 
 
 if __name__ == "__main__":
