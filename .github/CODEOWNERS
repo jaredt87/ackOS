@@ -2,7 +2,7 @@
 # Configure branch protection/rulesets to require Code Owner approval.
 # A CODEOWNERS file alone does not enforce review.
 
-# Workflow and CI gates
+# Workflow, publisher policy, and CI gates
 /.github/ @jaredt87
 
 # Agent instructions and plugin integration
@@ -10,7 +10,13 @@
 /AGENTS.md @jaredt87
 /PR_REVIEW_LOOP.md @jaredt87
 
-# Go module and test coverage
+# Go module, test, and formatting configuration
 /go.mod @jaredt87
 /go.sum @jaredt87
+/go.work @jaredt87
+/go.work.sum @jaredt87
+/Makefile @jaredt87
+/.golangci.yml @jaredt87
+/.editorconfig @jaredt87
+/.gitattributes @jaredt87
 **/*_test.go @jaredt87
