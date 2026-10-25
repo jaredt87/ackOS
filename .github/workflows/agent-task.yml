@@ -151,7 +151,7 @@ jobs:
             echo
             echo "## Validation performed on the runner"
             printf '%s\n' '- `go version`'
-            echo "- `test -z \"$(gofmt -l .)\"`"
+            printf '%s\n' '- `test -z "$(gofmt -l .)"`'
             printf '%s\n' '- `go vet ./...`'
             printf '%s\n' '- `go test ./...`'
             printf '%s\n' '- `go test -race ./...`'
