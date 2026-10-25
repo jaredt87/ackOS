@@ -8,8 +8,21 @@ from pathlib import Path
 MAX_PATCH_BYTES = 1024 * 1024
 PATH_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 TEST_RE = re.compile(r"(^|/)[^/]*_test\.go$")
-PROTECTED_EXACT = {".github/CODEOWNERS", "AGENTS.md", "PR_REVIEW_LOOP.md", "go.mod", "go.sum"}
-PROTECTED_PREFIXES = (".github/",)
+PROTECTED_EXACT = {
+    ".github/CODEOWNERS",
+    ".gitmodules",
+    ".golangci.yml",
+    ".editorconfig",
+    ".gitattributes",
+    "AGENTS.md",
+    "PR_REVIEW_LOOP.md",
+    "Makefile",
+    "go.mod",
+    "go.sum",
+    "go.work",
+    "go.work.sum",
+}
+PROTECTED_PREFIXES = (".github/", ".git/")
 FORBIDDEN_MODES = {"100755", "120000", "160000"}
 
 
@@ -24,7 +37,11 @@ def parse_authorized(raw):
         path = item.strip()
         if not path:
             continue
-        if not PATH_RE.fullmatch(path) or path.startswith("/") or ".." in path.split("/"):
+        if (
+            not PATH_RE.fullmatch(path)
+            or path.startswith("/")
+            or any(part in {".", ".."} for part in path.split("/"))
+        ):
             fail(f"Invalid authorized test path: {path!r}")
         if not TEST_RE.search(path):
             fail(f"Only Go *_test.go paths can be authorized: {path}")
@@ -55,7 +72,7 @@ def main():
         fail("Binary changes are not allowed")
 
     chunks = re.split(r"(?m)(?=^diff --git )", patch)
-    if not chunks or not chunks[0].strip() == "":
+    if not chunks or chunks[0].strip():
         fail("Malformed patch preamble")
     chunks = [chunk for chunk in chunks if chunk.strip()]
     if not chunks:
@@ -63,13 +80,17 @@ def main():
     paths_seen = set()
 
     for chunk in chunks:
-        first = chunk.splitlines()[0]
-        match = re.fullmatch(r"diff --git a/([^ ]+) b/([^ ]+)", first)
+        lines = chunk.splitlines()
+        match = re.fullmatch(r"diff --git a/([^ ]+) b/([^ ]+)", lines[0])
         if not match:
             fail("Quoted, ambiguous, or malformed diff paths are rejected")
         old_path, new_path = match.group(1), match.group(2)
         for path in (old_path, new_path):
-            if not PATH_RE.fullmatch(path) or path.startswith("/") or ".." in path.split("/"):
+            if (
+                not PATH_RE.fullmatch(path)
+                or path.startswith("/")
+                or any(part in {".", ".."} for part in path.split("/"))
+            ):
                 fail(f"Unsafe or ambiguous path rejected: {path!r}")
             if path in PROTECTED_EXACT or any(path.startswith(prefix) for prefix in PROTECTED_PREFIXES):
                 fail(f"Protected path rejected: {path}")
@@ -79,7 +100,6 @@ def main():
             fail(f"Duplicate path in patch: {old_path}")
         paths_seen.add(old_path)
 
-        lines = chunk.splitlines()
         is_addition = "--- /dev/null" in lines
         is_deletion = "+++ /dev/null" in lines
         if is_addition and is_deletion:
@@ -89,6 +109,8 @@ def main():
         if any(line.startswith(("old mode ", "new mode ")) for line in lines):
             fail(f"Mode changes are not allowed: {old_path}")
         for line in lines:
+            if line.startswith("index ") and re.search(r" (100755|120000|160000)$", line):
+                fail(f"Executable, symlink, or submodule change rejected: {old_path}")
             if line.startswith(("new file mode ", "deleted file mode ")):
                 mode = line.rsplit(" ", 1)[-1]
                 if mode in FORBIDDEN_MODES:
@@ -100,19 +122,18 @@ def main():
 
         if is_deletion and not (TEST_RE.search(old_path) and old_path in authorized):
             fail(f"Deletion rejected: {old_path}")
-        if TEST_RE.search(old_path):
-            if not is_addition and old_path not in authorized:
-                fail(f"Test modification/deletion requires explicit authorization: {old_path}")
+        if TEST_RE.search(old_path) and not is_addition and old_path not in authorized:
+            fail(f"Test modification/deletion requires explicit authorization: {old_path}")
         if TEST_RE.search(new_path) and not is_addition and new_path not in authorized:
             fail(f"Test modification requires explicit authorization: {new_path}")
 
         old_headers = [line[6:] for line in lines if line.startswith("--- a/")]
         new_headers = [line[6:] for line in lines if line.startswith("+++ b/")]
         if is_addition:
-            if old_headers:
+            if old_headers or new_headers != [new_path]:
                 fail(f"Malformed addition headers: {old_path}")
         elif is_deletion:
-            if new_headers:
+            if old_headers != [old_path] or new_headers:
                 fail(f"Malformed deletion headers: {old_path}")
         elif old_headers != [old_path] or new_headers != [new_path]:
             fail(f"Patch file headers do not match metadata: {old_path}")
