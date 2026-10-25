@@ -90,7 +90,7 @@ def main():
             if (
                 not PATH_RE.fullmatch(path)
                 or path.startswith("/")
-                or any(part in {".", ".."} for part in path.split("/"))
+                or any(part in {".", "..", ".git"} for part in path.split("/"))
             ):
                 fail(f"Unsafe or ambiguous path rejected: {path!r}")
             if path in PROTECTED_EXACT or any(path.startswith(prefix) for prefix in PROTECTED_PREFIXES):
