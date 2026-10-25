@@ -208,15 +208,15 @@ jobs:
           # Publisher trusts only this checked-out main-branch policy script.
           git apply --check --whitespace=error-all "$patch"
           python3 .github/scripts/validate-agent-patch.py "$patch" --authorized-test-paths "$AUTHORIZED_TEST_PATHS"
-          git apply --whitespace=error-all "$patch"
-          git diff --check
-          if git diff --summary | grep -E 'mode change|create mode (100755|120000|160000)|rename'; then
+          # Apply directly to the index: no checkout filters or patch-provided code run.
+          git apply --cached --check --whitespace=error-all "$patch"
+          git apply --cached --whitespace=error-all "$patch"
+          git diff --cached --check
+          if git diff --cached --summary | grep -E 'mode change|create mode (100755|120000|160000)|rename'; then
             echo "::error::Mode changes, symlinks, submodules, and renames are not allowed."
             exit 1
           fi
-          test -n "$(git status --porcelain)"
-          git add --all
-          git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
           git -c core.hooksPath=/dev/null \
               -c user.name="ackOS Agent Publisher" \
               -c user.email="ackos-agent-publisher@users.noreply.github.com" \
