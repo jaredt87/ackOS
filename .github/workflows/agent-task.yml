@@ -98,6 +98,7 @@ jobs:
           claude_args: >-
             --max-turns 20
             --allowedTools "Read,Edit,Write,Glob,Grep"
+            --disallowedTools "Read(/proc/**),Read(/sys/**),Read(/run/**),Read(/dev/**),Read(/tmp/**),Read(/etc/**),Read(/var/run/**),Read(/home/runner/work/_temp/**),Read(/github/**),Edit(/proc/**),Edit(/sys/**),Edit(/run/**),Edit(/dev/**),Edit(/tmp/**),Edit(/etc/**),Edit(/var/run/**),Edit(/home/runner/work/_temp/**),Edit(/github/**),Write(/proc/**),Write(/sys/**),Write(/run/**),Write(/dev/**),Write(/tmp/**),Write(/etc/**),Write(/var/run/**),Write(/home/runner/work/_temp/**),Write(/github/**),Glob(/proc/**),Glob(/sys/**),Glob(/run/**),Glob(/dev/**),Glob(/tmp/**),Glob(/etc/**),Glob(/var/run/**),Glob(/home/runner/work/_temp/**),Glob(/github/**),Grep(/proc/**),Grep(/sys/**),Grep(/run/**),Grep(/dev/**),Grep(/tmp/**),Grep(/etc/**),Grep(/var/run/**),Grep(/home/runner/work/_temp/**),Grep(/github/**)"
           additional_permissions: |
             actions: read
 
