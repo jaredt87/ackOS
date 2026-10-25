@@ -67,24 +67,12 @@ jobs:
           # Fail before the agent starts if dependency setup changed tracked files.
           test -z "$(git status --porcelain)"
 
-      - name: Create least-privilege GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@67018539274d69449ef7c02e8e71183d1719ab42 # v2.1.4
-        with:
-          app-id: ${{ secrets.ACKOS_AGENT_APP_ID }}
-          private-key: ${{ secrets.ACKOS_AGENT_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ackOS
-          permission-contents: write
-          permission-issues: write
-          permission-pull-requests: write
-          permission-actions: read
-
       - name: Run bounded agent task
         id: claude
         uses: anthropics/claude-code-action@925afb53776cf1a2b738c6bdbed37b4d4000ef13 # v1.0.262
         with:
-          github_token: ${{ steps.app-token.outputs.token }}
+          # Read-only token: Claude can inspect the repo and commit locally, but cannot push or open PRs.
+          github_token: ${{ github.token }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           base_branch: main
           branch_prefix: feature/
@@ -101,12 +89,12 @@ jobs:
             - Do not add dependencies without explicit authorization.
             - Before committing, run: test -z "$(gofmt -l .)", go vet ./..., go test ./..., and go test -race ./....
             - Fix failures caused by your changes and repeat the relevant checks. Do not claim a check passed unless it ran and passed.
-            - Commit only after the checks pass. Push only to feature/agent-task-${{ github.run_id }} using `git push origin HEAD:refs/heads/feature/agent-task-${{ github.run_id }}`; never force-push or merge.
-            - Do not open a PR yourself. The workflow will validate the final worktree and open a PR only if all required checks pass.
+            - Commit locally only after the checks pass. Do not push, force-push, or merge; the workflow will publish the validated commit using a separate token after this step ends.
+            - Do not open a PR yourself. The workflow will validate the final worktree, then push and open a PR only if all required checks pass.
             - If the task requires a contract or architecture decision not already approved, stop and report the decision needed instead of implementing it.
           claude_args: >-
             --max-turns 20
-            --allowedTools "Bash(go version),Bash(go mod download:*),Bash(gofmt:*),Bash(go vet:*),Bash(go test:*),Bash(go build:*),Bash(git status:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*),Bash(git push origin HEAD:refs/heads/feature/agent-task-*)"
+            --allowedTools "Bash(go version),Bash(go mod download:*),Bash(gofmt:*),Bash(go vet:*),Bash(go test:*),Bash(go build:*),Bash(git status:*),Bash(git diff:*),Bash(git add:*),Bash(git commit:*)"
           additional_permissions: |
             actions: read
 
@@ -132,7 +120,19 @@ jobs:
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Open PR after local validation passes
+      - name: Create least-privilege GitHub App token
+        id: app-token
+        if: steps.changes.outputs.changed == 'true'
+        uses: actions/create-github-app-token@67018539274d69449ef7c02e8e71183d1719ab42 # v2.1.4
+        with:
+          app-id: ${{ secrets.ACKOS_AGENT_APP_ID }}
+          private-key: ${{ secrets.ACKOS_AGENT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ackOS
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Push validated branch and open PR
         if: steps.changes.outputs.changed == 'true'
         shell: bash
         env:
@@ -147,6 +147,9 @@ jobs:
               exit 1
               ;;
           esac
+          # This is the first step that receives write credentials.
+          gh auth setup-git
+          git push origin "HEAD:refs/heads/$BRANCH_NAME"
           title="$(printf '%s' "$TASK_INPUT" | tr '\n' ' ' | cut -c1-70)"
           {
             echo "## Task"
