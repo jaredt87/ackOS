@@ -88,6 +88,8 @@ jobs:
             - Keep changes limited to the requested task. Do not reopen settled architecture or add hypothetical safeguards.
             - Do not modify .github/**, AGENTS.md, PR_REVIEW_LOOP.md, go.mod, or go.sum.
             - Do not modify or delete existing *_test.go files unless the dispatch input explicitly authorizes their exact paths.
+            - Authorized existing test paths (empty means none):
+            ${{ inputs.authorized_test_paths }}
             - You may add new *_test.go files.
             - Do not add dependencies without explicit authorization.
             - Do not run tests or other code from the edited workspace in this job. A separate secret-free job will validate the patch.
@@ -220,6 +222,7 @@ jobs:
           git -c core.hooksPath=/dev/null \
               -c user.name="ackOS Agent Publisher" \
               -c user.email="ackos-agent-publisher@users.noreply.github.com" \
+              -c commit.gpgsign=false \
               commit -m "agent: apply validated task patch"
 
       - name: Create least-privilege GitHub App token
@@ -245,7 +248,7 @@ jobs:
             *) echo "::error::Invalid publisher branch name"; exit 1 ;;
           esac
           gh auth setup-git
-          git push origin "HEAD:refs/heads/$branch"
+          git -c core.hooksPath=/dev/null push origin "HEAD:refs/heads/$branch"
           gh pr create \
             --repo "$GITHUB_REPOSITORY" \
             --head "$branch" \
