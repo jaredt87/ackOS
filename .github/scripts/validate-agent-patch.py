@@ -11,6 +11,7 @@ TEST_RE = re.compile(r"(^|/)[^/]*_test\.go$")
 PROTECTED_EXACT = {
     ".github/CODEOWNERS",
     ".gitmodules",
+    ".gitignore",
     ".golangci.yml",
     ".editorconfig",
     ".gitattributes",
@@ -40,7 +41,7 @@ def parse_authorized(raw):
         if (
             not PATH_RE.fullmatch(path)
             or path.startswith("/")
-            or any(part in {".", ".."} for part in path.split("/"))
+            or any(part in {".", "..", ".git"} for part in path.split("/"))
         ):
             fail(f"Invalid authorized test path: {path!r}")
         if not TEST_RE.search(path):
