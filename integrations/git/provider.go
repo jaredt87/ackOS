@@ -22,6 +22,7 @@ const (
 	fileResourcePrefix    = "git-file-v1:"
 	tipFingerprintPrefix  = "git-tip-v1:"
 	fileFingerprintPrefix = "git-file-v1:sha256:"
+	refRecoveryTimeout    = 5 * time.Second
 )
 
 var ErrBranchAdvancedAfterExecution = errors.New("git branch advanced after execution")
@@ -33,8 +34,10 @@ type FileProvider struct {
 
 	// These package-private seams allow deterministic boundary tests without
 	// adding a general Git-operation abstraction.
-	beforeWriteTree func() error
-	beforeUpdateRef func() error
+	beforeWriteTree      func() error
+	beforeUpdateRef      func() error
+	afterUpdateRef       func(context.Context) error
+	beforeFinalVerifyRef func()
 }
 
 var _ control.Provider = (*FileProvider)(nil)
@@ -177,11 +180,17 @@ func (p *FileProvider) Execute(ctx context.Context, req control.ExecuteRequest) 
 			return control.Execution{}, err
 		}
 	}
-	if err := p.repo.UpdateRef(ctx, identity.Ref, newCommit, beforeTip); err != nil {
-		current, readErr := p.repo.ReadRef(ctx, identity.Ref)
+	updateErr := p.repo.UpdateRef(ctx, identity.Ref, newCommit, beforeTip)
+	if updateErr == nil && p.afterUpdateRef != nil {
+		updateErr = p.afterUpdateRef(ctx)
+	}
+	if updateErr != nil {
+		recoveryCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), refRecoveryTimeout)
+		current, readErr := p.repo.ReadRef(recoveryCtx, identity.Ref)
+		cancel()
 		if readErr != nil {
 			return control.Execution{}, errors.Join(
-				fmt.Errorf("git: update ref: %w", err),
+				fmt.Errorf("git: update ref: %w", updateErr),
 				fmt.Errorf("git: read ref after failed update: %w", readErr),
 			)
 		}
@@ -192,9 +201,9 @@ func (p *FileProvider) Execute(ctx context.Context, req control.ExecuteRequest) 
 			return control.Execution{ExecutionID: req.ExecutionID, Evidence: evidence}, nil
 		}
 		if current != beforeTip {
-			return control.Execution{}, fmt.Errorf("%w: compare-and-swap failed: %w", control.ErrStaleObservation, err)
+			return control.Execution{}, fmt.Errorf("%w: compare-and-swap failed: %w", control.ErrStaleObservation, updateErr)
 		}
-		return control.Execution{}, err
+		return control.Execution{}, updateErr
 	}
 	return control.Execution{ExecutionID: req.ExecutionID, Evidence: evidence}, nil
 }
@@ -271,6 +280,16 @@ func (p *FileProvider) Verify(ctx context.Context, req control.VerifyRequest) (c
 	}
 	if fingerprint != req.Expected.Fingerprint {
 		return control.Verification{}, fmt.Errorf("git: verified file does not match desired fingerprint")
+	}
+	if p.beforeFinalVerifyRef != nil {
+		p.beforeFinalVerifyRef()
+	}
+	currentTip, err = p.repo.ReadRef(ctx, identity.Ref)
+	if err != nil {
+		return control.Verification{}, err
+	}
+	if currentTip != resultCommitID {
+		return control.Verification{}, fmt.Errorf("%w: current tip is %s, execution commit is %s", ErrBranchAdvancedAfterExecution, currentTip, resultCommitID)
 	}
 	return control.Verification{
 		Resource:   req.Expected,

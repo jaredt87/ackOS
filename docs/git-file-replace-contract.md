@@ -109,9 +109,11 @@ boundary:
   `errors.Is`/`errors.As`. If the reread shows the new result commit itself,
   treat the ref write as committed and return successful execution evidence;
   the atomic ref write may have completed before the Git process reported an
-  error. If the reread cannot establish a changed tip, preserve the underlying
-  Git error (and any reread error). The provider itself leaves the ref, index,
-  and working tree unchanged on a rejected CAS.
+  error. Perform this recovery read with a fresh context detached from request
+  cancellation but bounded to five seconds. If the reread cannot establish a
+  changed tip, preserve the underlying Git error (and any reread error). The
+  provider itself leaves the ref, index, and working tree unchanged on a
+  rejected CAS.
 - Once CAS succeeds, Execute must return success and evidence for that commit;
   it must not report an execution failure after the ref has advanced.
 - A failed CAS may leave unreachable blob/tree/commit objects. Those objects
@@ -143,9 +145,9 @@ file contents do not pass.
 
 Verify performs fresh reads; it does not trust cached Execute tree data. It:
 
-1. Reads the branch ref and requires it to equal `result_commit`. If the branch
-   has advanced again, verification fails even if the new tip contains matching
-   content.
+1. Reads the branch ref and requires it to equal `result_commit` before object
+   verification. If the branch has already advanced, verification fails even
+   if the new tip contains matching content.
 2. Reads `result_commit`, requiring its sole parent to be `before_tip`.
 3. Reads the before and result trees recursively, flattens non-tree entries to
    complete path/mode/object maps, and compares them. The only permitted
@@ -154,7 +156,12 @@ Verify performs fresh reads; it does not trust cached Execute tree data. It:
 4. Reads the requested result blob bytes independently using the typed SDK's
    `ReadBlob`, then recomputes the desired fingerprint from those bytes and the
    result mode and compares it with `VerifyRequest.Expected.Fingerprint`.
-5. Returns the expected desired `ResourceRef` and a fresh verification time.
+5. After all commit, tree, and blob reads succeed, reads the branch ref again
+   and requires it still to equal `result_commit`. This final read is the
+   freshness check for successful verification; a branch advance during object
+   verification fails even if the earlier ref read passed.
+6. Returns the expected desired `ResourceRef` and a verification time taken
+   after the final ref read.
 
 If verification fails after CAS succeeded, the provider does not roll back the
 ref. For example, a later external ref update remains in place and causes
@@ -208,3 +215,12 @@ independent Git reads rather than provider state.
   delta, result blob bytes/mode, and current branch tip.
 - The five invariant tests above pass against disposable repositories through
   `Host.Control`.
+
+Two focused regression tests additionally pin down concurrency boundaries:
+
+- Advance the branch after all object checks but before the final verification
+  ref read; require verification failure and preserve the concurrent writer's
+  ref.
+- Let the ref update succeed, then cancel the execution context before
+  reporting its error; require the bounded recovery read to confirm this
+  operation's exact result commit and return execution evidence.

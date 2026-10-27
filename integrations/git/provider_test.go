@@ -169,6 +169,85 @@ func TestFileProviderRejectsStaleObservationBeforeWrite(t *testing.T) {
 	}
 }
 
+func TestFileProviderVerifyRechecksTipAfterObjectReads(t *testing.T) {
+	f := newFileFixture(t)
+	provider, err := NewFileProvider(f.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var concurrentTip ObjectID
+	provider.beforeFinalVerifyRef = func() {
+		current, readErr := f.repo.ReadRef(context.Background(), testBranch)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		concurrentTip = commitOnTip(t, f.repo, testBranch, current, "verification race winner")
+	}
+	result, err := runFileControl(t, f, provider, "100644", []byte("replacement"))
+	if !errors.Is(err, ErrBranchAdvancedAfterExecution) {
+		t.Fatalf("control error = %v, want branch movement detected by final verification read", err)
+	}
+	if concurrentTip == "" {
+		t.Fatal("verification race did not advance the branch")
+	}
+	if result.Execution.ExecutionID == "" {
+		t.Fatal("ControlResult did not retain committed execution")
+	}
+	current, err := f.repo.ReadRef(context.Background(), testBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current != concurrentTip {
+		t.Fatalf("current ref = %s, want concurrent tip %s", current, concurrentTip)
+	}
+}
+
+func TestFileProviderRecoversCASCommitWithCanceledContext(t *testing.T) {
+	f := newFileFixture(t)
+	provider, err := NewFileProvider(f.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	provider.afterUpdateRef = func(ctx context.Context) error {
+		cancel()
+		return ctx.Err()
+	}
+	before, err := provider.Observe(context.Background(), control.ObserveRequest{Target: control.ResourceRef{ID: f.id}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("replacement")
+	fingerprint, err := FileStateFingerprint("100644", content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	execution, err := provider.Execute(ctx, control.ExecuteRequest{
+		ExecutionID: "canceled-after-cas",
+		Target:      control.ResourceRef{ID: f.id},
+		Desired:     control.ResourceRef{ID: f.id, Fingerprint: fingerprint},
+		Before:      before,
+		Payload:     encodeFilePayload("100644", content),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v, want recovery of committed CAS", err)
+	}
+	if ctx.Err() != context.Canceled {
+		t.Fatal("test did not cancel the execution context after CAS")
+	}
+	if execution.ExecutionID != "canceled-after-cas" || len(execution.Evidence) == 0 {
+		t.Fatalf("execution = %+v, want evidence for the committed operation", execution)
+	}
+	current, err := f.repo.ReadRef(context.Background(), testBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(current) != resultEvidenceCommit(t, execution) {
+		t.Fatalf("ref = %s, want operation commit %s", current, resultEvidenceCommit(t, execution))
+	}
+}
+
 func TestFileProviderChangesOnlyRequestedLeaf(t *testing.T) {
 	f := newFileFixture(t)
 	provider, err := NewFileProvider(f.repo)
