@@ -42,8 +42,12 @@ type invocation struct {
 }
 
 func (i *invocation) invokeProvider(h *Host, ctx context.Context, providerName, ownerID string, fn func() error) error {
+	return i.invokeProviderWithGrace(h, ctx, providerName, ownerID, 0, fn)
+}
+
+func (i *invocation) invokeProviderWithGrace(h *Host, ctx context.Context, providerName, ownerID string, grace time.Duration, fn func() error) error {
 	i.outstanding.Add(1)
-	err, admitted := h.callProvider(ctx, providerName, ownerID, func() error {
+	err, admitted := h.callProviderWithGrace(ctx, providerName, ownerID, grace, func() error {
 		defer i.outstanding.Done()
 		return fn()
 	})
@@ -232,7 +236,7 @@ func (p invocationProvider) Observe(ctx context.Context, req ObserveRequest) (Ob
 
 func (p invocationProvider) Execute(ctx context.Context, req ExecuteRequest) (Execution, error) {
 	var result Execution
-	err := p.invocation.invokeProvider(p.host, ctx, p.providerName, req.ExecutionID, func() error {
+	err := p.invocation.invokeProviderWithGrace(p.host, ctx, p.providerName, req.ExecutionID, executionResultGrace, func() error {
 		var err error
 		result, err = p.provider.Execute(ctx, req)
 		return err

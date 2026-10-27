@@ -116,6 +116,10 @@ boundary:
   rejected CAS.
 - Once CAS succeeds, Execute must return success and evidence for that commit;
   it must not report an execution failure after the ref has advanced.
+  Host waits for a bounded execution-completion grace after its request deadline
+  so a provider can return evidence when it confirms that a timed-out ref update
+  did commit. If the provider cannot establish the result within that bound,
+  Host retains its timeout/recovery behavior.
 - A failed CAS may leave unreachable blob/tree/commit objects. Those objects
   are permitted and are not a partial branch update.
 

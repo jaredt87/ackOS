@@ -529,3 +529,53 @@ func TestHostLifecycleRemainsHeldUntilTimedOutProviderCallbackExits(t *testing.T
 		t.Fatal("second lifecycle did not acquire runtime after callback exited")
 	}
 }
+
+
+func TestHostExecutionDeadlineWaitsForProviderRecoveryResult(t *testing.T) {
+	resource, err := memory.NewResource("resource-a", "initial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := memory.NewProvider(resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := verificationProvider{
+		base: base,
+		executeFn: func(ctx context.Context, req control.ExecuteRequest) (control.Execution, error) {
+			<-ctx.Done()
+			// Model bounded provider recovery after the request deadline, such as
+			// confirming whether an atomic ref update completed.
+			time.Sleep(20 * time.Millisecond)
+			return control.Execution{ExecutionID: req.ExecutionID, Evidence: []byte("recovered-result")}, nil
+		},
+		verifyFn: func(_ context.Context, req control.VerifyRequest) (control.Verification, error) {
+			if string(req.Execution.Evidence) != "recovered-result" {
+				return control.Verification{}, errors.New("Host lost recovered execution evidence")
+			}
+			return control.Verification{Resource: req.Expected, VerifiedAt: time.Now().UTC()}, nil
+		},
+	}
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	host, err := control.NewHost(runtime, 250*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Register("test", provider); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := host.Control(context.Background(), "test", controlRequest())
+	if err != nil {
+		t.Fatalf("Control() error = %v, want recovered execution to continue through verification", err)
+	}
+	if result.Execution.ExecutionID == "" || string(result.Execution.Evidence) != "recovered-result" {
+		t.Fatalf("execution = %+v, want recovered execution evidence", result.Execution)
+	}
+	if result.Verification.Resource.Fingerprint != "running" {
+		t.Fatalf("verification fingerprint = %q, want running", result.Verification.Resource.Fingerprint)
+	}
+	if got := runtime.Phase(); got != kernel.PhaseCommitted {
+		t.Fatalf("runtime phase = %s, want %s", got, kernel.PhaseCommitted)
+	}
+}
