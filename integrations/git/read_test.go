@@ -68,6 +68,32 @@ func TestReadRefCommitAndTree(t *testing.T) {
 	}
 }
 
+func TestReadBlobReturnsExactBytesAndRejectsNonBlob(t *testing.T) {
+	r, err := Open(testRepo(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []byte{0x00, 0x01, 0xff, 'x'}
+	blob, err := r.WriteBlob(context.Background(), want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.ReadBlob(context.Background(), blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("blob = %v, want %v", got, want)
+	}
+	tree, err := r.WriteTree(context.Background(), []TreeEntry{{Mode: "100644", Path: "file", Object: blob}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.ReadBlob(context.Background(), tree); err == nil {
+		t.Fatal("accepted a tree object as a blob")
+	}
+}
+
 func TestReadRejectsInvalidInputs(t *testing.T) {
 	r, err := Open(testRepo(t))
 	if err != nil {

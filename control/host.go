@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -24,6 +25,7 @@ type Host struct {
 type ControlRequest struct {
 	Target       ResourceRef
 	Desired      ResourceRef
+	Payload      []byte
 	AuthorityTTL time.Duration
 }
 
@@ -151,6 +153,7 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 	}
 
 	execution := Execution{}
+	var providerExecutionError error
 	execCtx, cancel := context.WithTimeout(ctx, h.timeout)
 	defer cancel()
 	executionResult, err := h.runtime.Start(execCtx, NewProviderExecutor(
@@ -158,19 +161,25 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 		ExecuteRequest{
 			ExecutionID: authority.ExecutionID,
 			Target:      req.Target,
-			Payload:     []byte(req.Desired.Fingerprint),
+			Desired:     req.Desired,
+			Payload:     append([]byte(nil), req.Payload...),
 		},
 		&execution,
+		&providerExecutionError,
 	))
 	if err != nil {
 		return ControlResult{Observation: observed, Transition: transition, Authority: authority}, err
 	}
 	authority.Consumed = true
 	if !executionResult.Success {
+		if providerExecutionError != nil {
+			return ControlResult{Observation: observed, Transition: transition, Authority: authority, Execution: execution}, fmt.Errorf("execution failed: %w", providerExecutionError)
+		}
 		return ControlResult{Observation: observed, Transition: transition, Authority: authority, Execution: execution}, fmt.Errorf("execution failed: %s", executionResult.Message)
 	}
 
 	verification := Verification{}
+	var providerVerificationError error
 	verifyBase := context.WithoutCancel(ctx)
 	verifyCtx, cancel := context.WithTimeout(verifyBase, h.timeout)
 	defer cancel()
@@ -178,7 +187,11 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 		h.providerAdapter(p, inv, providerName),
 		VerifyRequest{Expected: req.Desired},
 		&verification,
+		&providerVerificationError,
 	)); err != nil {
+		if providerVerificationError != nil {
+			err = errors.Join(err, providerVerificationError)
+		}
 		return ControlResult{Observation: observed, Transition: transition, Authority: authority, Execution: execution, Verification: verification}, err
 	}
 	if err := h.runtime.Commit(); err != nil {

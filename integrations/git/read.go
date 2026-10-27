@@ -100,3 +100,18 @@ func (r *Repository) ReadTree(ctx context.Context, id ObjectID) ([]TreeEntry, er
 	}
 	return entries, nil
 }
+
+// ReadBlob returns the exact contents of a blob object.
+func (r *Repository) ReadBlob(ctx context.Context, id ObjectID) ([]byte, error) {
+	if err := r.validateObject(id); err != nil {
+		return nil, err
+	}
+	typeOut, err := r.exec(ctx, []string{"cat-file", "-t", string(id)}, nil)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(string(typeOut)) != "blob" {
+		return nil, fmt.Errorf("git: object %q is not a blob", id)
+	}
+	return r.exec(ctx, []string{"cat-file", "blob", string(id)}, nil)
+}
