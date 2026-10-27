@@ -530,7 +530,6 @@ func TestHostLifecycleRemainsHeldUntilTimedOutProviderCallbackExits(t *testing.T
 	}
 }
 
-
 func TestHostExecutionDeadlineWaitsForProviderRecoveryResult(t *testing.T) {
 	resource, err := memory.NewResource("resource-a", "initial")
 	if err != nil {
