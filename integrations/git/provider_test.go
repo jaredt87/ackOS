@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -248,6 +249,48 @@ func TestFileProviderRecoversCASCommitWithCanceledContext(t *testing.T) {
 	}
 }
 
+func TestFileProviderHostReceivesCASRecoveryAfterDeadline(t *testing.T) {
+	f := newFileFixture(t)
+	provider, err := NewFileProvider(f.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.afterUpdateRef = func(ctx context.Context) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	content := []byte("replacement after deadline")
+	fingerprint, err := FileStateFingerprint("100644", content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := control.NewHost(kernel.NewRuntime(tipFingerprintPrefix+string(f.tip), kernel.AllowPolicy{}), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Register("git", provider); err != nil {
+		t.Fatal(err)
+	}
+	result, err := host.Control(context.Background(), "git", control.ControlRequest{
+		Target:  control.ResourceRef{ID: f.id, Fingerprint: "caller-supplied-value-ignored"},
+		Desired: control.ResourceRef{ID: f.id, Fingerprint: fingerprint},
+		Payload: encodeFilePayload("100644", content),
+	})
+	if err != nil {
+		t.Fatalf("Control() error = %v, want recovered CAS execution and verification", err)
+	}
+	if result.Execution.ExecutionID == "" || result.Verification.Resource.Fingerprint != fingerprint {
+		t.Fatalf("ControlResult = %+v, want execution evidence and verified desired state", result)
+	}
+	current, err := f.repo.ReadRef(context.Background(), testBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(current) != resultEvidenceCommit(t, result.Execution) {
+		t.Fatalf("ref = %s, want operation commit %s", current, resultEvidenceCommit(t, result.Execution))
+	}
+}
+
 func TestFileProviderChangesOnlyRequestedLeaf(t *testing.T) {
 	f := newFileFixture(t)
 	provider, err := NewFileProvider(f.repo)
@@ -292,6 +335,94 @@ func TestFileProviderChangesOnlyRequestedLeaf(t *testing.T) {
 	}
 	if newEntries["dir/file.txt"] == oldEntries["dir/file.txt"] {
 		t.Fatal("requested path did not change")
+	}
+}
+
+func TestFileProviderPreservesLineBreakSiblingNames(t *testing.T) {
+	f := newFileFixture(t)
+	ctx := context.Background()
+	commit, err := f.repo.ReadCommit(ctx, f.tip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootEntries, err := f.repo.ReadTree(ctx, commit.Tree)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirIndex := -1
+	for i := range rootEntries {
+		if rootEntries[i].Path == "dir" {
+			dirIndex = i
+			break
+		}
+	}
+	if dirIndex < 0 {
+		t.Fatal("fixture is missing dir tree")
+	}
+	dirEntries, err := f.repo.ReadTree(ctx, rootEntries[dirIndex].Object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lineBlob, err := f.repo.WriteBlob(ctx, []byte("preserve line name"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	carriageBlob, err := f.repo.WriteBlob(ctx, []byte("preserve carriage name"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dirEntries = append(dirEntries,
+		TreeEntry{Mode: "100644", Path: "line\nbreak.txt", Object: lineBlob},
+		TreeEntry{Mode: "100644", Path: "carriage\rreturn.txt", Object: carriageBlob},
+	)
+	var rawTree strings.Builder
+	for _, entry := range dirEntries {
+		fmt.Fprintf(&rawTree, "%s blob %s\t%s\x00", entry.Mode, entry.Object, entry.Path)
+	}
+	dirTreeOutput, err := f.repo.exec(ctx, []string{"mktree", "--missing", "-z"}, []byte(rawTree.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootEntries[dirIndex].Object = ObjectID(strings.TrimSpace(string(dirTreeOutput)))
+	rootTree, err := f.repo.WriteTree(ctx, rootEntries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTip, err := f.repo.CommitTree(ctx, rootTree, []ObjectID{f.tip}, "add legal sibling names\n", testIdentity(50), testIdentity(50))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.repo.UpdateRef(ctx, testBranch, newTip, f.tip); err != nil {
+		t.Fatal(err)
+	}
+	f.tip = newTip
+	provider, err := NewFileProvider(f.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runFileControl(t, f, provider, "100644", []byte("replacement")); err != nil {
+		t.Fatalf("Control() failed replacing target beside legal sibling names: %v", err)
+	}
+	current, err := f.repo.ReadRef(ctx, testBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := f.repo.ReadCommit(ctx, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := flattenTree(ctx, f.repo, result.Tree, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, wantObject := range map[string]ObjectID{
+		"dir/line\nbreak.txt":      lineBlob,
+		"dir/carriage\rreturn.txt": carriageBlob,
+	} {
+		entry, ok := entries[path]
+		if !ok || entry.Mode != "100644" || entry.Object != wantObject {
+			t.Fatalf("sibling %q = %+v, want regular file object %s", path, entry, wantObject)
+		}
 	}
 }
 

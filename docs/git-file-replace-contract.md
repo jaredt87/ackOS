@@ -62,9 +62,10 @@ canonicalized by absolute-path resolution, symlink evaluation, and cleaning,
 and must equal the Git top-level directory; this matches the existing
 `integrations/git.Open` root requirement. The ref is a full branch ref such as
 `refs/heads/main`, under `refs/heads/`. The path is a slash-separated
-repository-relative path with no empty, `.` or `..` component and no `.git`
-component or backslash. Root, ref, and path must be valid UTF-8. The path and
-ref are validated before any object writes.
+repository-relative path with no empty, `.`, or `..` component, no `.git`
+component, no backslash, and no NUL. Other valid UTF-8 Git filename bytes,
+including newline and carriage return, are supported. Root, ref, and path must
+be valid UTF-8. The path and ref are validated before any object writes.
 
 ## Observation and authorization
 
@@ -114,12 +115,14 @@ boundary:
   changed tip, preserve the underlying Git error (and any reread error). The
   provider itself leaves the ref, index, and working tree unchanged on a
   rejected CAS.
+- If the execution context expires while CAS outcome recovery is in progress,
+  the Host waits up to six additional seconds for the Execute callback to return
+  its result. This allows the provider's five-second bounded ref inspection to
+  deliver evidence for an already-committed CAS. If the callback exceeds that
+  grace, Host reports the execution timeout while keeping the provider gate
+  occupied until the callback returns.
 - Once CAS succeeds, Execute must return success and evidence for that commit;
   it must not report an execution failure after the ref has advanced.
-  Host waits for a bounded execution-completion grace after its request deadline
-  so a provider can return evidence when it confirms that a timed-out ref update
-  did commit. If the provider cannot establish the result within that bound,
-  Host retains its timeout/recovery behavior.
 - A failed CAS may leave unreachable blob/tree/commit objects. Those objects
   are permitted and are not a partial branch update.
 
@@ -220,7 +223,7 @@ independent Git reads rather than provider state.
 - The five invariant tests above pass against disposable repositories through
   `Host.Control`.
 
-Two focused regression tests additionally pin down concurrency boundaries:
+Focused regression tests additionally pin down concurrency and path boundaries:
 
 - Advance the branch after all object checks but before the final verification
   ref read; require verification failure and preserve the concurrent writer's
@@ -228,3 +231,8 @@ Two focused regression tests additionally pin down concurrency boundaries:
 - Let the ref update succeed, then cancel the execution context before
   reporting its error; require the bounded recovery read to confirm this
   operation's exact result commit and return execution evidence.
+- Through `Host.Control`, let the ref update succeed and hold the provider until
+  the execution deadline expires; require the Host to receive the recovered
+  execution evidence, independently verify it, and return success.
+- Replace the target beside unrelated tracked names containing newline and
+  carriage return; require both sibling entries to remain unchanged.

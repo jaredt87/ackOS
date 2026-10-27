@@ -57,7 +57,7 @@ func TestInvocationProviderReturnsBeforeReadingTimedOutObserveResult(t *testing.
 	}
 }
 
-func TestInvocationProviderReturnsBeforeReadingTimedOutExecuteResult(t *testing.T) {
+func TestInvocationProviderReadsTimedOutExecuteResultDuringGrace(t *testing.T) {
 	for range 100 {
 		release := make(chan struct{})
 		provider := timeoutRaceProvider{release: release}
@@ -69,12 +69,15 @@ func TestInvocationProviderReturnsBeforeReadingTimedOutExecuteResult(t *testing.
 		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 		done := make(chan struct{})
 		go func() {
-			_, _ = (invocationProvider{
+			execution, err := (invocationProvider{
 				host:         host,
 				invocation:   inv,
 				providerName: "test",
 				provider:     provider,
 			}).Execute(ctx, ExecuteRequest{ExecutionID: "execution-1"})
+			if err != nil || execution.ExecutionID != "execution-1" {
+				t.Errorf("Execute() = (%+v, %v), want recovered execution result", execution, err)
+			}
 			close(done)
 		}()
 
