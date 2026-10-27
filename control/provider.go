@@ -35,6 +35,7 @@ type Observation struct {
 type ExecuteRequest struct {
 	ExecutionID string
 	Target      ResourceRef
+	Desired     ResourceRef
 	// Before is the Kernel-authorized pre-execution observation. Providers must
 	// treat it as read-only evidence and still observe current state before acting.
 	// Its informational Evidence is not carried across the Kernel boundary.

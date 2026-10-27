@@ -31,6 +31,7 @@ func TestHostMemoryProviderLifecycle(t *testing.T) {
 	result, err := host.Control(context.Background(), "memory", control.ControlRequest{
 		Target:  control.ResourceRef{ID: "resource-a", Fingerprint: "initial"},
 		Desired: control.ResourceRef{ID: "resource-a", Fingerprint: "running"},
+		Payload: []byte("running"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -49,6 +50,54 @@ func TestHostMemoryProviderLifecycle(t *testing.T) {
 	}
 }
 
+func TestHostForwardsPayloadUnchanged(t *testing.T) {
+	resource, err := memory.NewResource("resource-a", "initial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := memory.NewProvider(resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var gotPayload []byte
+	var gotDesired control.ResourceRef
+	provider := verificationProvider{
+		base: base,
+		executeFn: func(ctx context.Context, req control.ExecuteRequest) (control.Execution, error) {
+			gotPayload = append([]byte(nil), req.Payload...)
+			gotDesired = req.Desired
+			req.Payload = []byte("running")
+			return base.Execute(ctx, req)
+		},
+		verifyFn: func(ctx context.Context, req control.VerifyRequest) (control.Verification, error) {
+			return base.Verify(ctx, req)
+		},
+	}
+	host, err := control.NewHost(kernel.NewRuntime("initial", kernel.AllowPolicy{}), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Register("memory", provider); err != nil {
+		t.Fatal(err)
+	}
+	wantPayload := []byte(`{"mode":"100644","content":"bmV3"}`)
+	_, err = host.Control(context.Background(), "memory", control.ControlRequest{
+		Target:  control.ResourceRef{ID: "resource-a", Fingerprint: "caller-value-is-not-auth"},
+		Desired: control.ResourceRef{ID: "resource-a", Fingerprint: "running"},
+		Payload: wantPayload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(gotPayload) != string(wantPayload) {
+		t.Fatalf("provider payload = %q, want %q", gotPayload, wantPayload)
+	}
+	wantDesired := control.ResourceRef{ID: "resource-a", Fingerprint: "running"}
+	if gotDesired != wantDesired {
+		t.Fatalf("provider desired = %+v, want %+v", gotDesired, wantDesired)
+	}
+}
+
 func TestHostRejectsResourceSubstitution(t *testing.T) {
 	resource, _ := memory.NewResource("resource-a", "initial")
 	provider, _ := memory.NewProvider(resource)
@@ -59,6 +108,7 @@ func TestHostRejectsResourceSubstitution(t *testing.T) {
 	_, err := host.Control(context.Background(), "memory", control.ControlRequest{
 		Target:  control.ResourceRef{ID: "resource-a", Fingerprint: "initial"},
 		Desired: control.ResourceRef{ID: "resource-a", Fingerprint: "running"},
+		Payload: []byte("running"),
 	})
 	if err == nil {
 		t.Fatal("control unexpectedly succeeded after resource mutation")
@@ -74,6 +124,7 @@ func TestHostDoesNotInterpretFingerprint(t *testing.T) {
 	_, err := host.Control(context.Background(), "memory", control.ControlRequest{
 		Target:  control.ResourceRef{ID: "resource-a", Fingerprint: "opaque::provider-state"},
 		Desired: control.ResourceRef{ID: "resource-a", Fingerprint: "another::provider-state"},
+		Payload: []byte("another::provider-state"),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -118,6 +169,7 @@ func controlRequest() control.ControlRequest {
 	return control.ControlRequest{
 		Target:  control.ResourceRef{ID: "resource-a", Fingerprint: "initial"},
 		Desired: control.ResourceRef{ID: "resource-a", Fingerprint: "running"},
+		Payload: []byte("running"),
 	}
 }
 
@@ -456,6 +508,7 @@ func TestHostLifecycleRemainsHeldUntilTimedOutProviderCallbackExits(t *testing.T
 		_, err := host2.Control(context.Background(), "test", control.ControlRequest{
 			Target:  control.ResourceRef{ID: "resource-a", Fingerprint: "initial"},
 			Desired: control.ResourceRef{ID: "resource-a", Fingerprint: "running"},
+			Payload: []byte("running"),
 		})
 		secondDone <- err
 	}()
@@ -474,5 +527,54 @@ func TestHostLifecycleRemainsHeldUntilTimedOutProviderCallbackExits(t *testing.T
 		}
 	case <-time.After(time.Second):
 		t.Fatal("second lifecycle did not acquire runtime after callback exited")
+	}
+}
+
+func TestHostExecutionDeadlineWaitsForProviderRecoveryResult(t *testing.T) {
+	resource, err := memory.NewResource("resource-a", "initial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := memory.NewProvider(resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := verificationProvider{
+		base: base,
+		executeFn: func(ctx context.Context, req control.ExecuteRequest) (control.Execution, error) {
+			<-ctx.Done()
+			// Model bounded provider recovery after the request deadline, such as
+			// confirming whether an atomic ref update completed.
+			time.Sleep(20 * time.Millisecond)
+			return control.Execution{ExecutionID: req.ExecutionID, Evidence: []byte("recovered-result")}, nil
+		},
+		verifyFn: func(_ context.Context, req control.VerifyRequest) (control.Verification, error) {
+			if string(req.Execution.Evidence) != "recovered-result" {
+				return control.Verification{}, errors.New("Host lost recovered execution evidence")
+			}
+			return control.Verification{Resource: req.Expected, VerifiedAt: time.Now().UTC()}, nil
+		},
+	}
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	host, err := control.NewHost(runtime, 250*time.Millisecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Register("test", provider); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := host.Control(context.Background(), "test", controlRequest())
+	if err != nil {
+		t.Fatalf("Control() error = %v, want recovered execution to continue through verification", err)
+	}
+	if result.Execution.ExecutionID == "" || string(result.Execution.Evidence) != "recovered-result" {
+		t.Fatalf("execution = %+v, want recovered execution evidence", result.Execution)
+	}
+	if result.Verification.Resource.Fingerprint != "running" {
+		t.Fatalf("verification fingerprint = %q, want running", result.Verification.Resource.Fingerprint)
+	}
+	if got := runtime.Phase(); got != kernel.PhaseCommitted {
+		t.Fatalf("runtime phase = %s, want %s", got, kernel.PhaseCommitted)
 	}
 }

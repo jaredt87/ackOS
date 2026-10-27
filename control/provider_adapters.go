@@ -70,14 +70,15 @@ func (e providerExecutor) Execute(ctx context.Context, _ kernel.Transition, _ ke
 
 // NewProviderVerifier returns a Kernel verifier backed by a control provider.
 // The adapter carries the expected request and verification result for one lifecycle.
-func NewProviderVerifier(provider Provider, request VerifyRequest, verification *Verification) kernel.Verifier {
-	return providerVerifier{provider: provider, verification: verification, request: request}
+func NewProviderVerifier(provider Provider, request VerifyRequest, verification *Verification, verificationError ...*error) kernel.Verifier {
+	return providerVerifier{provider: provider, verification: verification, verificationError: optionalExecutionError(verificationError), request: request}
 }
 
 type providerVerifier struct {
-	provider     Provider
-	verification *Verification
-	request      VerifyRequest
+	provider          Provider
+	verification      *Verification
+	verificationError *error
+	request           VerifyRequest
 }
 
 func (v providerVerifier) Verify(ctx context.Context, _ kernel.Transition, authority kernel.Authority, before kernel.Observation, execution kernel.ExecutionResult) (kernel.Observation, error) {
@@ -93,6 +94,9 @@ func (v providerVerifier) Verify(ctx context.Context, _ kernel.Transition, autho
 	}
 	result, err := v.provider.Verify(ctx, request)
 	if err != nil {
+		if v.verificationError != nil {
+			*v.verificationError = err
+		}
 		return kernel.Observation{}, err
 	}
 	if result.Resource.ID != request.Expected.ID || result.Resource.Fingerprint != request.Expected.Fingerprint {

@@ -58,7 +58,7 @@ func treeKey(e TreeEntry) string {
 }
 
 func validateTreePath(path string) error {
-	if path == "" || strings.ContainsAny(path, "\x00\n\r") || strings.HasPrefix(path, "/") || strings.Contains(path, "//") {
+	if path == "" || strings.ContainsRune(path, '\x00') || strings.HasPrefix(path, "/") || strings.Contains(path, "//") {
 		return fmt.Errorf("git: invalid tree path")
 	}
 	for _, part := range strings.Split(path, "/") {

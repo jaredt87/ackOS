@@ -6,11 +6,17 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // ErrCallbackInFlight is returned when a provider callback cannot be admitted
 // because a prior callback against that same provider is still running.
 var ErrCallbackInFlight = errors.New("control: provider callback still in flight")
+
+// executionResultGrace lets a side-effecting Execute callback report its final
+// outcome if the request deadline expires while it is recovering an ambiguous
+// commit result. File providers bound that recovery read to five seconds.
+const executionResultGrace = 6 * time.Second
 
 type providerGate struct {
 	mu    sync.Mutex
@@ -66,6 +72,13 @@ func (g *providerGates) forProvider(name string) *providerGate {
 // returns. A timed-out, non-cooperative callback therefore cannot overlap a
 // later callback for the same provider.
 func (h *Host) callProvider(ctx context.Context, providerName, ownerID string, fn func() error) (error, bool) {
+	return h.callProviderWithGrace(ctx, providerName, ownerID, 0, fn)
+}
+
+// callProviderWithGrace optionally waits a bounded interval after cancellation
+// for an in-flight Execute callback to report whether its side effect committed.
+// Other callbacks use callProvider and retain the original immediate timeout.
+func (h *Host) callProviderWithGrace(ctx context.Context, providerName, ownerID string, grace time.Duration, fn func() error) (error, bool) {
 	gate := h.gates.forProvider(providerName)
 	if !gate.tryEnter(ownerID) {
 		return fmt.Errorf("%w: provider %q (held by %s)", ErrCallbackInFlight, providerName, gate.currentOwner()), false
@@ -89,6 +102,20 @@ func (h *Host) callProvider(ctx context.Context, providerName, ownerID string, f
 		if completed.Load() {
 			return <-done, true
 		}
-		return ctx.Err(), true
+		if grace <= 0 {
+			return ctx.Err(), true
+		}
+		timer := time.NewTimer(grace)
+		defer timer.Stop()
+		select {
+		case err := <-done:
+			return err, true
+		case <-timer.C:
+			// Avoid discarding a result that completed as the grace timer fired.
+			if completed.Load() {
+				return <-done, true
+			}
+			return ctx.Err(), true
+		}
 	}
 }
