@@ -590,14 +590,13 @@ func (tokenObservationProvider) Verify(context.Context, control.VerifyRequest) (
 func TestProviderObserverPreservesConcurrencyToken(t *testing.T) {
 	observedAt := time.Now().UTC()
 	const token = "opaque-provider-token"
-	observer := providerObserver{provider: tokenObservationProvider{
-		observation: control.Observation{
-			Resource:         control.ResourceRef{ID: "resource", Fingerprint: "state-fingerprint"},
-			Version:          7,
-			ConcurrencyToken: token,
-			ObservedAt:       observedAt,
-		},
-	}}
+	observation := control.Observation{
+		Resource:         control.ResourceRef{ID: "resource", Fingerprint: "state-fingerprint"},
+		Version:          7,
+		ConcurrencyToken: token,
+		ObservedAt:       observedAt,
+	}
+	observer := providerObserver{provider: tokenObservationProvider{observation: observation}}
 
 	got, err := observer.Observe(context.Background(), "resource")
 	if err != nil {
