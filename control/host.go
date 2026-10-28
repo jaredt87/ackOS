@@ -27,6 +27,12 @@ type ControlRequest struct {
 	Desired      ResourceRef
 	Payload      []byte
 	AuthorityTTL time.Duration
+	// ExpectedObservation binds an API proposal to the exact provider state
+	// returned by an earlier Observe call. When non-nil, Control rejects the
+	// request if the fresh observation differs in resource fingerprint, version,
+	// or concurrency token. The Host still obtains and authorizes its own fresh
+	// observation; callers cannot use this field to supply execution evidence.
+	ExpectedObservation *Observation
 }
 
 type ControlResult struct {
@@ -122,6 +128,15 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 	}
 	if observed.Resource.ID != req.Target.ID || observed.Resource.Fingerprint == "" {
 		return ControlResult{}, fmt.Errorf("provider returned invalid observation")
+	}
+	if expected := req.ExpectedObservation; expected != nil {
+		if expected.Resource.ID != observed.Resource.ID ||
+			expected.Resource.Fingerprint == "" ||
+			expected.Resource.Fingerprint != observed.Resource.Fingerprint ||
+			expected.Version != observed.Version ||
+			expected.ConcurrencyToken != observed.ConcurrencyToken {
+			return ControlResult{}, fmt.Errorf("%w: resource changed since the caller's observation", ErrStaleObservation)
+		}
 	}
 
 	kernelObservation, err := kernel.NewObservationWithConcurrencyToken(

@@ -425,6 +425,20 @@ type filePayload struct {
 	Content *string `json:"content"`
 }
 
+// EncodeFilePayload builds the canonical payload for replacing an existing
+// regular file. It keeps callers from duplicating the provider's wire format.
+func EncodeFilePayload(mode string, content []byte) ([]byte, error) {
+	if mode != "100644" && mode != "100755" {
+		return nil, fmt.Errorf("git: unsupported replacement file mode %q", mode)
+	}
+	encodedContent := base64.StdEncoding.EncodeToString(content)
+	payload, err := json.Marshal(filePayload{Mode: &mode, Content: &encodedContent})
+	if err != nil {
+		return nil, fmt.Errorf("git: encode file payload: %w", err)
+	}
+	return payload, nil
+}
+
 func decodeFilePayload(payload []byte) (string, []byte, error) {
 	if !utf8.Valid(payload) {
 		return "", nil, fmt.Errorf("git: file payload must be UTF-8 JSON")

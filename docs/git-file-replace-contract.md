@@ -22,13 +22,21 @@ existing tracked file on a branch through `control.Host.Control`.
 
 ## Request contract
 
-The Host request needs one minimal API addition: `ControlRequest.Payload []byte`,
-forwarded unchanged to `ExecuteRequest.Payload`. The Host also forwards the
-same authorized `Desired ResourceRef` into `ExecuteRequest.Desired`; the current
-execution request lacks that field, and the provider needs it to check that the
-payload matches the fingerprint governance approved. The current Host instead
-passes `[]byte(Desired.Fingerprint)` as the payload, which cannot carry file
-bytes and mode.
+The Host request carries `ControlRequest.Payload []byte`, forwarded unchanged
+to `ExecuteRequest.Payload`, and an optional `ControlRequest.ExpectedObservation`
+for binding a proposal to a prior provider observation. The Host also forwards
+the same authorized `Desired ResourceRef` into `ExecuteRequest.Desired`; the
+provider needs it to check that the payload matches the fingerprint governance
+approved. The current Host instead passes `[]byte(Desired.Fingerprint)` as the
+payload, which cannot carry file bytes and mode.
+
+Callers that submit a change based on an earlier inspection must populate
+`ExpectedObservation` with that inspection's returned `Observation`. The Host
+always obtains its own fresh observation; it rejects the request with
+`control.ErrStaleObservation` if `Resource.ID`, `Resource.Fingerprint`, `Version`,
+or `ConcurrencyToken` differs from the supplied observation. `ObservedAt` is
+not compared. The supplied observation is only a precondition, not execution
+evidence or a substitute for the Host's fresh observation.
 
 The existing request fields are used as follows:
 
@@ -39,6 +47,7 @@ The existing request fields are used as follows:
 | `Desired.ID` | Must equal `Target.ID`. |
 | `Desired.Fingerprint` | `git-file-v1:sha256:<lowercase-hex>` for desired mode and raw content. |
 | `Payload` | UTF-8 JSON object `{"mode":"100644","content":"<base64-standard>"}`. `mode` is exactly `100644` or `100755`; `content` is canonical padded standard Base64 of the exact desired bytes, with no line breaks. Unknown fields and trailing JSON values are rejected. |
+| `ExpectedObservation` | Optional for compatibility; required by callers binding a change to an earlier inspection. Supply the returned `Observation`; Host compares `Resource.ID`, `Resource.Fingerprint`, `Version`, and `ConcurrencyToken` with a fresh observation and rejects any mismatch as stale. `ObservedAt` is not compared. |
 
 The Host's governance decision is based on the exact `Desired.Fingerprint`
 passed in this request. `Target.Fingerprint` is only required to satisfy the
