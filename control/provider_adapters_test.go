@@ -12,6 +12,7 @@ import (
 
 type adapterTestProvider struct {
 	execute func(context.Context, ExecuteRequest) (Execution, error)
+	verify  func(context.Context, VerifyRequest) (Verification, error)
 }
 
 func (p adapterTestProvider) Observe(context.Context, ObserveRequest) (Observation, error) {
@@ -25,8 +26,63 @@ func (p adapterTestProvider) Execute(ctx context.Context, req ExecuteRequest) (E
 	return p.execute(ctx, req)
 }
 
-func (p adapterTestProvider) Verify(context.Context, VerifyRequest) (Verification, error) {
-	return Verification{}, nil
+func (p adapterTestProvider) Verify(ctx context.Context, req VerifyRequest) (Verification, error) {
+	if p.verify == nil {
+		return Verification{}, nil
+	}
+	return p.verify(ctx, req)
+}
+
+func TestProviderExecutorPreservesAuthorizedConcurrencyToken(t *testing.T) {
+	now := time.Unix(100, 0)
+	before, err := kernel.NewObservationWithConcurrencyToken("resource-a", "state-a", 4, "opaque-version-a", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := adapterTestProvider{execute: func(_ context.Context, req ExecuteRequest) (Execution, error) {
+		if req.Before.Resource.Fingerprint != "state-a" || req.Before.ConcurrencyToken != "opaque-version-a" {
+			t.Fatalf("provider before = %+v, want state and token from authorized observation", req.Before)
+		}
+		return Execution{ExecutionID: req.ExecutionID}, nil
+	}}
+	var executionError error
+	executor := NewProviderExecutor(provider, ExecuteRequest{ExecutionID: "exec-1"}, &Execution{}, &executionError)
+	result := executor.Execute(context.Background(), kernel.Transition{}, kernel.Authority{}, before)
+	if executionError != nil || !result.Success {
+		t.Fatalf("Execute() = %+v, error = %v; want success", result, executionError)
+	}
+}
+
+func TestProviderVerifierPreservesVerifiedConcurrencyToken(t *testing.T) {
+	now := time.Unix(100, 0)
+	before, err := kernel.NewObservationWithConcurrencyToken("resource-a", "state-a", 4, "opaque-version-a", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Verification{
+		Resource:         ResourceRef{ID: "resource-a", Fingerprint: "state-b"},
+		Version:          5,
+		ConcurrencyToken: "opaque-version-b",
+		VerifiedAt:       now.Add(time.Second),
+	}
+	provider := adapterTestProvider{verify: func(_ context.Context, req VerifyRequest) (Verification, error) {
+		if req.Before.Resource.Fingerprint != "state-a" || req.Before.ConcurrencyToken != "opaque-version-a" {
+			t.Fatalf("verify before = %+v, want state and token from authorized observation", req.Before)
+		}
+		return want, nil
+	}}
+	var captured Verification
+	verifier := NewProviderVerifier(provider, VerifyRequest{Expected: want.Resource}, &captured)
+	verified, err := verifier.Verify(context.Background(), kernel.Transition{}, kernel.Authority{ExecutionID: "exec-1"}, before, kernel.ExecutionResult{ExecutionID: "exec-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if verified.State != want.Resource.Fingerprint || verified.ConcurrencyToken != want.ConcurrencyToken {
+		t.Fatalf("kernel verification = %+v, want resource state %q and token %q", verified, want.Resource.Fingerprint, want.ConcurrencyToken)
+	}
+	if captured.ConcurrencyToken != want.ConcurrencyToken {
+		t.Fatalf("captured provider verification token = %q, want %q", captured.ConcurrencyToken, want.ConcurrencyToken)
+	}
 }
 
 func TestProviderExecutorCapturesExecutionErrors(t *testing.T) {

@@ -569,3 +569,46 @@ func TestControlExecutionFailureCharacterization(t *testing.T) {
 		t.Fatalf("structured content = %#v, want nil in current failure path", result.StructuredContent)
 	}
 }
+
+// tokenObservationProvider supplies a provider observation for adapter contract tests.
+type tokenObservationProvider struct {
+	observation control.Observation
+}
+
+func (p tokenObservationProvider) Observe(context.Context, control.ObserveRequest) (control.Observation, error) {
+	return p.observation, nil
+}
+
+func (tokenObservationProvider) Execute(context.Context, control.ExecuteRequest) (control.Execution, error) {
+	return control.Execution{}, errors.New("unexpected Execute call")
+}
+
+func (tokenObservationProvider) Verify(context.Context, control.VerifyRequest) (control.Verification, error) {
+	return control.Verification{}, errors.New("unexpected Verify call")
+}
+
+func TestProviderObserverPreservesConcurrencyToken(t *testing.T) {
+	observedAt := time.Now().UTC()
+	const token = "opaque-provider-token"
+	observation := control.Observation{
+		Resource:         control.ResourceRef{ID: "resource", Fingerprint: "state-fingerprint"},
+		Version:          7,
+		ConcurrencyToken: token,
+		ObservedAt:       observedAt,
+	}
+	observer := providerObserver{provider: tokenObservationProvider{observation: observation}}
+
+	got, err := observer.Observe(context.Background(), "resource")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ConcurrencyToken != token {
+		t.Fatalf("ConcurrencyToken = %q, want %q", got.ConcurrencyToken, token)
+	}
+	if got.Subject != "resource" || got.State != "state-fingerprint" || got.Version != 7 {
+		t.Fatalf("observation lost provider fields: %+v", got)
+	}
+	if !got.ObservedAt.Equal(observedAt) {
+		t.Fatalf("ObservedAt = %v, want %v", got.ObservedAt, observedAt)
+	}
+}

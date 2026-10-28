@@ -134,10 +134,11 @@ func (o providerObserver) Observe(ctx context.Context, subject string) (kernel.O
 	if result.Resource.ID != subject || result.Resource.Fingerprint == "" {
 		return kernel.Observation{}, fmt.Errorf("provider returned invalid observation")
 	}
-	return kernel.NewObservation(
+	return kernel.NewObservationWithConcurrencyToken(
 		result.Resource.ID,
 		result.Resource.Fingerprint,
 		result.Version,
+		result.ConcurrencyToken,
 		result.ObservedAt,
 	)
 }

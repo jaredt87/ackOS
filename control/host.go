@@ -124,7 +124,13 @@ func (h *Host) Control(ctx context.Context, providerName string, req ControlRequ
 		return ControlResult{}, fmt.Errorf("provider returned invalid observation")
 	}
 
-	kernelObservation, err := kernel.NewObservation(observed.Resource.ID, observed.Resource.Fingerprint, observed.Version, observed.ObservedAt)
+	kernelObservation, err := kernel.NewObservationWithConcurrencyToken(
+		observed.Resource.ID,
+		observed.Resource.Fingerprint,
+		observed.Version,
+		observed.ConcurrencyToken,
+		observed.ObservedAt,
+	)
 	if err != nil {
 		return ControlResult{}, err
 	}

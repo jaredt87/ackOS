@@ -25,9 +25,12 @@ type ObserveRequest struct {
 type Observation struct {
 	Resource ResourceRef
 	Version  uint64
+	// ConcurrencyToken is an opaque provider value used to detect concurrent
+	// changes. It is independent of Resource.Fingerprint, which describes state.
+	ConcurrencyToken string
 	// Evidence is informational provider output from Observe. It does not cross
 	// the Kernel observation boundary; precondition data belongs in Fingerprint
-	// or Version.
+	// or Version/ConcurrencyToken.
 	Evidence   []byte
 	ObservedAt time.Time
 }
@@ -58,10 +61,11 @@ type VerifyRequest struct {
 }
 
 type Verification struct {
-	Resource   ResourceRef
-	Version    uint64
-	Evidence   []byte
-	VerifiedAt time.Time
+	Resource         ResourceRef
+	Version          uint64
+	ConcurrencyToken string
+	Evidence         []byte
+	VerifiedAt       time.Time
 }
 
 type Provider interface {

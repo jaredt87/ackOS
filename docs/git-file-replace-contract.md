@@ -44,7 +44,8 @@ The Host's governance decision is based on the exact `Desired.Fingerprint`
 passed in this request. `Target.Fingerprint` is only required to satisfy the
 current generic Host validation; it is not an authorization token and the Git
 provider does not use it to select the expected branch tip. The provider's
-fresh observation, preserved as `Before`, supplies that tip.
+fresh `Before.Resource.Fingerprint` supplies current file state, while
+`Before.ConcurrencyToken` supplies the branch tip for provider CAS.
 
 The desired fingerprint is SHA-256 over the byte sequence
 `"git-file-v1\x00" + mode + "\x00" + content`, where `mode` is the six ASCII
@@ -69,21 +70,30 @@ be valid UTF-8. The path and ref are validated before any object writes.
 
 ## Observation and authorization
 
-The provider observation fingerprint is
-`git-tip-v1:<full-lowercase-object-id>`. The ID is the full 40- or 64-character
-commit ID returned by `ReadRef`, depending on repository object format. The
-provider does not use a short ID, branch name, path blob ID, or tree ID as the
-authorization token.
+The provider observation separates resource state from concurrency state:
+
+- `Observation.Resource.Fingerprint` is the `git-file-v1:sha256:<lowercase-hex>`
+  fingerprint of the target entry's exact mode and bytes at the observed tip.
+- `Observation.ConcurrencyToken` is
+  `git-tip-v1:<full-lowercase-object-id>`. The ID is the full 40- or 64-character
+  commit ID returned by `ReadRef`, depending on repository object format. The
+  provider does not use a short ID, branch name, path blob ID, or tree ID as
+  the authorization token.
+
+The Runtime's initial root for a Git-backed Host is the observed file-state
+fingerprint, not the concurrency token. Kernel observation evidence binds both
+values. The Runtime CAS therefore remains in the resource-state domain while
+the provider's Git CAS remains in the branch-version domain.
 
 At Execute, the provider freshly reads the branch ref and compares it with the
-authorized `Before.Resource.Fingerprint` tip. A mismatch rejects execution as
-stale and does not update the ref. The exact prior entry at the target path is
-also read from the authorized tip's tree and must be a regular blob. It is
-additional evidence for computing and verifying the replacement, not a
-substitute for the full-tip comparison.
+authorized `Before.ConcurrencyToken`. A mismatch rejects execution as stale and
+does not update the ref. The exact prior entry at the target path is also read
+from the authorized tip's tree and must be a regular blob. Its mode and bytes
+must match `Before.Resource.Fingerprint`; disagreement rejects the request.
+These checks keep the resource state bound to the full-tip concurrency token.
 
-An A-to-B-to-A movement is considered the same authorized state if the ref is
-again at the exact same commit ID A when Execute performs its compare-and-swap.
+An A-to-B-to-A movement is considered the same authorized version if the ref
+is again at the exact same commit ID A when Execute performs its compare-and-swap.
 This contract does not inspect reflogs or maintain a generation counter.
 
 ## Execution and CAS
@@ -142,7 +152,7 @@ exactly these fields:
 
 The verifier rejects malformed or unknown-schema evidence, an execution ID
 different from `VerifyRequest.ExecutionID`, a before tip different from
-`VerifyRequest.Before.Resource.Fingerprint`, or an invalid full object ID. The
+`VerifyRequest.Before.ConcurrencyToken`, or an invalid full object ID. The
 result commit is the commit actually created by Execute; it is not inferred
 from matching file contents. The verifier also requires the commit's exact
 execution-ID trailer to match, so reused or unrelated commits with matching
@@ -167,8 +177,9 @@ Verify performs fresh reads; it does not trust cached Execute tree data. It:
    and requires it still to equal `result_commit`. This final read is the
    freshness check for successful verification; a branch advance during object
    verification fails even if the earlier ref read passed.
-6. Returns the expected desired `ResourceRef` and a verification time taken
-   after the final ref read.
+6. Returns the expected desired `ResourceRef`, the verified result tip as
+   `Verification.ConcurrencyToken`, and a verification time taken after the
+   final ref read.
 
 If verification fails after CAS succeeded, the provider does not roll back the
 ref. For example, a later external ref update remains in place and causes

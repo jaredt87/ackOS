@@ -52,14 +52,19 @@ const (
 )
 
 type Observation struct {
-	Subject     string
-	State       string
-	Version     uint64
-	ObservedAt  time.Time
-	Fingerprint string
+	Subject          string
+	State            string
+	Version          uint64
+	ConcurrencyToken string
+	ObservedAt       time.Time
+	Fingerprint      string
 }
 
 func NewObservation(subject, state string, version uint64, observedAt time.Time) (Observation, error) {
+	return NewObservationWithConcurrencyToken(subject, state, version, "", observedAt)
+}
+
+func NewObservationWithConcurrencyToken(subject, state string, version uint64, concurrencyToken string, observedAt time.Time) (Observation, error) {
 	if subject == "" {
 		return Observation{}, fmt.Errorf("%w: subject is required", ErrInvalidObservation)
 	}
@@ -69,7 +74,7 @@ func NewObservation(subject, state string, version uint64, observedAt time.Time)
 	if observedAt.IsZero() {
 		return Observation{}, fmt.Errorf("%w: observed time is required", ErrInvalidObservation)
 	}
-	o := Observation{Subject: subject, State: state, Version: version, ObservedAt: observedAt.UTC()}
+	o := Observation{Subject: subject, State: state, Version: version, ConcurrencyToken: concurrencyToken, ObservedAt: observedAt.UTC()}
 	fp, err := observationFingerprint(o)
 	if err != nil {
 		return Observation{}, fmt.Errorf("%w: observation fingerprint serialization failed: %v", ErrInvalidObservation, err)
@@ -94,11 +99,12 @@ func (o Observation) Validate() error {
 
 func observationFingerprint(o Observation) (string, error) {
 	b, err := json.Marshal(struct {
-		Subject    string
-		State      string
-		Version    uint64
-		ObservedAt time.Time
-	}{o.Subject, o.State, o.Version, o.ObservedAt.UTC()})
+		Subject          string
+		State            string
+		Version          uint64
+		ConcurrencyToken string
+		ObservedAt       time.Time
+	}{o.Subject, o.State, o.Version, o.ConcurrencyToken, o.ObservedAt.UTC()})
 	if err != nil {
 		return "", err
 	}
@@ -540,7 +546,8 @@ func (r *Runtime) Verify(ctx context.Context, v Verifier) error {
 		r.failVerification(done)
 		return fmt.Errorf("%w: %v", ErrVerificationFailed, err)
 	}
-	if o.Subject != t.Subject || o.State != t.After || o.Fingerprint == t.ObservationFingerprint || !o.ObservedAt.After(completedAt) || o.ObservedAt.After(now) {
+	if o.Subject != t.Subject || o.State != t.After || o.Fingerprint == t.ObservationFingerprint || !o.ObservedAt.After(completedAt) || o.ObservedAt.After(now) ||
+		(before.ConcurrencyToken != "" && (o.ConcurrencyToken == "" || o.ConcurrencyToken == before.ConcurrencyToken)) {
 		r.failVerification(done)
 		return ErrVerificationFailed
 	}
