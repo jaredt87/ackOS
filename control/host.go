@@ -23,10 +23,10 @@ type Host struct {
 }
 
 type ControlRequest struct {
-	Target              ResourceRef
-	Desired             ResourceRef
-	Payload             []byte
-	AuthorityTTL        time.Duration
+	Target       ResourceRef
+	Desired      ResourceRef
+	Payload      []byte
+	AuthorityTTL time.Duration
 	// ExpectedObservation binds an API proposal to the exact provider state
 	// returned by an earlier Observe call. When non-nil, Control rejects the
 	// request if the fresh observation differs in resource fingerprint, version,
