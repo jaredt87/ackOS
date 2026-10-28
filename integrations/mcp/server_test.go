@@ -612,4 +612,3 @@ func TestProviderObserverPreservesConcurrencyToken(t *testing.T) {
 		t.Fatalf("ObservedAt = %v, want %v", got.ObservedAt, observedAt)
 	}
 }
-
