@@ -38,9 +38,9 @@ func TestHostRejectsChangedExpectedObservationBeforeExecution(t *testing.T) {
 	}
 
 	_, err = host.Control(context.Background(), "memory", control.ControlRequest{
-		Target:               control.ResourceRef{ID: "resource-a"},
-		Desired:              control.ResourceRef{ID: "resource-a", Fingerprint: "desired"},
-		Payload:              []byte("desired"),
+		Target:              control.ResourceRef{ID: "resource-a"},
+		Desired:             control.ResourceRef{ID: "resource-a", Fingerprint: "desired"},
+		Payload:             []byte("desired"),
 		ExpectedObservation: &expected,
 	})
 	if !errors.Is(err, control.ErrStaleObservation) {
