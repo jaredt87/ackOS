@@ -286,9 +286,150 @@ func TestHostProviderVerificationFailureTransitionsToRecovery(t *testing.T) {
 	}
 }
 
+func TestHostPreservesConcurrencyTokenAcrossRecovery(t *testing.T) {
+	resource, err := memory.NewResource("resource-a", "initial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := memory.NewProvider(resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &tokenRecoveryProvider{base: base, token: "git-tip-v1:first", failFirst: true}
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	host, err := control.NewHost(runtime, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Register("test", provider); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Control(context.Background(), "test", controlRequest()); err == nil {
+		t.Fatal("first Control() unexpectedly succeeded")
+	}
+	if got := runtime.Phase(); got != kernel.PhaseRecovery {
+		t.Fatalf("phase after failed execution = %s, want %s", got, kernel.PhaseRecovery)
+	}
+	result, err := host.Control(context.Background(), "test", controlRequest())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBeforeTokens := []string{"git-tip-v1:first", "git-tip-v1:recovered"}
+	if len(provider.beforeTokens) != len(wantBeforeTokens) {
+		t.Fatalf("Execute before tokens = %v, want %v", provider.beforeTokens, wantBeforeTokens)
+	}
+	for i, want := range wantBeforeTokens {
+		if provider.beforeTokens[i] != want {
+			t.Fatalf("Execute before token[%d] = %q, want %q", i, provider.beforeTokens[i], want)
+		}
+	}
+	if result.Verification.ConcurrencyToken != "git-tip-v1:committed" {
+		t.Fatalf("verification token = %q, want git-tip-v1:committed", result.Verification.ConcurrencyToken)
+	}
+}
+
+func TestHostRecoveryDoesNotAdoptChangedResourceState(t *testing.T) {
+	resource, err := memory.NewResource("resource-a", "initial")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, err := memory.NewProvider(resource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &changedStateOnFailureProvider{base: base}
+	runtime := kernel.NewRuntime("initial", kernel.AllowPolicy{})
+	host, err := control.NewHost(runtime, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Register("test", provider); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := host.Control(context.Background(), "test", controlRequest()); err == nil {
+		t.Fatal("first Control() unexpectedly succeeded")
+	}
+	if got := runtime.Phase(); got != kernel.PhaseRecovery {
+		t.Fatalf("phase after failed execution = %s, want %s", got, kernel.PhaseRecovery)
+	}
+	_, err = host.Control(context.Background(), "test", control.ControlRequest{
+		Target:  control.ResourceRef{ID: "resource-a", Fingerprint: "ignored"},
+		Desired: control.ResourceRef{ID: "resource-a", Fingerprint: "stopped"},
+		Payload: []byte("stopped"),
+	})
+	if !errors.Is(err, kernel.ErrCASConflict) {
+		t.Fatalf("recovered Control() error = %v, want ErrCASConflict", err)
+	}
+	if provider.executeCalls != 1 {
+		t.Fatalf("provider Execute calls = %d, want 1", provider.executeCalls)
+	}
+}
+
 type recoveryTestProvider struct {
 	verificationProvider
 	executeCount int
+}
+
+type tokenRecoveryProvider struct {
+	base         control.Provider
+	token        string
+	failFirst    bool
+	executeCalls int
+	beforeTokens []string
+}
+
+func (p *tokenRecoveryProvider) Observe(ctx context.Context, req control.ObserveRequest) (control.Observation, error) {
+	result, err := p.base.Observe(ctx, req)
+	result.ConcurrencyToken = p.token
+	return result, err
+}
+
+func (p *tokenRecoveryProvider) Execute(ctx context.Context, req control.ExecuteRequest) (control.Execution, error) {
+	p.executeCalls++
+	p.beforeTokens = append(p.beforeTokens, req.Before.ConcurrencyToken)
+	if req.Before.ConcurrencyToken != p.token {
+		return control.Execution{}, errors.New("authorized concurrency token was not preserved")
+	}
+	if p.failFirst {
+		p.failFirst = false
+		p.token = "git-tip-v1:recovered"
+		return control.Execution{}, errors.New("simulated stale tip")
+	}
+	result, err := p.base.Execute(ctx, req)
+	if err == nil {
+		p.token = "git-tip-v1:committed"
+	}
+	return result, err
+}
+
+func (p *tokenRecoveryProvider) Verify(ctx context.Context, req control.VerifyRequest) (control.Verification, error) {
+	result, err := p.base.Verify(ctx, req)
+	result.ConcurrencyToken = p.token
+	return result, err
+}
+
+type changedStateOnFailureProvider struct {
+	base         control.Provider
+	executeCalls int
+}
+
+func (p *changedStateOnFailureProvider) Observe(ctx context.Context, req control.ObserveRequest) (control.Observation, error) {
+	return p.base.Observe(ctx, req)
+}
+
+func (p *changedStateOnFailureProvider) Execute(ctx context.Context, req control.ExecuteRequest) (control.Execution, error) {
+	p.executeCalls++
+	if p.executeCalls == 1 {
+		if _, err := p.base.Execute(ctx, req); err != nil {
+			return control.Execution{}, err
+		}
+		return control.Execution{}, errors.New("execution failed after resource changed")
+	}
+	return p.base.Execute(ctx, req)
+}
+
+func (p *changedStateOnFailureProvider) Verify(ctx context.Context, req control.VerifyRequest) (control.Verification, error) {
+	return p.base.Verify(ctx, req)
 }
 
 func (p *recoveryTestProvider) Execute(ctx context.Context, req control.ExecuteRequest) (control.Execution, error) {

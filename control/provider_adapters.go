@@ -108,18 +108,20 @@ func (v providerVerifier) Verify(ctx context.Context, _ kernel.Transition, autho
 	if v.verification != nil {
 		*v.verification = result
 	}
-	return kernel.NewObservation(
+	return kernel.NewObservationWithConcurrencyToken(
 		result.Resource.ID,
 		result.Resource.Fingerprint,
 		result.Version,
+		result.ConcurrencyToken,
 		result.VerifiedAt,
 	)
 }
 
 func beforeObservation(before kernel.Observation) Observation {
 	return Observation{
-		Resource:   ResourceRef{ID: before.Subject, Fingerprint: before.State},
-		Version:    before.Version,
-		ObservedAt: before.ObservedAt,
+		Resource:         ResourceRef{ID: before.Subject, Fingerprint: before.State},
+		Version:          before.Version,
+		ConcurrencyToken: before.ConcurrencyToken,
+		ObservedAt:       before.ObservedAt,
 	}
 }

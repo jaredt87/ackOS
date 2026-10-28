@@ -407,6 +407,50 @@ func TestObservationTimestampIsBoundToFingerprint(t *testing.T) {
 	}
 }
 
+func TestObservationFingerprintBindsConcurrencyToken(t *testing.T) {
+	o, err := NewObservationWithConcurrencyToken("resource", "A", 1, "git-tip-v1:old", time.Unix(100, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.ConcurrencyToken = "git-tip-v1:other"
+	if !errors.Is(o.Validate(), ErrStaleEvidence) {
+		t.Fatalf("expected token tampering to invalidate evidence, got %v", o.Validate())
+	}
+}
+
+func TestVerificationRequiresChangedConcurrencyToken(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		token string
+	}{
+		{name: "missing"},
+		{name: "unchanged", token: "git-tip-v1:old"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Unix(100, 0)
+			clockNow := now
+			r := NewRuntime("A", nil)
+			r.clock = func() time.Time { return clockNow }
+			before, err := NewObservationWithConcurrencyToken("resource", "A", 1, "git-tip-v1:old", now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			authorize(t, r, before, "B")
+			if _, err := r.Start(context.Background(), &fakeExecutor{result: ExecutionResult{Success: true}}); err != nil {
+				t.Fatal(err)
+			}
+			clockNow = now.Add(2 * time.Second)
+			verified, err := NewObservationWithConcurrencyToken("resource", "B", 2, tc.token, now.Add(time.Second))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := r.Verify(context.Background(), fakeVerifier{observation: verified}); !errors.Is(err, ErrVerificationFailed) {
+				t.Fatalf("Verify() error = %v, want ErrVerificationFailed", err)
+			}
+		})
+	}
+}
+
 func TestRecoverRequiresFreshEvidence(t *testing.T) {
 	now := time.Unix(100, 0)
 	clockNow := now

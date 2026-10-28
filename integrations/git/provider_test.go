@@ -38,6 +38,9 @@ func TestFileProviderControlReplacesAuthorizedFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if result.Verification.ConcurrencyToken != "git-tip-v1:"+string(current) {
+		t.Fatalf("verification concurrency token = %q, want result branch tip %s", result.Verification.ConcurrencyToken, current)
+	}
 	commit, err := f.repo.ReadCommit(context.Background(), current)
 	if err != nil {
 		t.Fatal(err)
@@ -63,6 +66,263 @@ func TestFileProviderControlReplacesAuthorizedFile(t *testing.T) {
 	}
 	if string(got) != string(newContent) {
 		t.Fatalf("target bytes = %v, want %v", got, newContent)
+	}
+}
+
+func TestFileProviderObservationSeparatesFileStateFromBranchTip(t *testing.T) {
+	f := newFileFixture(t)
+	provider, err := NewFileProvider(f.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed, err := provider.Observe(context.Background(), control.ObserveRequest{
+		Target: control.ResourceRef{ID: f.id},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.Resource.Fingerprint != "git-file-v1:sha256:d5b4c1132e99afa63a53ff4de7ff3507d37f55f52ac3b846bc6c4ad08eeae5a9" {
+		t.Fatalf("resource fingerprint = %q, want exact initial file-state fingerprint", observed.Resource.Fingerprint)
+	}
+	if observed.ConcurrencyToken != "git-tip-v1:"+string(f.tip) {
+		t.Fatalf("concurrency token = %q, want observed branch tip %s", observed.ConcurrencyToken, f.tip)
+	}
+}
+
+func TestFileProviderTwoSequentialReplacementsUseOneHostAndRuntime(t *testing.T) {
+	f := newFileFixture(t)
+	provider, err := NewFileProvider(f.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := provider.Observe(context.Background(), control.ObserveRequest{Target: control.ResourceRef{ID: f.id}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := kernel.NewRuntime(initial.Resource.Fingerprint, kernel.AllowPolicy{})
+	host, err := control.NewHost(runtime, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Register("git", provider); err != nil {
+		t.Fatal(err)
+	}
+	firstContent := []byte("first replacement\x00")
+	firstFingerprint, err := FileStateFingerprint("100755", firstContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := host.Control(context.Background(), "git", control.ControlRequest{
+		Target:  control.ResourceRef{ID: f.id, Fingerprint: "ignored"},
+		Desired: control.ResourceRef{ID: f.id, Fingerprint: firstFingerprint},
+		Payload: encodeFilePayload("100755", firstContent),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstTip := ObjectID(first.Verification.ConcurrencyToken[len(tipFingerprintPrefix):])
+	secondContent := []byte("second replacement\xff")
+	secondFingerprint, err := FileStateFingerprint("100644", secondContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := host.Control(context.Background(), "git", control.ControlRequest{
+		Target:  control.ResourceRef{ID: f.id, Fingerprint: "ignored"},
+		Desired: control.ResourceRef{ID: f.id, Fingerprint: secondFingerprint},
+		Payload: encodeFilePayload("100644", secondContent),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Observation.Resource.Fingerprint != firstFingerprint {
+		t.Fatalf("second observation resource state = %q, want first desired state %q", second.Observation.Resource.Fingerprint, firstFingerprint)
+	}
+	if second.Observation.ConcurrencyToken != first.Verification.ConcurrencyToken {
+		t.Fatalf("second before token = %q, want first verified token %q", second.Observation.ConcurrencyToken, first.Verification.ConcurrencyToken)
+	}
+	if runtime.Root() != secondFingerprint {
+		t.Fatalf("Runtime root = %q, want desired resource state %q", runtime.Root(), secondFingerprint)
+	}
+	current, err := f.repo.ReadRef(context.Background(), testBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Verification.ConcurrencyToken != tipFingerprintPrefix+string(current) {
+		t.Fatalf("second verified token = %q, want current tip %s", second.Verification.ConcurrencyToken, current)
+	}
+	commit, err := f.repo.ReadCommit(context.Background(), current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(commit.Parents) != 1 || commit.Parents[0] != firstTip {
+		t.Fatalf("second commit parents = %v, want [%s]", commit.Parents, firstTip)
+	}
+	entries, err := flattenTree(context.Background(), f.repo, commit.Tree, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := entries["dir/file.txt"]
+	got, err := f.repo.ReadBlob(context.Background(), entry.Object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry.Mode != "100644" || string(got) != string(secondContent) {
+		t.Fatalf("final target = mode %s, bytes %v; want mode 100644 and bytes %v", entry.Mode, got, secondContent)
+	}
+	initialCommit, err := f.repo.ReadCommit(context.Background(), f.tip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initialEntries, err := flattenTree(context.Background(), f.repo, initialCommit.Tree, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := compareTreeLeaves(initialEntries, entries, "dir/file.txt"); err != nil {
+		t.Fatalf("unrelated tree contents changed across sequential replacements: %v", err)
+	}
+}
+
+func TestFileProviderStaleHostObservationRecoversWithFreshTip(t *testing.T) {
+	f := newFileFixture(t)
+	base, err := NewFileProvider(f.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := base.Observe(context.Background(), control.ObserveRequest{Target: control.ResourceRef{ID: f.id}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var externalTip ObjectID
+	provider := providerWrapper{Provider: base, afterObserve: func() {
+		if externalTip == "" {
+			externalTip = commitOnTip(t, f.repo, testBranch, f.tip, "external update after Host observation")
+		}
+	}}
+	runtime := kernel.NewRuntime(initial.Resource.Fingerprint, kernel.AllowPolicy{})
+	host, err := control.NewHost(runtime, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Register("git", provider); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("replacement after recovery")
+	fingerprint, err := FileStateFingerprint("100644", content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := control.ControlRequest{
+		Target:  control.ResourceRef{ID: f.id, Fingerprint: "ignored"},
+		Desired: control.ResourceRef{ID: f.id, Fingerprint: fingerprint},
+		Payload: encodeFilePayload("100644", content),
+	}
+	if _, err := host.Control(context.Background(), "git", request); !errors.Is(err, control.ErrStaleObservation) {
+		t.Fatalf("first Control() error = %v, want stale observation", err)
+	}
+	if got := runtime.Phase(); got != kernel.PhaseRecovery {
+		t.Fatalf("phase after stale execution = %s, want %s", got, kernel.PhaseRecovery)
+	}
+	result, err := host.Control(context.Background(), "git", request)
+	if err != nil {
+		t.Fatalf("fresh Control() after recovery failed: %v", err)
+	}
+	if result.Observation.ConcurrencyToken != tipFingerprintPrefix+string(externalTip) {
+		t.Fatalf("recovery observation token = %q, want fresh tip %s", result.Observation.ConcurrencyToken, externalTip)
+	}
+	commitID := ObjectID(resultEvidenceCommit(t, result.Execution))
+	commit, err := f.repo.ReadCommit(context.Background(), commitID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(commit.Parents) != 1 || commit.Parents[0] != externalTip {
+		t.Fatalf("recovered commit parents = %v, want [%s]", commit.Parents, externalTip)
+	}
+}
+
+func TestFileProviderVerificationFailureRecoveryDoesNotAdoptCommittedState(t *testing.T) {
+	f := newFileFixture(t)
+	base, err := NewFileProvider(f.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := base.Observe(context.Background(), control.ObserveRequest{Target: control.ResourceRef{ID: f.id}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var laterTip ObjectID
+	provider := providerWrapper{Provider: base, afterExecute: func(result control.Execution) {
+		if laterTip == "" {
+			laterTip = commitOnTip(t, f.repo, testBranch, ObjectID(resultEvidenceCommit(t, result)), "later writer")
+		}
+	}}
+	runtime := kernel.NewRuntime(initial.Resource.Fingerprint, kernel.AllowPolicy{})
+	host, err := control.NewHost(runtime, 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := host.Register("git", provider); err != nil {
+		t.Fatal(err)
+	}
+	firstContent := []byte("committed but not verified as current")
+	firstFingerprint, err := FileStateFingerprint("100644", firstContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = host.Control(context.Background(), "git", control.ControlRequest{
+		Target:  control.ResourceRef{ID: f.id, Fingerprint: "ignored"},
+		Desired: control.ResourceRef{ID: f.id, Fingerprint: firstFingerprint},
+		Payload: encodeFilePayload("100644", firstContent),
+	})
+	if !errors.Is(err, ErrBranchAdvancedAfterExecution) {
+		t.Fatalf("first Control() error = %v, want branch advanced after execution", err)
+	}
+	if got := runtime.Phase(); got != kernel.PhaseRecovery {
+		t.Fatalf("phase after failed verification = %s, want %s", got, kernel.PhaseRecovery)
+	}
+	secondFingerprint, err := FileStateFingerprint("100644", []byte("second change"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = host.Control(context.Background(), "git", control.ControlRequest{
+		Target:  control.ResourceRef{ID: f.id, Fingerprint: "ignored"},
+		Desired: control.ResourceRef{ID: f.id, Fingerprint: secondFingerprint},
+		Payload: encodeFilePayload("100644", []byte("second change")),
+	})
+	if !errors.Is(err, kernel.ErrCASConflict) {
+		t.Fatalf("recovered Control() error = %v, want local CAS conflict", err)
+	}
+	current, err := f.repo.ReadRef(context.Background(), testBranch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current != laterTip {
+		t.Fatalf("current tip = %s, want later writer tip %s", current, laterTip)
+	}
+}
+
+func TestFileProviderRejectsAuthorizedStateThatDoesNotMatchTip(t *testing.T) {
+	f := newFileFixture(t)
+	provider, err := NewFileProvider(f.repo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired := []byte("replacement")
+	fingerprint, err := FileStateFingerprint("100644", desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = provider.Execute(context.Background(), control.ExecuteRequest{
+		ExecutionID: "exec-invalid-before-state",
+		Target:      control.ResourceRef{ID: f.id},
+		Desired:     control.ResourceRef{ID: f.id, Fingerprint: fingerprint},
+		Before: control.Observation{
+			Resource:         control.ResourceRef{ID: f.id, Fingerprint: "git-file-v1:forged"},
+			ConcurrencyToken: "git-tip-v1:" + string(f.tip),
+		},
+		Payload: encodeFilePayload("100644", desired),
+	})
+	if err == nil || !strings.Contains(err.Error(), "authorized file state") {
+		t.Fatalf("Execute() error = %v, want authorized state mismatch", err)
 	}
 }
 
@@ -131,9 +391,9 @@ func TestFileProviderRejectsRegularModePointingToNonBlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = runFileControl(t, f, provider, "100644", []byte("replacement"))
+	_, err = provider.Observe(ctx, control.ObserveRequest{Target: control.ResourceRef{ID: f.id}})
 	if err == nil || !strings.Contains(err.Error(), "not a blob") {
-		t.Fatalf("error = %v, want non-blob target rejection", err)
+		t.Fatalf("Observe() error = %v, want non-blob target rejection", err)
 	}
 	current, err := f.repo.ReadRef(ctx, testBranch)
 	if err != nil {
@@ -151,8 +411,12 @@ func TestFileProviderRejectsStaleObservationBeforeWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	var externalTip ObjectID
+	observeCalls := 0
 	provider := providerWrapper{Provider: base, afterObserve: func() {
-		externalTip = commitOnTip(t, f.repo, testBranch, f.tip, "external advance")
+		observeCalls++
+		if observeCalls == 2 {
+			externalTip = commitOnTip(t, f.repo, testBranch, f.tip, "external advance")
+		}
 	}}
 	_, err = runFileControl(t, f, provider, "100644", []byte("replacement"))
 	if externalTip == "" {
@@ -264,7 +528,11 @@ func TestFileProviderHostReceivesCASRecoveryAfterDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host, err := control.NewHost(kernel.NewRuntime(tipFingerprintPrefix+string(f.tip), kernel.AllowPolicy{}), 5*time.Second)
+	initial, err := provider.Observe(context.Background(), control.ObserveRequest{Target: control.ResourceRef{ID: f.id}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := control.NewHost(kernel.NewRuntime(initial.Resource.Fingerprint, kernel.AllowPolicy{}), 5*time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -622,11 +890,15 @@ func runFileControl(t *testing.T, f fileFixture, provider control.Provider, mode
 
 func runFileControlWithPayload(t *testing.T, f fileFixture, provider control.Provider, desiredMode string, desiredContent, payload []byte) (control.ControlResult, error) {
 	t.Helper()
+	initial, err := provider.Observe(context.Background(), control.ObserveRequest{Target: control.ResourceRef{ID: f.id}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	fingerprint, err := FileStateFingerprint(desiredMode, desiredContent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	host, err := control.NewHost(kernel.NewRuntime("git-tip-v1:"+string(f.tip), kernel.AllowPolicy{}), time.Second*5)
+	host, err := control.NewHost(kernel.NewRuntime(initial.Resource.Fingerprint, kernel.AllowPolicy{}), time.Second*5)
 	if err != nil {
 		t.Fatal(err)
 	}

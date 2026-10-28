@@ -95,13 +95,26 @@ func (p *FileProvider) Observe(ctx context.Context, req control.ObserveRequest) 
 	if err != nil {
 		return control.Observation{}, err
 	}
-	if _, err := p.repo.ReadCommit(ctx, tip); err != nil {
+	commit, err := p.repo.ReadCommit(ctx, tip)
+	if err != nil {
+		return control.Observation{}, err
+	}
+	entry, err := p.readPath(ctx, commit.Tree, strings.Split(identity.Path, "/"))
+	if err != nil {
+		return control.Observation{}, err
+	}
+	content, err := p.repo.ReadBlob(ctx, entry.Object)
+	if err != nil {
+		return control.Observation{}, err
+	}
+	fingerprint, err := FileStateFingerprint(entry.Mode, content)
+	if err != nil {
 		return control.Observation{}, err
 	}
 	return control.Observation{
-		Resource:   control.ResourceRef{ID: req.Target.ID, Fingerprint: tipFingerprintPrefix + string(tip)},
-		Version:    0,
-		ObservedAt: time.Now().UTC(),
+		Resource:         control.ResourceRef{ID: req.Target.ID, Fingerprint: fingerprint},
+		ConcurrencyToken: tipFingerprintPrefix + string(tip),
+		ObservedAt:       time.Now().UTC(),
 	}, nil
 }
 
@@ -127,7 +140,7 @@ func (p *FileProvider) Execute(ctx context.Context, req control.ExecuteRequest) 
 	if req.Desired.Fingerprint != desiredFingerprint {
 		return control.Execution{}, fmt.Errorf("git: payload does not match desired fingerprint")
 	}
-	beforeTip, err := parseTipFingerprint(p.repo, req.Before.Resource.Fingerprint)
+	beforeTip, err := parseTipFingerprint(p.repo, req.Before.ConcurrencyToken)
 	if err != nil {
 		return control.Execution{}, fmt.Errorf("git: invalid authorized tip: %w", err)
 	}
@@ -149,8 +162,16 @@ func (p *FileProvider) Execute(ctx context.Context, req control.ExecuteRequest) 
 	if prior.Mode != "100644" && prior.Mode != "100755" {
 		return control.Execution{}, fmt.Errorf("git: target must be an existing regular file")
 	}
-	if _, err := p.repo.ReadBlob(ctx, prior.Object); err != nil {
+	priorContent, err := p.repo.ReadBlob(ctx, prior.Object)
+	if err != nil {
 		return control.Execution{}, fmt.Errorf("git: target regular-file entry does not reference a blob: %w", err)
+	}
+	beforeFingerprint, err := FileStateFingerprint(prior.Mode, priorContent)
+	if err != nil {
+		return control.Execution{}, err
+	}
+	if beforeFingerprint != req.Before.Resource.Fingerprint {
+		return control.Execution{}, fmt.Errorf("git: authorized file state does not match its concurrency token")
 	}
 	blob, err := p.repo.WriteBlob(ctx, content)
 	if err != nil {
@@ -219,7 +240,7 @@ func (p *FileProvider) Verify(ctx context.Context, req control.VerifyRequest) (c
 	if req.Before.Resource.ID != req.Expected.ID {
 		return control.Verification{}, fmt.Errorf("git: before and expected resources differ")
 	}
-	beforeTip, err := parseTipFingerprint(p.repo, req.Before.Resource.Fingerprint)
+	beforeTip, err := parseTipFingerprint(p.repo, req.Before.ConcurrencyToken)
 	if err != nil {
 		return control.Verification{}, fmt.Errorf("git: invalid authorized tip in verification: %w", err)
 	}
@@ -244,6 +265,21 @@ func (p *FileProvider) Verify(ctx context.Context, req control.VerifyRequest) (c
 	beforeCommit, err := p.repo.ReadCommit(ctx, beforeTip)
 	if err != nil {
 		return control.Verification{}, err
+	}
+	beforeEntry, err := p.readPath(ctx, beforeCommit.Tree, strings.Split(identity.Path, "/"))
+	if err != nil {
+		return control.Verification{}, err
+	}
+	beforeContent, err := p.repo.ReadBlob(ctx, beforeEntry.Object)
+	if err != nil {
+		return control.Verification{}, err
+	}
+	beforeFingerprint, err := FileStateFingerprint(beforeEntry.Mode, beforeContent)
+	if err != nil {
+		return control.Verification{}, err
+	}
+	if beforeFingerprint != req.Before.Resource.Fingerprint {
+		return control.Verification{}, fmt.Errorf("git: authorized file state does not match its concurrency token")
 	}
 	resultCommit, err := p.repo.ReadCommit(ctx, resultCommitID)
 	if err != nil {
@@ -292,9 +328,9 @@ func (p *FileProvider) Verify(ctx context.Context, req control.VerifyRequest) (c
 		return control.Verification{}, fmt.Errorf("%w: current tip is %s, execution commit is %s", ErrBranchAdvancedAfterExecution, currentTip, resultCommitID)
 	}
 	return control.Verification{
-		Resource:   req.Expected,
-		Version:    0,
-		VerifiedAt: time.Now().UTC(),
+		Resource:         req.Expected,
+		ConcurrencyToken: tipFingerprintPrefix + string(resultCommitID),
+		VerifiedAt:       time.Now().UTC(),
 	}, nil
 }
 
