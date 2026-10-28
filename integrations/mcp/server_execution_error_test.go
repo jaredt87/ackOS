@@ -89,6 +89,34 @@ type typedExecutionProvider struct {
 	execute func(context.Context, control.ExecuteRequest) (control.Execution, error)
 }
 
+type tokenObservationProvider struct{}
+
+func (tokenObservationProvider) Observe(context.Context, control.ObserveRequest) (control.Observation, error) {
+	return control.Observation{
+		Resource:         control.ResourceRef{ID: "svc", Fingerprint: "initial"},
+		ConcurrencyToken: "version-1",
+		ObservedAt:       time.Now().UTC(),
+	}, nil
+}
+
+func (tokenObservationProvider) Execute(context.Context, control.ExecuteRequest) (control.Execution, error) {
+	return control.Execution{}, nil
+}
+
+func (tokenObservationProvider) Verify(context.Context, control.VerifyRequest) (control.Verification, error) {
+	return control.Verification{}, nil
+}
+
+func TestProviderObserverPreservesConcurrencyToken(t *testing.T) {
+	observation, err := (providerObserver{provider: tokenObservationProvider{}}).Observe(context.Background(), "svc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observation.ConcurrencyToken != "version-1" {
+		t.Fatalf("observation token = %q, want version-1", observation.ConcurrencyToken)
+	}
+}
+
 func (p typedExecutionProvider) Observe(context.Context, control.ObserveRequest) (control.Observation, error) {
 	return control.Observation{
 		Resource:   control.ResourceRef{ID: "svc", Fingerprint: "initial"},
