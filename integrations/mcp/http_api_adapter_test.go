@@ -106,26 +106,26 @@ func TestHTTPAPIAdapterMCPToolObservesThenChangesWithOpaqueToken(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("tool returned error: %+v", result.Content)
 	}
-	if observations != 1 || changes != 1 {
+	if observations.Load() != 1 || changes.Load() != 1 {
 		t.Fatalf("calls: observations=%d changes=%d, want one each", observations, changes)
 	}
 }
 
 func TestHTTPAPIAdapterFailsClosedOnObservationAuthError(t *testing.T) {
-	var changes int
+	var changes atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/observations" {
 			http.Error(w, `{"error":{"code":"unauthorized","message":"invalid token"}}`, http.StatusUnauthorized)
 			return
 		}
-		changes++
+		changes.Add(1)
 		http.Error(w, "unexpected", http.StatusInternalServerError)
 	}))
 	defer server.Close()
 
 	result := callHTTPControlTool(t, newTestHTTPAdapter(t, server, time.Second))
-	if !result.IsError || changes != 0 {
-		t.Fatalf("result error=%v changes=%d; expected fail-closed auth error", result.IsError, changes)
+	if !result.IsError || changes.Load() != 0 {
+		t.Fatalf("result error=%v changes=%d; expected fail-closed auth error", result.IsError, changes.Load())
 	}
 }
 
