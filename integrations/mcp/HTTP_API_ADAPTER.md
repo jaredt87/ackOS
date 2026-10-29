@@ -8,7 +8,7 @@ export ACKOS_API_BEARER_TOKEN='...'
 go run ./cmd/ackos-mcp-api -api-timeout=10s
 ```
 
-`ACKOS_API_URL` is required. The URL must use HTTPS; HTTP is accepted only for a loopback test server. `ACKOS_API_BEARER_TOKEN` is required. `-api-timeout` sets the maximum duration for each HTTP request and must be positive. The adapter sends the bearer token only to the configured API origin. Deploy behind trusted TLS and protect the token as a secret.
+`ACKOS_API_URL` is required. The URL must use HTTPS; HTTP is accepted only for a loopback test server. `ACKOS_API_BEARER_TOKEN` is required. `-api-timeout` sets the maximum duration for each HTTP request and must be positive. The HTTP client never follows redirects, including same-host redirects that change scheme or port, so bearer credentials and mutation bodies cannot be forwarded to a redirect destination. Redirect responses fail closed as HTTP errors. Deploy behind trusted TLS and protect the token as a secret.
 
 ## Tool contract
 
