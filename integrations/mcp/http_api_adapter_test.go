@@ -112,7 +112,6 @@ func TestHTTPAPIAdapterMCPToolObservesThenChangesWithOpaqueToken(t *testing.T) {
 	}
 }
 
-
 func TestHTTPAPIAdapterNeverFollowsRedirects(t *testing.T) {
 	for _, redirectPath := range []string{"/v1/observations", "/v1/changes"} {
 		t.Run(redirectPath, func(t *testing.T) {
