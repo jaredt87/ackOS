@@ -112,6 +112,66 @@ func TestHTTPAPIAdapterMCPToolObservesThenChangesWithOpaqueToken(t *testing.T) {
 	}
 }
 
+
+func TestHTTPAPIAdapterNeverFollowsRedirects(t *testing.T) {
+	for _, redirectPath := range []string{"/v1/observations", "/v1/changes"} {
+		t.Run(redirectPath, func(t *testing.T) {
+			var destinationCalls atomic.Int32
+			destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				destinationCalls.Add(1)
+				if got := r.Header.Get("Authorization"); got != "" {
+					t.Errorf("redirect destination received Authorization header %q", got)
+				}
+				http.Error(w, "must not be contacted", http.StatusInternalServerError)
+			}))
+			defer destination.Close()
+
+			var changeCalls atomic.Int32
+			source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == redirectPath {
+					if redirectPath == "/v1/changes" {
+						changeCalls.Add(1)
+					}
+					http.Redirect(w, r, destination.URL+"/capture", http.StatusTemporaryRedirect)
+					return
+				}
+				if r.URL.Path == "/v1/observations" {
+					_ = json.NewEncoder(w).Encode(observationHTTPResponse{
+						RepositoryID: "disposable", Branch: "main", Path: "README.md",
+						ObservationToken: "fresh-token",
+					})
+					return
+				}
+				http.NotFound(w, r)
+			}))
+			defer source.Close()
+
+			// Inject a default client deliberately; the adapter must override
+			// its normal redirect-following behavior on its private clone.
+			adapter, err := NewHTTPAPIAdapter(HTTPAPIConfig{
+				BaseURL: source.URL, BearerToken: "test-bearer-token",
+				Timeout: time.Second, HTTPClient: &http.Client{},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := callHTTPControlTool(t, adapter)
+			if !result.IsError {
+				t.Fatal("redirect response was reported as success")
+			}
+			if got := destinationCalls.Load(); got != 0 {
+				t.Fatalf("redirect destination called %d times; want zero", got)
+			}
+			if redirectPath == "/v1/observations" && changeCalls.Load() != 0 {
+				t.Fatalf("change endpoint called %d times after observation redirect; want zero", changeCalls.Load())
+			}
+			if redirectPath == "/v1/changes" && changeCalls.Load() != 1 {
+				t.Fatalf("source change endpoint called %d times; want one", changeCalls.Load())
+			}
+		})
+	}
+}
+
 func TestHTTPAPIAdapterFailsClosedOnObservationAuthError(t *testing.T) {
 	var changes atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
