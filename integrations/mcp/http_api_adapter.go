@@ -137,9 +137,6 @@ func (a *HTTPAPIAdapter) controlTool(ctx context.Context, _ *mcpsdk.CallToolRequ
 	if in.Mode != "100644" && in.Mode != "100755" {
 		return toolError("mode must be 100644 or 100755"), nil, nil
 	}
-	if in.ContentBase64 == "" {
-		return toolError("content_base64 is required; encode empty file content as an empty Base64 string only if the API contract permits it"), nil, nil
-	}
 	decoded, err := base64.StdEncoding.DecodeString(in.ContentBase64)
 	if err != nil || base64.StdEncoding.EncodeToString(decoded) != in.ContentBase64 {
 		return toolError("content_base64 must be canonical padded Base64"), nil, nil
