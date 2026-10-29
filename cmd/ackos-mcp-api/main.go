@@ -18,9 +18,9 @@ func main() {
 	flag.Parse()
 
 	adapter, err := mcp.NewHTTPAPIAdapter(mcp.HTTPAPIConfig{
-		BaseURL: *apiURL,
+		BaseURL:     *apiURL,
 		BearerToken: os.Getenv("ACKOS_API_BEARER_TOKEN"),
-		Timeout: *timeout,
+		Timeout:     *timeout,
 	})
 	if err != nil {
 		log.Fatalf("configure production MCP adapter: %v", err)
