@@ -101,14 +101,20 @@ func NewHTTPAPIAdapter(cfg HTTPAPIConfig) (*HTTPAPIAdapter, error) {
 	}
 	client := cfg.HTTPClient
 	if client == nil {
-		client = &http.Client{Timeout: cfg.Timeout}
-	} else if client.Timeout == 0 || client.Timeout > cfg.Timeout {
-		// Never let an injected client weaken the configured total deadline.
-		clone := *client
-		clone.Timeout = cfg.Timeout
-		client = &clone
+		client = &http.Client{}
 	}
-	return &HTTPAPIAdapter{baseURL: rawURL, token: cfg.BearerToken, client: client}, nil
+	// Always clone the supplied client so the adapter can enforce its security
+	// boundary without mutating a caller-owned client. Never follow redirects:
+	// even same-host redirects can change scheme/port and forward credentials or
+	// replay a mutation body to a different origin.
+	clone := *client
+	if clone.Timeout == 0 || clone.Timeout > cfg.Timeout {
+		clone.Timeout = cfg.Timeout
+	}
+	clone.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	return &HTTPAPIAdapter{baseURL: rawURL, token: cfg.BearerToken, client: &clone}, nil
 }
 
 func isLoopbackHost(host string) bool {
