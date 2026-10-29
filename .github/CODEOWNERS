@@ -1,0 +1,23 @@
+# Require a human owner for workflow, agent-policy, and Go validation changes.
+# Configure branch protection/rulesets to require Code Owner approval.
+# A CODEOWNERS file alone does not enforce review.
+
+# Workflow, publisher policy, and CI gates
+/.github/ @jaredt87
+
+# Agent instructions and plugin integration
+/.claude-plugin/ @jaredt87
+/AGENTS.md @jaredt87
+/PR_REVIEW_LOOP.md @jaredt87
+
+# Go module, test, and formatting configuration
+/.gitignore @jaredt87
+/go.mod @jaredt87
+/go.sum @jaredt87
+/go.work @jaredt87
+/go.work.sum @jaredt87
+/Makefile @jaredt87
+/.golangci.yml @jaredt87
+/.editorconfig @jaredt87
+/.gitattributes @jaredt87
+**/*_test.go @jaredt87
