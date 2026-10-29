@@ -124,7 +124,7 @@ func isLoopbackHost(host string) bool {
 func (a *HTTPAPIAdapter) MCPServer() *mcpsdk.Server {
 	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "ackOS HTTP adapter", Version: "0.3.0"}, nil)
 	mcpsdk.AddTool[HTTPControlRequest, any](server, &mcpsdk.Tool{
-		Name: ToolHTTPControl,
+		Name:        ToolHTTPControl,
 		Description: "Replace an existing tracked file through authenticated ackos-api. The adapter first obtains a fresh provider observation and passes its opaque token to ackos-api; execution and verification remain exclusively in ackos-api.",
 	}, a.controlTool)
 	return server
@@ -159,8 +159,8 @@ func (a *HTTPAPIAdapter) controlTool(ctx context.Context, _ *mcpsdk.CallToolRequ
 
 	changeBody, err := json.Marshal(changeHTTPRequest{
 		ObservationToken: observation.ObservationToken,
-		Mode: in.Mode,
-		ContentBase64: in.ContentBase64,
+		Mode:             in.Mode,
+		ContentBase64:    in.ContentBase64,
 	})
 	if err != nil {
 		return toolError("could not encode change request"), nil, nil
