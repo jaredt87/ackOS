@@ -14,13 +14,12 @@ import (
 
 func main() {
 	apiURL := flag.String("api-url", os.Getenv("ACKOS_API_URL"), "ackos-api origin (HTTPS required except loopback)")
-	bearerToken := flag.String("api-token", os.Getenv("ACKOS_API_BEARER_TOKEN"), "ackos-api bearer token (or ACKOS_API_BEARER_TOKEN)")
 	timeout := flag.Duration("api-timeout", 10*time.Second, "maximum duration of each ackos-api HTTP request")
 	flag.Parse()
 
 	adapter, err := mcp.NewHTTPAPIAdapter(mcp.HTTPAPIConfig{
 		BaseURL: *apiURL,
-		BearerToken: *bearerToken,
+		BearerToken: os.Getenv("ACKOS_API_BEARER_TOKEN"),
 		Timeout: *timeout,
 	})
 	if err != nil {
