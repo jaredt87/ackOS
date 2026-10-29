@@ -89,7 +89,7 @@ func NewHTTPAPIAdapter(cfg HTTPAPIConfig) (*HTTPAPIAdapter, error) {
 		return nil, errors.New("ackos-api base URL is required")
 	}
 	u, err := url.Parse(rawURL)
-	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" ||
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Path != "" && u.Path != "/") ||
 		(u.Scheme != "https" && !(u.Scheme == "http" && isLoopbackHost(u.Hostname()))) {
 		return nil, errors.New("ackos-api URL must be an HTTPS origin (HTTP is permitted only for loopback)")
 	}
