@@ -107,7 +107,7 @@ func TestHTTPAPIAdapterMCPToolObservesThenChangesWithOpaqueToken(t *testing.T) {
 		t.Fatalf("tool returned error: %+v", result.Content)
 	}
 	if observations.Load() != 1 || changes.Load() != 1 {
-		t.Fatalf("calls: observations=%d changes=%d, want one each", observations, changes)
+		t.Fatalf("calls: observations=%d changes=%d, want one each", observations.Load(), changes.Load())
 	}
 }
 
@@ -152,19 +152,19 @@ func TestHTTPAPIAdapterFailsClosedOnStaleObservation(t *testing.T) {
 }
 
 func TestHTTPAPIAdapterRejectsMalformedObservationWithoutChange(t *testing.T) {
-	var changes int
+	var changes atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/observations" {
 			_, _ = w.Write([]byte(`{"repository_id":"other","branch":"main","path":"README.md","observation_token":"token"}`))
 			return
 		}
-		changes++
+		changes.Add(1)
 	}))
 	defer server.Close()
 
 	result := callHTTPControlTool(t, newTestHTTPAdapter(t, server, time.Second))
-	if !result.IsError || changes != 0 {
-		t.Fatalf("result error=%v changes=%d; expected reject mismatched observation", result.IsError, changes)
+	if !result.IsError || changes.Load() != 0 {
+		t.Fatalf("result error=%v changes=%d; expected reject mismatched observation", result.IsError, changes.Load())
 	}
 }
 
