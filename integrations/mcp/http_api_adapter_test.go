@@ -57,7 +57,7 @@ func newTestHTTPAdapter(t *testing.T, server *httptest.Server, timeout time.Dura
 
 func TestHTTPAPIAdapterMCPToolObservesThenChangesWithOpaqueToken(t *testing.T) {
 	const token = "api-issued-opaque-token-not-a-fingerprint"
-	var observations, changes int
+	var observations, changes atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-bearer-token" {
 			http.Error(w, "missing bearer", http.StatusUnauthorized)
@@ -68,7 +68,7 @@ func TestHTTPAPIAdapterMCPToolObservesThenChangesWithOpaqueToken(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/v1/observations":
-			observations++
+			observations.Add(1)
 			var in observationHTTPRequest
 			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 				t.Errorf("decode observation: %v", err)
@@ -81,7 +81,7 @@ func TestHTTPAPIAdapterMCPToolObservesThenChangesWithOpaqueToken(t *testing.T) {
 				ObservationToken: token, ExpiresAt: time.Now().Add(time.Minute),
 			})
 		case "/v1/changes":
-			changes++
+			changes.Add(1)
 			var in changeHTTPRequest
 			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 				t.Errorf("decode change: %v", err)
