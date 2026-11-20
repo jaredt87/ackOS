@@ -51,3 +51,17 @@
 * **Branch Naming:** `feature/` or `fix/` followed by a concise hyphenated description.
 * **Commit Style:** Semantic commits (`feat:`, `fix:`, `docs:`, `test:`).
 * **PR Descriptions:** State the problem solved, the changes made, which lifecycle/invariant guarantees (if any) are affected, and paste the exact verification commands run (`gofmt`, `go vet`, `go test`, `go test -race`).
+
+
+### 6. Pilot use and deployment guidance
+
+This repository may be used by developers and agents setting up or operating an ackOS pilot. Read the repository README, `docs/ARCHITECTURE.md`, `docs/AGENT_INSTALL.md`, and relevant integration documentation before configuring or changing the system.
+
+- The repository is licensed under Apache License 2.0. Review `LICENSE` and `LICENSING.md`; these instructions do not add to or alter the license.
+- For a pilot, use a clearly designated test resource and explicitly configured provider and permissions. Do not assume a repository, resource, or operation is authorized merely because it is accessible.
+- Preserve ackOS as the authority for authorization, execution lifecycle, verification, recovery, and commitment. Do not create a parallel or synthetic execution path or bypass the kernel/provider boundary.
+- Do not weaken authorization, verification, evidence freshness, single-use authority, CAS commitment, or documented safety boundaries to make a pilot easier to configure.
+- Keep secrets out of source control, logs, prompts, documentation examples, and test artifacts. Use local environment configuration or a suitable secrets manager.
+- Do not perform real cloud provisioning, Terraform apply, production mutations, pushes, merges, or other consequential operations unless the pilot owner explicitly authorizes that exact scope and the documented execution path supports it.
+- Prefer the documented quickstart and existing supported integration. If a required capability, configuration, or boundary is unclear or missing, stop and explain the gap instead of inventing a workaround.
+- Report pilot results accurately, distinguishing verified and committed outcomes from attempted, partial, blocked, or unverified operations.
