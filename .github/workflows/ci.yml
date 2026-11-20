@@ -44,6 +44,8 @@ jobs:
               exit 1
             }
           done < <(git ls-files -- '*SKILL.md')
+      - name: Test agent patch policy
+        run: python3 .github/scripts/test_validate_agent_patch.py
       - uses: actions/setup-go@v5
         with:
           go-version: '1.25'
