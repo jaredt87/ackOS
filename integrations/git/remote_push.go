@@ -36,7 +36,7 @@ func (r *Repository) PushRefWithLease(ctx context.Context, remote string, ref Re
 
 	lease := "--force-with-lease=" + string(ref) + ":" + string(expectedOld)
 	refspec := string(newValue) + ":" + string(ref)
-	if _, err := r.exec(ctx, []string{"push", "--porcelain", lease, "--", remote, refspec}, nil); err != nil {
+	if _, err := r.exec(ctx, []string{"push", "--porcelain", "--no-follow-tags", lease, "--", remote, refspec}, nil); err != nil {
 		return fmt.Errorf("git: push remote ref with exact lease: %w", err)
 	}
 	return nil
