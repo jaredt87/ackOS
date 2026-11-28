@@ -31,7 +31,7 @@ The remote write must occur inside the ackOS provider execution boundary. The ag
 1. **Configuration binds the remote.** The provider must be configured by the operator with an exact repository identity, remote URL/host, branch allowlist, and target-path policy. A resource identifier supplied by an agent must not be able to select an arbitrary repository, host, branch, or credential.
 2. **Observe is remote.** The authorized observation must capture the remote branch's full commit ID and the exact target file mode/content fingerprint from that commit. A local clone's possibly stale ref is not sufficient evidence of current remote state.
 3. **Execute consumes the authorized Before.** Before any remote mutation, execution must freshly establish that the remote branch still equals the full commit ID in the authorized concurrency token and that the target file still matches the authorized resource fingerprint.
-4. **Remote ref update is exact CAS.** The write mechanism must reject every remote-tip change since observation, including a remote branch that moved to a different descendant or was rewound. It must not silently retry using a newly read tip. The implementation must demonstrate the exact compare-and-swap semantics of the selected Git transport; a read-then-unconditional-write sequence is not acceptable.
+4. **Remote ref update is exact CAS.** The write mechanism must atomically reject an update when the remote tip at the ref-update point differs from the full commit ID captured during observation, including a branch that currently points to a different descendant or has been rewound to an ancestor. It must not silently retry using a newly read tip. This is an exact-current-value CAS contract, not history-sensitive change detection: an intervening `A → B → A` sequence is indistinguishable from no change and is explicitly outside the guarantee, consistent with `docs/git-file-replace-contract.md`. The implementation must demonstrate the exact compare-and-swap semantics of the selected Git transport; a read-then-unconditional-write sequence is not acceptable.
 5. **Execution evidence is exact.** Evidence must bind the execution ID, authorized remote tip, resulting commit ID, repository identity, branch ref, and target path sufficiently to prevent evidence substitution across resources or executions.
 6. **Verify reads GitHub independently.** Verification must perform fresh remote reads after execution completion. It must establish that the remote branch points to this exact result commit, that the result commit is a single child of the authorized tip, that the recursive tree differs only at the requested path, and that the target blob bytes and mode match the governed desired fingerprint. It must perform a final remote-ref read after object verification and fail if the branch moved.
 7. **Commit remains kernel-owned.** Only successful, fresh, execution-bound provider verification may allow the existing kernel commitment path to advance. A successful remote write alone is not commitment.
@@ -70,12 +70,13 @@ Use a disposable bare remote and a separate working clone. Exercise the complete
 2. Authorized replacement succeeds and the remote ref points to the exact result commit.
 3. A concurrent remote descendant update after observation rejects execution and preserves the concurrent writer's tip.
 4. A remote rewind to an ancestor after observation is rejected; this specifically distinguishes exact CAS from fast-forward-only behavior.
-5. Only the requested path's mode/object changes in the recursive tree.
-6. A branch advance after the remote write but before/during verification causes verification failure and is never rolled back.
-7. A lost/failed response after server acceptance is resolved only by a bounded read proving this execution's exact result commit.
-8. An ambiguous outcome that cannot be resolved does not report execution success or kernel commitment.
-9. Cancellation and timeout behavior preserve the kernel's existing execution-completion and verification-freshness rules.
-10. No test or implementation path mutates the local working tree or index unless a separately reviewed requirement explicitly changes that contract.
+5. The documented ABA limitation is explicit: a ref that moves `A → B → A` before the atomic update may still satisfy the exact-current-value lease; no reflog/generation guarantee is claimed.
+6. Only the requested path's mode/object changes in the recursive tree.
+7. A branch advance after the remote write but before/during verification causes verification failure and is never rolled back.
+8. A lost/failed response after server acceptance is resolved only by a bounded read proving this execution's exact result commit.
+9. An ambiguous outcome that cannot be resolved does not report execution success or kernel commitment.
+10. Cancellation and timeout behavior preserve the kernel's existing execution-completion and verification-freshness rules.
+11. No test or implementation path mutates the local working tree or index unless a separately reviewed requirement explicitly changes that contract.
 
 ### GitHub integration tests
 
