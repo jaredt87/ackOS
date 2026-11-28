@@ -166,6 +166,25 @@ func TestPushRefWithLeaseDoesNotFollowTags(t *testing.T) {
 	}
 }
 
+func TestPushRefWithLeaseRejectsAlreadyPublishedCandidate(t *testing.T) {
+	work, remote, repo, before := remotePushFixture(t)
+	if err := os.WriteFile(filepath.Join(work, "tracked.txt"), []byte("candidate\\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	remotePushGit(t, work, "commit", "-am", "candidate")
+	candidate := ObjectID(remotePushGit(t, work, "rev-parse", "HEAD"))
+	remotePushGit(t, work, "push", remote, "HEAD:refs/heads/main")
+
+	err := repo.PushRefWithLease(context.Background(), remote, RefName("refs/heads/main"), candidate, before)
+	if err == nil {
+		t.Fatal("accepted an up-to-date push without proving the expected-old lease")
+	}
+	actual := ObjectID(remotePushGitDir(t, remote, "rev-parse", "refs/heads/main"))
+	if actual != candidate {
+		t.Fatalf("remote tip = %s, want already-published candidate %s", actual, candidate)
+	}
+}
+
 func TestPushRefWithLeaseRejectsInvalidInputs(t *testing.T) {
 	_, remote, repo, before := remotePushFixture(t)
 	for _, tc := range []struct {
