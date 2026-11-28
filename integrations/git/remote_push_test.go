@@ -145,7 +145,7 @@ func TestPushRefWithLeaseDocumentsABALimitation(t *testing.T) {
 
 func TestPushRefWithLeaseDoesNotFollowTags(t *testing.T) {
 	work, remote, repo, before := remotePushFixture(t)
-	if err := os.WriteFile(filepath.Join(work, "tracked.txt"), []byte("candidate\\n"), 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(work, "tracked.txt"), []byte("candidate\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	remotePushGit(t, work, "commit", "-am", "candidate")
