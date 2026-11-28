@@ -143,6 +143,29 @@ func TestPushRefWithLeaseDocumentsABALimitation(t *testing.T) {
 	}
 }
 
+func TestPushRefWithLeaseDoesNotFollowTags(t *testing.T) {
+	work, remote, repo, before := remotePushFixture(t)
+	if err := os.WriteFile(filepath.Join(work, "tracked.txt"), []byte("candidate\\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	remotePushGit(t, work, "commit", "-am", "candidate")
+	candidate := ObjectID(remotePushGit(t, work, "rev-parse", "HEAD"))
+	remotePushGit(t, work, "tag", "-a", "release-test", "-m", "release test", string(candidate))
+	remotePushGit(t, work, "config", "push.followTags", "true")
+
+	if err := repo.PushRefWithLease(context.Background(), remote, RefName("refs/heads/main"), candidate, before); err != nil {
+		t.Fatalf("push leased branch: %v", err)
+	}
+	actual := ObjectID(remotePushGitDir(t, remote, "rev-parse", "refs/heads/main"))
+	if actual != candidate {
+		t.Fatalf("remote branch tip = %s, want candidate %s", actual, candidate)
+	}
+	cmd := exec.Command("git", "--git-dir", remote, "show-ref", "--verify", "--quiet", "refs/tags/release-test")
+	if err := cmd.Run(); err == nil {
+		t.Fatal("leased single-ref push unexpectedly published an annotated tag")
+	}
+}
+
 func TestPushRefWithLeaseRejectsInvalidInputs(t *testing.T) {
 	_, remote, repo, before := remotePushFixture(t)
 	for _, tc := range []struct {
