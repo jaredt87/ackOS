@@ -40,7 +40,7 @@ func (r *Repository) PushRefWithLease(ctx context.Context, remote string, ref Re
 	if err != nil {
 		return fmt.Errorf("git: push remote ref with exact lease: %w", err)
 	}
-	if err := validateLeasedPushStatus(string(out), ref); err != nil {
+	if err := validateLeasedPushStatus(string(out), newValue, ref); err != nil {
 		return err
 	}
 	return nil
@@ -49,8 +49,8 @@ func (r *Repository) PushRefWithLease(ctx context.Context, remote string, ref Re
 // validateLeasedPushStatus rejects a successful no-op. Git's push lease is
 // not evaluated when the destination already equals the proposed new value,
 // so an "[up to date]" response cannot prove expectedOld was current.
-func validateLeasedPushStatus(output string, ref RefName) error {
-	want := string(ref) + ":" + string(ref)
+func validateLeasedPushStatus(output string, newValue ObjectID, ref RefName) error {
+	want := string(newValue) + ":" + string(ref)
 	for _, line := range strings.Split(output, "\n") {
 		if len(line) < 2 || line[1] != '\t' {
 			continue
