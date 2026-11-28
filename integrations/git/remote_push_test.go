@@ -207,3 +207,53 @@ func TestPushRefWithLeaseRejectsInvalidInputs(t *testing.T) {
 		})
 	}
 }
+
+func TestPushRefWithLeaseDisablesRecursiveSubmodulePushes(t *testing.T) {
+	work, remote, repo, before := remotePushFixture(t)
+
+	// Seed a bare submodule remote, then create an unpublished commit in the
+	// submodule clone. With recurseSubmodules=on-demand, Git would otherwise
+	// try to push that commit using the superproject's object-ID refspec.
+	submoduleSeed := testRepo(t)
+	remotePushGit(t, submoduleSeed, "config", "user.name", "ackOS submodule test")
+	remotePushGit(t, submoduleSeed, "config", "user.email", "ackos-submodule@example.invalid")
+	if err := os.WriteFile(filepath.Join(submoduleSeed, "module.txt"), []byte("base\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	remotePushGit(t, submoduleSeed, "add", "module.txt")
+	remotePushGit(t, submoduleSeed, "commit", "-m", "submodule base")
+
+	submoduleRemote := filepath.Join(t.TempDir(), "submodule.git")
+	if out, err := exec.Command("git", "init", "--bare", "-q", submoduleRemote).CombinedOutput(); err != nil {
+		t.Fatalf("git init submodule remote: %v: %s", err, out)
+	}
+	remotePushGit(t, submoduleSeed, "push", submoduleRemote, "HEAD:refs/heads/main")
+	remotePushGitDir(t, submoduleRemote, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	remotePushGit(t, work, "-c", "protocol.file.allow=always", "submodule", "add", submoduleRemote, "deps/sub")
+	submoduleWork := filepath.Join(work, "deps", "sub")
+	remotePushGit(t, submoduleWork, "config", "user.name", "ackOS submodule test")
+	remotePushGit(t, submoduleWork, "config", "user.email", "ackos-submodule@example.invalid")
+	if err := os.WriteFile(filepath.Join(submoduleWork, "module.txt"), []byte("unpublished\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	remotePushGit(t, submoduleWork, "commit", "-am", "unpublished submodule change")
+	remotePushGit(t, work, "add", "deps/sub")
+	remotePushGit(t, work, "commit", "-m", "advance submodule pointer")
+	candidate := ObjectID(remotePushGit(t, work, "rev-parse", "HEAD"))
+	remotePushGit(t, work, "config", "push.recurseSubmodules", "on-demand")
+
+	if err := repo.PushRefWithLease(context.Background(), remote, RefName("refs/heads/main"), candidate, before); err != nil {
+		t.Fatalf("push leased superproject ref with recursive submodule config: %v", err)
+	}
+	actual := ObjectID(remotePushGitDir(t, remote, "rev-parse", "refs/heads/main"))
+	if actual != candidate {
+		t.Fatalf("remote branch tip = %s, want candidate %s", actual, candidate)
+	}
+	// The submodule candidate must remain unpublished: this operation owns
+	// exactly the requested superproject branch ref.
+	submoduleTip := ObjectID(remotePushGitDir(t, submoduleRemote, "rev-parse", "refs/heads/main"))
+	if submoduleTip != ObjectID(remotePushGit(t, submoduleSeed, "rev-parse", "HEAD")) {
+		t.Fatalf("submodule remote tip changed to %s", submoduleTip)
+	}
+}
