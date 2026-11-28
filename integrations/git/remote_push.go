@@ -36,7 +36,10 @@ func (r *Repository) PushRefWithLease(ctx context.Context, remote string, ref Re
 
 	lease := "--force-with-lease=" + string(ref) + ":" + string(expectedOld)
 	refspec := string(newValue) + ":" + string(ref)
-	out, err := r.exec(ctx, []string{"push", "--porcelain", "--no-follow-tags", lease, "--", remote, refspec}, nil)
+	// The source refspec is an object ID, not a named ref. Disable recursive
+	// submodule pushes because on-demand recursion cannot publish that source
+	// form and would add unrelated writes outside this single-ref operation.
+	out, err := r.exec(ctx, []string{"push", "--porcelain", "--no-follow-tags", "--recurse-submodules=no", lease, "--", remote, refspec}, nil)
 	if err != nil {
 		return fmt.Errorf("git: push remote ref with exact lease: %w", err)
 	}
