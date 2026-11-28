@@ -46,6 +46,7 @@ func remotePushFixture(t *testing.T) (string, string, *Repository, ObjectID) {
 		t.Fatalf("git init --bare: %v: %s", err, out)
 	}
 	remotePushGit(t, work, "push", remote, "HEAD:refs/heads/main")
+	remotePushGitDir(t, remote, "symbolic-ref", "HEAD", "refs/heads/main")
 	repo, err := Open(work)
 	if err != nil {
 		t.Fatal(err)
